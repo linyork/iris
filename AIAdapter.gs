@@ -114,6 +114,9 @@ var AIAdapter = (() => {
 
             // 工具呼叫 tool_calls → functionCall
             if (message.tool_calls && message.tool_calls.length > 0) {
+                Logger.info('AIAdapter.fromOpenAIResponse', '偵測到工具呼叫', {
+                    tools: message.tool_calls.map(tc => tc.function ? tc.function.name : tc.type)
+                });
                 message.tool_calls.forEach(tc => {
                     if (tc.type === 'function') {
                         parts.push({

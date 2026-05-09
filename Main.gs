@@ -33,6 +33,11 @@ function doPost(e) {
 
       if (event.type !== 'message' || event.message.type !== 'text') continue;
 
+      Logger.info('doPost', '收到訊息', {
+        userId: event.source.userId,
+        msg:    event.message.text.slice(0, 80)
+      });
+
       // 非主人拒絕服務
       if (!Line.event.isMaster) {
         Line.replyMsg(event.replyToken, '抱歉，我是專屬助理，無法為您提供服務。');

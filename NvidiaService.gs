@@ -94,7 +94,11 @@ var NvidiaService = (() => {
                 }
             }
 
-            Logger.info('NvidiaService.callAPI', '使用模型: ' + modelName);
+            Logger.info('NvidiaService.callAPI', '使用模型: ' + modelName, {
+              finish_reason: parsedResponse.choices[0].finish_reason,
+              usage:         parsedResponse.usage || null,
+              hasToolCalls:  !!(parsedResponse.choices[0].message && parsedResponse.choices[0].message.tool_calls)
+            });
             return parsedResponse;
         } catch (error) {
             Logger.error('NvidiaService.callAPI', '呼叫失敗', error);

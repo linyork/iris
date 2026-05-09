@@ -14,6 +14,7 @@ var HistoryManager = (() => {
   hm.getUserHistory = (userId, maxTurns) => {
     try {
       var rows = GoogleSheet.getChatHistory(userId, maxTurns * 2);
+      Logger.info('HistoryManager.getUserHistory', '載入對話歷史', { rows: rows.length, maxTurns: maxTurns });
       return rows.map(r => ({
         role:  r.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: r.message }]

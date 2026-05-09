@@ -22,8 +22,14 @@ var ChatBot = (() => {
       var nowStr = Utilities.formatDate(new Date(), 'GMT+8', 'yyyy/MM/dd HH:mm:ss');
 
       // 讀取短期記憶與知識（搜尋與當前訊息相關的知識）
-      var stm            = GoogleSheet.getValidShortTermMemories();
+      var stm               = GoogleSheet.getValidShortTermMemories();
       var relevantKnowledge = GoogleSheet.searchKnowledge(message);
+
+      Logger.info('ChatBot.reply', '記憶注入', {
+        stm:       stm ? stm.split('\n').length + ' 筆 STM' : '無',
+        knowledge: (relevantKnowledge && !relevantKnowledge.includes('沒有找到') && !relevantKnowledge.includes('尚無資料'))
+                   ? relevantKnowledge.slice(0, 60) + '...' : '無相關知識'
+      });
 
       var systemContext = Config.SYSTEM_PROMPT +
         '\n\n[System Info]\nCurrent Time: ' + nowStr +
@@ -61,6 +67,11 @@ var ChatBot = (() => {
         }
 
         var isLastTurn = (turn === maxTurns - 1);
+        Logger.info('ChatBot.reply', 'ReAct Turn ' + turn, {
+          isLastTurn: isLastTurn,
+          contextTurns: contents.length
+        });
+
         var apiOptions = { model: 'FAST', caller: 'ChatBot.reActLoop' };
         if (!isLastTurn) apiOptions.tools = toolDefinitions;
 
@@ -70,11 +81,19 @@ var ChatBot = (() => {
           break;
         }
 
-        var candidate = data.candidates[0];
-        var parts = (candidate.content && candidate.content.parts) || [];
+        var candidate    = data.candidates[0];
+        var finishReason = candidate.finishReason || 'UNKNOWN';
+        var parts        = (candidate.content && candidate.content.parts) || [];
 
         var textPart         = parts.find(p => p.text);
         var functionCallPart = parts.find(p => p.functionCall);
+
+        Logger.info('ChatBot.reply', 'Turn ' + turn + ' 回應', {
+          finishReason:  finishReason,
+          hasToolCall:   !!functionCallPart,
+          toolName:      functionCallPart ? functionCallPart.functionCall.name : null,
+          hasText:       !!textPart
+        });
 
         // 工具呼叫
         if (functionCallPart && !isLastTurn) {
@@ -88,8 +107,14 @@ var ChatBot = (() => {
             result = calledTools[callKey];
             Logger.info('ChatBot.reply', '使用快取工具結果: ' + name);
           } else {
+            Logger.info('ChatBot.reply', '呼叫工具', { name: name, args: args });
             result = Tools.execute(name, args);
             calledTools[callKey] = result;
+            Logger.info('ChatBot.reply', '工具回傳', {
+              name:   name,
+              length: String(result).length,
+              preview: String(result).slice(0, 100)
+            });
           }
           lastToolResult = result;
 
@@ -116,6 +141,11 @@ var ChatBot = (() => {
 
         break;
       }
+
+      Logger.info('ChatBot.reply', 'ReAct 迴圈結束', {
+        finalResponse: !!finalResponse,
+        totalTurns:    turn
+      });
 
       // 工具結果總結
       if (!finalResponse && lastToolResult) {

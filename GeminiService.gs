@@ -48,7 +48,17 @@ var GeminiService = (() => {
         }
       }
 
-      return JSON.parse(response.getContentText());
+      var parsed = JSON.parse(response.getContentText());
+      Logger.info('GeminiService.callAPI', '回應成功', {
+        model:         selectedModel,
+        finish_reason: parsed.candidates && parsed.candidates[0] ? parsed.candidates[0].finishReason : 'N/A',
+        usage:         parsed.usageMetadata || null,
+        hasToolCall:   !!(parsed.candidates && parsed.candidates[0] &&
+                          parsed.candidates[0].content &&
+                          parsed.candidates[0].content.parts &&
+                          parsed.candidates[0].content.parts.some(p => p.functionCall))
+      });
+      return parsed;
     } catch (error) {
       Logger.error('GeminiService.callAPI', '呼叫失敗', error);
       return null;

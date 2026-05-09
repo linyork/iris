@@ -15,7 +15,12 @@ var WebSearch = (() => {
       var apiKey = Config.GOOGLE_SEARCH_KEY;
       var cx     = Config.GOOGLE_SEARCH_CX;
 
-      if (!apiKey || !cx) return '（searchWeb 未設定，請在 Script Properties 加入 GOOGLE_SEARCH_KEY 與 GOOGLE_SEARCH_CX）';
+      Logger.info('WebSearch.search', '執行搜尋', { query: query });
+
+      if (!apiKey || !cx) {
+        Logger.error('WebSearch.search', 'API Key 或 CX 未設定', { hasKey: !!apiKey, hasCx: !!cx });
+        return '（searchWeb 未設定，請在 Script Properties 加入 GOOGLE_SEARCH_KEY 與 GOOGLE_SEARCH_CX）';
+      }
 
       var url = Config.GOOGLE_SEARCH_API_BASE +
         '?key='      + encodeURIComponent(apiKey) +
@@ -28,12 +33,17 @@ var WebSearch = (() => {
       var code     = response.getResponseCode();
 
       if (code !== 200) {
-        Logger.error('WebSearch.search', 'HTTP ' + code, response.getContentText());
+        Logger.error('WebSearch.search', 'HTTP ' + code, response.getContentText().slice(0, 200));
         return '搜尋失敗（HTTP ' + code + '）';
       }
 
       var data = JSON.parse(response.getContentText());
-      if (!data.items || data.items.length === 0) return '沒有找到與「' + query + '」相關的結果';
+      if (!data.items || data.items.length === 0) {
+        Logger.warning('WebSearch.search', '查無結果', { query: query });
+        return '沒有找到與「' + query + '」相關的結果';
+      }
+
+      Logger.info('WebSearch.search', '搜尋完成', { query: query, results: data.items.length });
 
       var lines = data.items.map((item, i) =>
         (i + 1) + '. ' + item.title + '\n   ' + (item.snippet || '') + '\n   來源：' + item.link
