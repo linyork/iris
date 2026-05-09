@@ -159,6 +159,8 @@ var ChatBot = (() => {
 
       if (!finalResponse) return '抱歉，我有點混亂，請再試一次。';
 
+      finalResponse = Utils.formatForLine(finalResponse);
+
       // 儲存對話
       HistoryManager.saveMessage(userId, 'user', message);
       HistoryManager.saveMessage(userId, 'assistant', finalResponse);

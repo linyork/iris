@@ -56,6 +56,19 @@ var Utils = (() => {
     return str.slice(0, limit) + '\n\n（回覆過長已截斷，可詢問更具體的問題以取得完整資訊）';
   };
 
+  // 強制在段落符號前插入換行，防止模型輸出密集連續文字
+  utils.formatForLine = (str) => {
+    if (typeof str !== 'string') return str;
+    var result = str;
+    // 在 ▸ ◆ 【 前確保有換行（若前一個字元不是換行則插入 \n\n）
+    result = result.replace(/([^\n])(▸|◆|【)/g, '$1\n\n$2');
+    // 在句號/問號/！後若直接接著文字（非換行），插入換行
+    result = result.replace(/([。？！])([^\n」』）\s])/g, '$1\n$2');
+    // 清理超過兩個連續空行
+    result = result.replace(/\n{3,}/g, '\n\n');
+    return result.trim();
+  };
+
   // 將長訊息依換行點切成 ≤ limit 字元的陣列，供 pushMsg 分段發送
   utils.splitForLine = (str, limit) => {
     limit = limit || 4900;
