@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(clasp push)",
+      "Bash(clasp pull)",
+      "Bash(clasp logs:*)",
+      "Bash(clasp open:*)",
+      "Bash(clasp deploy:*)",
+      "Bash(clasp deployments)",
+      "Bash(clasp status:*)",
+      "Bash(clasp version:*)",
+      "Bash(clasp versions)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git remote -v)",
+      "Bash(ls:*)",
+      "Bash(pwd)",
+      "Bash(node --version)",
+      "Bash(npm --version)"
+    ],
+    "deny": [
+      "Bash(clasp logout)",
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)"
+    ]
+  }
+}
