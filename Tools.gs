@@ -72,6 +72,17 @@ var Tools = (() => {
       }
     },
     {
+      name: 'getPrice',
+      description: '查詢台灣上市股票或 ETF 的即時（或最新收盤）股價，包含漲跌幅、開高低。用於查詢目前未持有但考慮買入的標的，或快速確認某檔股票當前價格。',
+      parameters: {
+        type: 'object',
+        properties: {
+          symbols: { type: 'string', description: '股票代號，多檔用逗號分隔，例如 "2330,006205"，一次最多 10 檔' }
+        },
+        required: ['symbols']
+      }
+    },
+    {
       name: 'listMemories',
       description: '列出目前所有有效的短期記憶與長期知識，用於確認 Iris 記住了哪些內容。',
       parameters: {
@@ -135,6 +146,10 @@ var Tools = (() => {
         case 'searchKnowledge':
           if (!args.query) return '缺少必要參數：query。';
           return GoogleSheet.searchKnowledge(args.query);
+
+        case 'getPrice':
+          if (!args.symbols) return '缺少必要參數：symbols。';
+          return StockPrice.getPrice(args.symbols);
 
         case 'listMemories':
           return GoogleSheet.listMemories();

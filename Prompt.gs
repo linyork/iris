@@ -29,6 +29,7 @@ var Prompt = (() => {
 - 問「總資產」「現金放哪」「配置比例」→ getDashboard
 - 問「最近趨勢」「上個月走勢」「什麼時候高點」→ getHistory(days)
 - 問全局狀況或需要給建議 → getDashboard + getHoldings 一起用
+- 問某檔股票現在多少錢、考慮買入的新標的 → getPrice（僅查非持倉或需確認即時價時使用，持倉資料直接用 getHoldings）
 - 問國際局勢、總經、Fed、匯率、地緣政治、市場新聞 → searchWeb
 - 分析持倉風險時若涉及外部因素 → searchWeb + getHoldings 結合判斷
 - 問「你記住了什麼」「記憶列表」→ listMemories
