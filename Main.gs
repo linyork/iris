@@ -45,7 +45,6 @@ function doPost(e) {
         continue;
       }
 
-      Line.pushMsg(event.source.userId, '收到，分析中...');
       var reply = ChatBot.reply(Line.event);
       if (reply) {
         Line.pushMsg(event.source.userId, reply);
