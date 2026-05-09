@@ -237,6 +237,33 @@ var GoogleSheet = (() => {
     }
   };
 
+  // ─── Dividend ─────────────────────────────────────────────────
+
+  /**
+   * 在 @股利 工作表新增一筆股利紀錄
+   * @param {string} symbol - 股票代號，例如 "0056"
+   * @param {number} amount - 股利金額
+   * @param {string} [date] - 日期字串（可選，預設今日）
+   */
+  gs.recordDividend = (symbol, amount, date) => {
+    try {
+      var sheet = getSheet().getSheetByName('@股利');
+      if (!sheet) return '找不到「@股利」工作表';
+
+      var today  = date ? new Date(date) : new Date();
+      var dateStr = Utilities.formatDate(today, getSheet().getSpreadsheetTimeZone(), 'yyyy/M/d');
+      var amt    = parseFloat(String(amount).replace(/,/g, ''));
+      if (isNaN(amt) || amt <= 0) return '金額格式不正確：' + amount;
+
+      sheet.appendRow([dateStr, symbol, amt]);
+      Logger.info('GoogleSheet.recordDividend', '記錄股利', { date: dateStr, symbol: symbol, amount: amt });
+      return '已記錄：' + dateStr + ' ' + symbol + ' 股利 $' + amt.toLocaleString();
+    } catch (ex) {
+      Logger.error('GoogleSheet.recordDividend', '記錄失敗', ex);
+      return '記錄股利時發生錯誤：' + ex.message;
+    }
+  };
+
   // ─── Memory Management ───────────────────────────────────────
 
   /**

@@ -72,6 +72,19 @@ var Tools = (() => {
       }
     },
     {
+      name: 'recordDividend',
+      description: '在股利紀錄表登記一筆收到的股利。當使用者說「收到 XXX 股利」或「股利入帳」時使用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: '股票代號，例如 "0056"、"00878"' },
+          amount: { type: 'number', description: '股利金額（新台幣）' },
+          date:   { type: 'string', description: '入帳日期，格式 yyyy/MM/dd（可選，預設今日）' }
+        },
+        required: ['symbol', 'amount']
+      }
+    },
+    {
       name: 'getPrice',
       description: '查詢台灣上市股票或 ETF 的即時（或最新收盤）股價，包含漲跌幅、開高低。用於查詢目前未持有但考慮買入的標的，或快速確認某檔股票當前價格。',
       parameters: {
@@ -146,6 +159,10 @@ var Tools = (() => {
         case 'searchKnowledge':
           if (!args.query) return '缺少必要參數：query。';
           return GoogleSheet.searchKnowledge(args.query);
+
+        case 'recordDividend':
+          if (!args.symbol || !args.amount) return '缺少必要參數：symbol 與 amount 皆為必填。';
+          return GoogleSheet.recordDividend(args.symbol, args.amount, args.date);
 
         case 'getPrice':
           if (!args.symbols) return '缺少必要參數：symbols。';
