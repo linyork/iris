@@ -107,6 +107,13 @@ function setupAllTriggers() {
       .everyDays(1)
       .create();
 
+    // 每日 09:00 — 財經早報
+    ScriptApp.newTrigger('dailyReport')
+      .timeBased()
+      .atHour(9)
+      .everyDays(1)
+      .create();
+
     // 每日 18:00 — 資產快照
     ScriptApp.newTrigger('setData')
       .timeBased()
@@ -116,6 +123,7 @@ function setupAllTriggers() {
 
     console.log('✅ Trigger 設定完成：');
     console.log('   每日 04:00 → dailyCleanUp');
+    console.log('   每日 09:00 → dailyReport');
     console.log('   每日 18:00 → setData');
   } catch (ex) {
     Logger.error('setupAllTriggers', '設定 Trigger 失敗', ex);
