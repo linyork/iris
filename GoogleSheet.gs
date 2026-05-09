@@ -223,13 +223,14 @@ var GoogleSheet = (() => {
       var hits     = [];
 
       data.forEach(row => {
-        var haystack = (String(row[0]) + ' ' + String(row[1])).toLowerCase();
-        var matched  = keywords.every(k => haystack.includes(k.toLowerCase()));
-        if (matched) hits.push('[' + row[0] + ']: ' + row[1]);
+        var haystack   = (String(row[0]) + ' ' + String(row[1])).toLowerCase();
+        var matchCount = keywords.filter(k => haystack.includes(k.toLowerCase())).length;
+        if (matchCount > 0) hits.push({ text: '[' + row[0] + ']: ' + row[1], score: matchCount });
       });
 
       if (hits.length === 0) return '沒有找到與「' + query + '」相關的知識';
-      return hits.slice(0, 5).join('\n');
+      hits.sort((a, b) => b.score - a.score);
+      return hits.slice(0, 5).map(h => h.text).join('\n');
     } catch (ex) {
       Logger.error('GoogleSheet.searchKnowledge', '搜尋知識失敗', ex);
       return '搜尋時發生錯誤：' + ex.message;
@@ -369,7 +370,13 @@ var GoogleSheet = (() => {
           .join(' | ');
       }).filter(l => l);
 
-      return '最近 ' + lines.length + ' 筆紀錄：\n' + lines.join('\n');
+      var result = '最近 ' + lines.length + ' 筆紀錄：\n' + lines.join('\n');
+      if (result.length > 4000) {
+        var half = Math.floor(lines.length / 2);
+        var trimmed = lines.slice(0, 5).concat(['... (中間省略) ...']).concat(lines.slice(-5));
+        result = '最近 ' + lines.length + ' 筆紀錄（已截斷，顯示首尾各 5 筆）：\n' + trimmed.join('\n');
+      }
+      return result;
     } catch (ex) {
       Logger.error('GoogleSheet.getHistory', '讀取歷史紀錄失敗', ex);
       return '讀取歷史紀錄時發生錯誤：' + ex.message;

@@ -26,8 +26,7 @@ var WebSearch = (() => {
         '?key='      + encodeURIComponent(apiKey) +
         '&cx='       + encodeURIComponent(cx) +
         '&q='        + encodeURIComponent(query) +
-        '&num=5' +
-        '&dateRestrict=m1';
+        '&num=5';
 
       var response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
       var code     = response.getResponseCode();
@@ -46,7 +45,7 @@ var WebSearch = (() => {
       Logger.info('WebSearch.search', '搜尋完成', { query: query, results: data.items.length });
 
       var lines = data.items.map((item, i) =>
-        (i + 1) + '. ' + item.title + '\n   ' + (item.snippet || '') + '\n   來源：' + item.link
+        (i + 1) + '. ' + item.title + '\n   ' + (item.snippet || '').slice(0, 150) + '\n   來源：' + item.link
       );
 
       return '搜尋「' + query + '」的結果：\n\n' + lines.join('\n\n');

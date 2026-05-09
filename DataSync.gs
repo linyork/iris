@@ -34,10 +34,20 @@ function setData() {
   var dateFormatted = Utilities.formatDate(today, ss.getSpreadsheetTimeZone(), "yyyy-MM-dd");
   var currentLine   = recordSheet.getLastRow() + 1;
 
-  // 總價值公式（新增/刪除股票時記得調整欄位範圍）
-  var totalValue = "= K" + currentLine + "+L" + currentLine + "+M" + currentLine +
-                   "+N" + currentLine + "+O" + currentLine + "+P" + currentLine +
-                   "+Q" + currentLine + "+R" + currentLine + "+S" + currentLine;
+  // 動態計算總價值公式欄位範圍（A=日期, B=公式, C~=各股價, 之後=各項價值）
+  var numStocks   = stockPrices.flat().length;
+  var sumStartCol = 2 + numStocks + 1; // A(1) + B(1) + stockPrices + stockValue 從下一欄開始
+  var sumEndCol   = sumStartCol + 8;   // stockValue + 8 個現金帳戶 = 9 欄
+  var colToLetter = function(col) {
+    var letter = '';
+    while (col > 0) {
+      var mod = (col - 1) % 26;
+      letter = String.fromCharCode(65 + mod) + letter;
+      col = Math.floor((col - 1) / 26);
+    }
+    return letter;
+  };
+  var totalValue = '=SUM(' + colToLetter(sumStartCol) + currentLine + ':' + colToLetter(sumEndCol) + currentLine + ')';
 
   var dataToRecord = [
     dateFormatted,

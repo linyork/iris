@@ -47,7 +47,7 @@ function doPost(e) {
 
       var reply = ChatBot.reply(Line.event);
       if (reply) {
-        Line.replyMsg(event.replyToken, reply);
+        Line.pushMsg(event.source.userId, reply);
       }
     }
   } catch (error) {

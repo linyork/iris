@@ -16,7 +16,13 @@ var AIAdapter = (() => {
         try {
             if (!geminiContents || !Array.isArray(geminiContents)) return [];
 
-            return geminiContents.map(item => {
+            return geminiContents.map((item, index) => {
+                // 第一筆永遠是 ChatBot 注入的 system context，轉為 system role 讓模型更嚴格遵守
+                if (index === 0 && item.role === 'user') {
+                    var sysContent = item.parts ? item.parts.filter(p => p.text).map(p => p.text).join('\n') : '';
+                    return { role: 'system', content: sysContent };
+                }
+
                 var role = item.role === 'model' ? 'assistant' : item.role;
                 var content = null;
                 var tool_calls;
