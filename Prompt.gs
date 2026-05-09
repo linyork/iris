@@ -28,6 +28,8 @@ var Prompt = (() => {
 - 問「總資產」「現金放哪」「配置比例」→ getDashboard
 - 問「最近趨勢」「上個月走勢」「什麼時候高點」→ getHistory(days)
 - 問全局狀況或需要給建議 → getDashboard + getHoldings 一起用
+- 問國際局勢、總經、Fed、匯率、地緣政治、市場新聞 → searchWeb
+- 分析持倉風險時若涉及外部因素 → searchWeb + getHoldings 結合判斷
 
 [記憶系統]
 短期記憶（short_term_memory）：有時效性，用於記錄當前狀態、臨時交代事項、對話脈絡。

@@ -70,6 +70,17 @@ var Tools = (() => {
         },
         required: ['query']
       }
+    },
+    {
+      name: 'searchWeb',
+      description: '搜尋即時網路資訊，用於查詢當前國際財經、總體經濟、地緣政治、央行政策、匯率走勢、市場新聞等外部資訊。當分析持倉風險或市場趨勢需要參考外部時事時使用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '搜尋關鍵字，建議用具體的財經或時事詞彙，例如「Fed 利率決策 2025」、「台幣匯率走勢」' }
+        },
+        required: ['query']
+      }
     }
   ];
 
@@ -103,6 +114,10 @@ var Tools = (() => {
         case 'searchKnowledge':
           if (!args.query) return '缺少必要參數：query。';
           return GoogleSheet.searchKnowledge(args.query);
+
+        case 'searchWeb':
+          if (!args.query) return '缺少必要參數：query。';
+          return WebSearch.search(args.query);
 
         default:
           return '未知的工具：' + name;

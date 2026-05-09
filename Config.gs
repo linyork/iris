@@ -11,7 +11,9 @@ var Config = (() => {
     SHEET_ID:     'SHEET_ID',
     ADMIN_STRING: 'ADMIN_STRING',
     GEMINI_KEY:   'GEMINI_API_KEY',
-    NVIDIA_KEY:   'NVIDIA_API_KEY'
+    NVIDIA_KEY:   'NVIDIA_API_KEY',
+    SEARCH_KEY:   'GOOGLE_SEARCH_KEY',
+    SEARCH_CX:    'GOOGLE_SEARCH_CX'
   };
 
   var _debugModeCache    = null;
@@ -56,6 +58,11 @@ var Config = (() => {
       'gemini-2.5-flash':      { maxOutputTokens: 8192, supportsFunctionCalling: true },
       'gemini-2.5-pro':        { maxOutputTokens: 8192, supportsFunctionCalling: true }
     },
+
+    // ─── Google Custom Search ─────────────────────────────────
+    get GOOGLE_SEARCH_KEY() { return scriptProperties.getProperty(ENV_KEYS.SEARCH_KEY); },
+    get GOOGLE_SEARCH_CX()  { return scriptProperties.getProperty(ENV_KEYS.SEARCH_CX); },
+    GOOGLE_SEARCH_API_BASE: 'https://www.googleapis.com/customsearch/v1',
 
     // ─── NVIDIA ───────────────────────────────────────────────
     get NVIDIA_API_KEY() { return scriptProperties.getProperty(ENV_KEYS.NVIDIA_KEY); },
