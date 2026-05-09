@@ -77,11 +77,15 @@ var Line = (() => {
 
   line.pushMsg = (userId, message) => {
     try {
-      var text = Utils.truncateForLine(Utils.stripTimestampPrefix(message));
-      sendMsg(Config.LINE_API_BASE + '/message/push', JSON.stringify({
-        to: userId,
-        messages: [{ type: 'text', text: text }]
-      }));
+      var parts = Utils.splitForLine(Utils.stripTimestampPrefix(message));
+      // LINE 單次 push 最多 5 則，超過分批送
+      for (var i = 0; i < parts.length; i += 5) {
+        var batch = parts.slice(i, i + 5).map(function(t) { return { type: 'text', text: t }; });
+        sendMsg(Config.LINE_API_BASE + '/message/push', JSON.stringify({
+          to: userId,
+          messages: batch
+        }));
+      }
     } catch (ex) {
       Logger.error('Line.pushMsg', '推送失敗', ex);
     }

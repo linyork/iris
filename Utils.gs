@@ -56,5 +56,21 @@ var Utils = (() => {
     return str.slice(0, limit) + '\n\n（回覆過長已截斷，可詢問更具體的問題以取得完整資訊）';
   };
 
+  // 將長訊息依換行點切成 ≤ limit 字元的陣列，供 pushMsg 分段發送
+  utils.splitForLine = (str, limit) => {
+    limit = limit || 4900;
+    if (typeof str !== 'string' || str.length <= limit) return [str];
+    var chunks = [];
+    var remaining = str;
+    while (remaining.length > limit) {
+      var cut = remaining.lastIndexOf('\n', limit);
+      if (cut <= 0) cut = limit;
+      chunks.push(remaining.slice(0, cut));
+      remaining = remaining.slice(cut).replace(/^\n/, '');
+    }
+    if (remaining) chunks.push(remaining);
+    return chunks;
+  };
+
   return utils;
 })();

@@ -64,19 +64,39 @@ function dailyCleanUp() {
   try {
     GoogleSheet.cleanExpiredShortTermMemories();
 
+    var ss = SpreadsheetApp.openById(Config.SHEET_ID);
+
+    // 清除超過 10 天的 consolelog
+    var logSheet = ss.getSheetByName('consolelog');
+    if (logSheet) {
+      var logCutoff = new Date();
+      logCutoff.setDate(logCutoff.getDate() - 10);
+      var logLastRow = logSheet.getLastRow();
+      if (logLastRow >= 2) {
+        var logData   = logSheet.getRange(2, 1, logLastRow - 1, 1).getValues();
+        var logDelete = [];
+        for (var i = logData.length - 1; i >= 0; i--) {
+          if (logData[i][0] && new Date(logData[i][0]) < logCutoff) logDelete.push(i + 2);
+        }
+        logDelete.forEach(r => logSheet.deleteRow(r));
+        if (logDelete.length > 0) Logger.info('dailyCleanUp', '清除過期 consolelog ' + logDelete.length + ' 筆');
+      }
+    }
+
     // 清除超過 30 天的 chat 紀錄
-    var sheet = SpreadsheetApp.openById(Config.SHEET_ID).getSheetByName('chat');
-    if (sheet) {
+    // 清除超過 30 天的 chat 紀錄
+    var chatSheet = ss.getSheetByName('chat');
+    if (chatSheet) {
       var cutoff  = new Date();
       cutoff.setDate(cutoff.getDate() - Config.CHAT_CLEANUP_DAYS);
-      var lastRow = sheet.getLastRow();
+      var lastRow = chatSheet.getLastRow();
       if (lastRow >= 2) {
-        var data    = sheet.getRange(2, 4, lastRow - 1, 1).getValues(); // 第 4 欄是 timestamp
+        var data    = chatSheet.getRange(2, 4, lastRow - 1, 1).getValues();
         var toDelete = [];
         for (var i = data.length - 1; i >= 0; i--) {
           if (data[i][0] && new Date(data[i][0]) < cutoff) toDelete.push(i + 2);
         }
-        toDelete.forEach(r => sheet.deleteRow(r));
+        toDelete.forEach(r => chatSheet.deleteRow(r));
         if (toDelete.length > 0) {
           Logger.info('dailyCleanUp', '清除過期對話 ' + toDelete.length + ' 筆');
         }
