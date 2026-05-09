@@ -77,9 +77,10 @@ var Line = (() => {
 
   line.pushMsg = (userId, message) => {
     try {
+      var text = Utils.truncateForLine(Utils.stripTimestampPrefix(message));
       sendMsg(Config.LINE_API_BASE + '/message/push', JSON.stringify({
         to: userId,
-        messages: [{ type: 'text', text: Utils.stripTimestampPrefix(message) }]
+        messages: [{ type: 'text', text: text }]
       }));
     } catch (ex) {
       Logger.error('Line.pushMsg', '推送失敗', ex);

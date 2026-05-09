@@ -72,6 +72,27 @@ var Tools = (() => {
       }
     },
     {
+      name: 'listMemories',
+      description: '列出目前所有有效的短期記憶與長期知識，用於確認 Iris 記住了哪些內容。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: []
+      }
+    },
+    {
+      name: 'deleteMemory',
+      description: '刪除指定的短期記憶或長期知識條目。',
+      parameters: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', description: '"stm"（短期記憶）或 "knowledge"（長期知識）' },
+          key:  { type: 'string', description: '要刪除的記憶鍵值（STM）或標籤（knowledge），需與 listMemories 回傳的名稱完全一致' }
+        },
+        required: ['type', 'key']
+      }
+    },
+    {
       name: 'searchWeb',
       description: '搜尋即時網路資訊，用於查詢當前國際財經、總體經濟、地緣政治、央行政策、匯率走勢、市場新聞等外部資訊。當分析持倉風險或市場趨勢需要參考外部時事時使用。',
       parameters: {
@@ -114,6 +135,13 @@ var Tools = (() => {
         case 'searchKnowledge':
           if (!args.query) return '缺少必要參數：query。';
           return GoogleSheet.searchKnowledge(args.query);
+
+        case 'listMemories':
+          return GoogleSheet.listMemories();
+
+        case 'deleteMemory':
+          if (!args.type || !args.key) return '缺少必要參數：type 與 key 皆為必填。';
+          return GoogleSheet.deleteMemory(args.type, args.key);
 
         case 'searchWeb':
           if (!args.query) return '缺少必要參數：query。';

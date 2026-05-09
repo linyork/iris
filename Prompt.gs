@@ -31,6 +31,8 @@ var Prompt = (() => {
 - 問全局狀況或需要給建議 → getDashboard + getHoldings 一起用
 - 問國際局勢、總經、Fed、匯率、地緣政治、市場新聞 → searchWeb
 - 分析持倉風險時若涉及外部因素 → searchWeb + getHoldings 結合判斷
+- 問「你記住了什麼」「記憶列表」→ listMemories
+- 要刪除某筆記憶或知識 → 先 listMemories 確認名稱，再 deleteMemory
 
 [記憶系統]
 短期記憶（short_term_memory）：有時效性，用於記錄當前狀態、臨時交代事項、對話脈絡。

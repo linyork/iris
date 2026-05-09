@@ -77,7 +77,7 @@ var Config = (() => {
     },
 
     // ─── 對話管理 ─────────────────────────────────────────────
-    CHAT_MAX_TURNS:      8,
+    CHAT_MAX_TURNS:      5,
     CHAT_CLEANUP_DAYS:   30,
     TOOL_MAX_ITERATIONS: 3,
 

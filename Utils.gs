@@ -50,5 +50,11 @@ var Utils = (() => {
     return str.replace(TIMESTAMP_RE, '');
   };
 
+  utils.truncateForLine = (str, limit) => {
+    limit = limit || 4900;
+    if (typeof str !== 'string' || str.length <= limit) return str;
+    return str.slice(0, limit) + '\n\n（回覆過長已截斷，可詢問更具體的問題以取得完整資訊）';
+  };
+
   return utils;
 })();

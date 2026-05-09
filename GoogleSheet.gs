@@ -237,6 +237,80 @@ var GoogleSheet = (() => {
     }
   };
 
+  // ─── Memory Management ───────────────────────────────────────
+
+  /**
+   * 列出所有有效的短期記憶與長期知識
+   * @returns {string} 格式化文字
+   */
+  gs.listMemories = () => {
+    try {
+      var lines = [];
+      var now = new Date();
+
+      var stmSheet = getSheet().getSheetByName('short_term_memory');
+      lines.push('【短期記憶】');
+      if (stmSheet && stmSheet.getLastRow() >= 2) {
+        var stmData = stmSheet.getRange(2, 1, stmSheet.getLastRow() - 1, 3).getValues();
+        var valid   = stmData.filter(r => r[0] && new Date(r[2]) > now);
+        if (valid.length > 0) {
+          valid.forEach(r => lines.push('▸ ' + r[0] + '：' + r[1]));
+        } else {
+          lines.push('（目前無有效記憶）');
+        }
+      } else {
+        lines.push('（目前無有效記憶）');
+      }
+
+      lines.push('');
+      lines.push('【長期知識】');
+      var knSheet = getSheet().getSheetByName('knowledge');
+      if (knSheet && knSheet.getLastRow() >= 2) {
+        var knData = knSheet.getRange(2, 1, knSheet.getLastRow() - 1, 2).getValues();
+        var knValid = knData.filter(r => r[0]);
+        if (knValid.length > 0) {
+          knValid.forEach(r => lines.push('▸ [' + r[0] + ']：' + r[1]));
+        } else {
+          lines.push('（目前無資料）');
+        }
+      } else {
+        lines.push('（目前無資料）');
+      }
+
+      return lines.join('\n');
+    } catch (ex) {
+      Logger.error('GoogleSheet.listMemories', '列出記憶失敗', ex);
+      return '列出記憶時發生錯誤：' + ex.message;
+    }
+  };
+
+  /**
+   * 刪除指定的短期記憶或長期知識
+   * @param {string} type - 'stm' 或 'knowledge'
+   * @param {string} key  - STM 的 key 或 knowledge 的 tags
+   */
+  gs.deleteMemory = (type, key) => {
+    try {
+      var sheetName = type === 'stm' ? 'short_term_memory' : 'knowledge';
+      var sheet = getSheet().getSheetByName(sheetName);
+      if (!sheet) return '找不到工作表：' + sheetName;
+      var lastRow = sheet.getLastRow();
+      if (lastRow < 2) return '記憶庫為空';
+
+      var data = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+      for (var i = data.length - 1; i >= 0; i--) {
+        if (String(data[i][0]).trim() === String(key).trim()) {
+          sheet.deleteRow(i + 2);
+          return '已刪除「' + key + '」';
+        }
+      }
+      return '找不到「' + key + '」，請用 listMemories 確認正確名稱';
+    } catch (ex) {
+      Logger.error('GoogleSheet.deleteMemory', '刪除失敗', ex);
+      return '刪除失敗：' + ex.message;
+    }
+  };
+
   // ─── Portfolio Tools ──────────────────────────────────────────
 
   /**
