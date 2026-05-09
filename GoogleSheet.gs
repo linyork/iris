@@ -8,6 +8,10 @@
  *   chat             — [userId, role, message, timestamp]
  *   short_term_memory— [key, content, expire_at, category]
  *   knowledge        — [tags, content, timestamp]
+ *   所有股票          — row1: header, row2: 0000 合計列, row3+: 個別持股
+ *   面板              — B1:B8 摘要, C1:D4 淨值, E1:F8 各帳戶現金
+ *   配置              — row2-10: 各 ETF, row11-21: 配置比例
+ *   @所有股票紀錄      — A:日期, B:總價值, C-J:各 ETF 股價, K+:現金
  */
 var GoogleSheet = (() => {
   var gs = {};
@@ -229,6 +233,146 @@ var GoogleSheet = (() => {
     } catch (ex) {
       Logger.error('GoogleSheet.searchKnowledge', '搜尋知識失敗', ex);
       return '搜尋時發生錯誤：' + ex.message;
+    }
+  };
+
+  // ─── Portfolio Tools ──────────────────────────────────────────
+
+  /**
+   * 取得完整持倉明細（所有股票 tab）
+   * row2 = 0000 合計列，row3+ = 個別 ETF
+   * @returns {string} 格式化文字
+   */
+  gs.getHoldings = () => {
+    try {
+      var sheet = getSheet().getSheetByName('所有股票');
+      if (!sheet) return '（找不到「所有股票」工作表）';
+      var lastRow = sheet.getLastRow();
+      var lastCol = sheet.getLastColumn();
+      if (lastRow < 2) return '（尚無持倉資料）';
+
+      var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+      var data    = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+      var lines = data
+        .filter(row => row[0] !== '' && row[0] !== null)
+        .map(row => {
+          var label = row[0] === '0000' ? '【合計】' : row[0] + ' ' + (row[1] || '');
+          var pairs = headers
+            .map((h, i) => {
+              var v = row[i];
+              if (h === '' || v === '' || v === null || v === '#' || (typeof v === 'string' && v.startsWith('#'))) return null;
+              return h + ': ' + v;
+            })
+            .filter(p => p !== null)
+            .join(' | ');
+          return label + '\n  ' + pairs;
+        });
+
+      return lines.join('\n\n');
+    } catch (ex) {
+      Logger.error('GoogleSheet.getHoldings', '讀取持倉失敗', ex);
+      return '讀取持倉時發生錯誤：' + ex.message;
+    }
+  };
+
+  /**
+   * 取得總覽儀表板（面板 + 配置 tab）
+   * @returns {string} 格式化文字
+   */
+  gs.getDashboard = () => {
+    try {
+      var ss = getSheet();
+      var lines = [];
+
+      // ── 面板：摘要數字 ──────────────────────────────────────
+      var panel = ss.getSheetByName('面板');
+      if (panel) {
+        // 左側摘要 A1:B8
+        var leftLabels = panel.getRange('A1:A8').getValues();
+        var leftVals   = panel.getRange('B1:B8').getValues();
+        // 右側淨值 C1:D4
+        var rightLabels = panel.getRange('C1:C4').getValues();
+        var rightVals   = panel.getRange('D1:D4').getValues();
+        // 現金帳戶 E1:F8
+        var cashLabels  = panel.getRange('E1:E8').getValues();
+        var cashVals    = panel.getRange('F1:F8').getValues();
+
+        lines.push('【投資組合摘要】');
+        for (var i = 0; i < 8; i++) {
+          if (leftLabels[i][0]) lines.push('  ' + leftLabels[i][0] + ': ' + leftVals[i][0]);
+        }
+        lines.push('【淨值（扣除現金）】');
+        for (var i = 0; i < 4; i++) {
+          if (rightLabels[i][0]) lines.push('  ' + rightLabels[i][0] + ': ' + rightVals[i][0]);
+        }
+        lines.push('【各帳戶現金】');
+        for (var i = 0; i < 8; i++) {
+          if (cashLabels[i][0]) lines.push('  ' + cashLabels[i][0] + ': ' + cashVals[i][0]);
+        }
+      }
+
+      // ── 配置：ETF 列表與比例 ────────────────────────────────
+      var alloc = ss.getSheetByName('配置');
+      if (alloc) {
+        var lastRow = alloc.getLastRow();
+        var lastCol = alloc.getLastColumn();
+        var headers = alloc.getRange(1, 1, 1, lastCol).getValues()[0];
+        var data    = alloc.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+        lines.push('【資產配置】');
+        data.forEach(row => {
+          if (!row[0] && !row[1]) return; // 空列跳過
+          var pairs = headers
+            .map((h, i) => {
+              if (!h || row[i] === '' || row[i] === null) return null;
+              return h + ': ' + row[i];
+            })
+            .filter(p => p !== null)
+            .join(' | ');
+          if (pairs) lines.push('  ' + pairs);
+        });
+      }
+
+      return lines.join('\n') || '（無資料）';
+    } catch (ex) {
+      Logger.error('GoogleSheet.getDashboard', '讀取儀表板失敗', ex);
+      return '讀取儀表板時發生錯誤：' + ex.message;
+    }
+  };
+
+  /**
+   * 取得最近 N 天的每日資產快照（@所有股票紀錄 tab）
+   * @param {number} days - 最近幾天（預設 30，最多 365）
+   * @returns {string} 格式化文字
+   */
+  gs.getHistory = (days) => {
+    try {
+      days = Math.min(days || 30, 365);
+      var sheet = getSheet().getSheetByName('@所有股票紀錄');
+      if (!sheet) return '（找不到「@所有股票紀錄」工作表）';
+      var lastRow = sheet.getLastRow();
+      if (lastRow < 2) return '（尚無歷史紀錄）';
+
+      var lastCol  = sheet.getLastColumn();
+      var headers  = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+      var startRow = Math.max(2, lastRow - days + 1);
+      var data     = sheet.getRange(startRow, 1, lastRow - startRow + 1, lastCol).getValues();
+
+      var lines = data.map(row => {
+        return headers
+          .map((h, i) => {
+            if (!h || row[i] === '' || row[i] === null) return null;
+            return h + ': ' + row[i];
+          })
+          .filter(p => p !== null)
+          .join(' | ');
+      }).filter(l => l);
+
+      return '最近 ' + lines.length + ' 筆紀錄：\n' + lines.join('\n');
+    } catch (ex) {
+      Logger.error('GoogleSheet.getHistory', '讀取歷史紀錄失敗', ex);
+      return '讀取歷史紀錄時發生錯誤：' + ex.message;
     }
   };
 

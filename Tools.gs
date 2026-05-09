@@ -7,6 +7,35 @@ var Tools = (() => {
 
   var definitions = [
     {
+      name: 'getHoldings',
+      description: '取得完整持倉明細，包含每檔 ETF 的股數、總成本、當前市價、損益、幅度、殖利率等，以及合計列。用於查詢持倉現況或分析單一標的。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: []
+      }
+    },
+    {
+      name: 'getDashboard',
+      description: '取得資產總覽儀表板，包含：投資組合摘要（總成本、收益、收益率、虛均月領）、淨值（扣除現金後的真實報酬）、各帳戶現金分布、ETF 配置比例（台/全球/息/指）。用於全局分析或資產配置建議。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: []
+      }
+    },
+    {
+      name: 'getHistory',
+      description: '取得每日資產快照歷史紀錄，可看總價值走勢、各 ETF 股價變化。用於趨勢分析、高低點查詢、近期績效比較。',
+      parameters: {
+        type: 'object',
+        properties: {
+          days: { type: 'number', description: '查詢最近幾天（預設 30，最多 365）' }
+        },
+        required: []
+      }
+    },
+    {
       name: 'rememberShortTerm',
       description: '記住一段有時效性的資訊（例如：使用者當前狀態、臨時交代的事、對話脈絡）。這些記憶會在對話中自動注入，但時效過後自動消失。',
       parameters: {
@@ -50,6 +79,15 @@ var Tools = (() => {
     try {
       Logger.info('Tools.execute', '執行工具: ' + name, args);
       switch (name) {
+        case 'getHoldings':
+          return GoogleSheet.getHoldings();
+
+        case 'getDashboard':
+          return GoogleSheet.getDashboard();
+
+        case 'getHistory':
+          return GoogleSheet.getHistory(args.days || 30);
+
         case 'rememberShortTerm':
           if (!args.key || !args.content) return '缺少必要參數：key 與 content 皆為必填。';
           return GoogleSheet.addShortTermMemory(
