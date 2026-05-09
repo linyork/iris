@@ -135,11 +135,11 @@ function setupAllTriggers() {
       .atHour(9)
       .create();
 
-    // 每月 1 日 09:00 — 月報
+    // 每月 1 日 10:00 — 月報（10:00 避免與早報 09:00 撞）
     ScriptApp.newTrigger('monthlyReport')
       .timeBased()
       .onMonthDay(1)
-      .atHour(9)
+      .atHour(10)
       .create();
 
     // 每日 18:00 — 資產快照
@@ -155,7 +155,7 @@ function setupAllTriggers() {
     console.log('   每日 10:00 → marketAlert');
     console.log('   每日 14:00 → marketAlert');
     console.log('   每週六 09:00 → weeklyReport');
-    console.log('   每月 1 日 09:00 → monthlyReport');
+    console.log('   每月 1 日 10:00 → monthlyReport');
     console.log('   每日 18:00 → setData');
   } catch (ex) {
     Logger.error('setupAllTriggers', '設定 Trigger 失敗', ex);

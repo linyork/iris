@@ -5,8 +5,12 @@
 
 function dailyReport() {
   try {
-    var nowStr  = Utilities.formatDate(new Date(), 'GMT+8', 'yyyy/MM/dd HH:mm');
-    var dateStr = Utilities.formatDate(new Date(), 'GMT+8', 'MM/dd');
+    var today = new Date();
+    var dow   = today.getDay();
+    if (dow === 0 || dow === 6) return; // 週六發週報、週日無報
+
+    var nowStr  = Utilities.formatDate(today, 'GMT+8', 'yyyy/MM/dd HH:mm');
+    var dateStr = Utilities.formatDate(today, 'GMT+8', 'MM/dd');
 
     Logger.info('dailyReport', '開始產生早報', nowStr);
 
