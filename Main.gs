@@ -114,6 +114,34 @@ function setupAllTriggers() {
       .everyDays(1)
       .create();
 
+    // 每日 10:00 — 盤中警報（第一次）
+    ScriptApp.newTrigger('marketAlert')
+      .timeBased()
+      .atHour(10)
+      .everyDays(1)
+      .create();
+
+    // 每日 14:00 — 盤中警報（第二次）
+    ScriptApp.newTrigger('marketAlert')
+      .timeBased()
+      .atHour(14)
+      .everyDays(1)
+      .create();
+
+    // 每週六 09:00 — 週報
+    ScriptApp.newTrigger('weeklyReport')
+      .timeBased()
+      .onWeekDay(ScriptApp.WeekDay.SATURDAY)
+      .atHour(9)
+      .create();
+
+    // 每月 1 日 09:00 — 月報
+    ScriptApp.newTrigger('monthlyReport')
+      .timeBased()
+      .onMonthDay(1)
+      .atHour(9)
+      .create();
+
     // 每日 18:00 — 資產快照
     ScriptApp.newTrigger('setData')
       .timeBased()
@@ -124,6 +152,10 @@ function setupAllTriggers() {
     console.log('✅ Trigger 設定完成：');
     console.log('   每日 04:00 → dailyCleanUp');
     console.log('   每日 09:00 → dailyReport');
+    console.log('   每日 10:00 → marketAlert');
+    console.log('   每日 14:00 → marketAlert');
+    console.log('   每週六 09:00 → weeklyReport');
+    console.log('   每月 1 日 09:00 → monthlyReport');
     console.log('   每日 18:00 → setData');
   } catch (ex) {
     Logger.error('setupAllTriggers', '設定 Trigger 失敗', ex);

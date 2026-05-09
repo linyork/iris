@@ -264,6 +264,60 @@ var GoogleSheet = (() => {
     }
   };
 
+  /**
+   * 讀取股利歷史紀錄
+   * @param {number} [year] - 指定年份（可選，預設全部）
+   * @returns {string} 格式化統計文字
+   */
+  gs.getDividendHistory = (year) => {
+    try {
+      var sheet = getSheet().getSheetByName('@股利');
+      if (!sheet) return '找不到「@股利」工作表';
+      var lastRow = sheet.getLastRow();
+      if (lastRow < 2) return '（尚無股利紀錄）';
+
+      var data = sheet.getRange(2, 1, lastRow - 1, 3).getValues()
+        .filter(r => r[0] && r[1] && r[2]);
+
+      if (year) {
+        data = data.filter(r => String(r[0]).startsWith(String(year)));
+      }
+
+      if (data.length === 0) return (year ? year + ' 年' : '') + '無股利紀錄';
+
+      var bySymbol = {};
+      var total    = 0;
+      data.forEach(r => {
+        var sym = String(r[1]);
+        var amt = parseFloat(r[2]) || 0;
+        bySymbol[sym] = (bySymbol[sym] || 0) + amt;
+        total += amt;
+      });
+
+      var label = year ? year + ' 年' : '累計';
+      var lines = [
+        label + '股利統計（共 ' + data.length + ' 筆）',
+        '合計：' + Math.round(total) + ' 元',
+        '月均：' + Math.round(total / 12) + ' 元',
+        '',
+        '各檔明細：'
+      ];
+      Object.keys(bySymbol).sort().forEach(sym => {
+        lines.push('▸ ' + sym + '：' + Math.round(bySymbol[sym]) + ' 元');
+      });
+      lines.push('');
+      lines.push('最近 5 筆：');
+      data.slice(-5).reverse().forEach(r => {
+        lines.push(r[0] + '  ' + r[1] + '  ' + parseFloat(r[2]).toLocaleString() + ' 元');
+      });
+
+      return lines.join('\n');
+    } catch (ex) {
+      Logger.error('GoogleSheet.getDividendHistory', '讀取失敗', ex);
+      return '讀取股利紀錄時發生錯誤：' + ex.message;
+    }
+  };
+
   // ─── Memory Management ───────────────────────────────────────
 
   /**

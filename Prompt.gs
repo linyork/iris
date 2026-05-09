@@ -30,6 +30,7 @@ var Prompt = (() => {
 ▸ 查即時股價（非持倉標的）→ getPrice
 ▸ 查國際財經、總經、Fed、匯率、地緣政治、時事 → searchWeb
 ▸ 分析持倉風險涉及外部因素 → searchWeb + getHoldings
+▸ 問股利收入、年度股利統計 → getDividendHistory
 ▸ 說「收到股利」→ recordDividend（日期預設今日）
 ▸ 問「你記住什麼」→ listMemories
 ▸ 刪記憶 → listMemories 確認名稱 → deleteMemory

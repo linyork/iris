@@ -72,6 +72,17 @@ var Tools = (() => {
       }
     },
     {
+      name: 'getDividendHistory',
+      description: '查詢股利收入歷史統計，包含各 ETF 股利金額、年度合計、月均。可指定年份或查詢全部紀錄。',
+      parameters: {
+        type: 'object',
+        properties: {
+          year: { type: 'number', description: '查詢指定年份（可選，例如 2025），不填則回傳全部' }
+        },
+        required: []
+      }
+    },
+    {
       name: 'recordDividend',
       description: '在股利紀錄表登記一筆收到的股利。當使用者說「收到 XXX 股利」或「股利入帳」時使用。',
       parameters: {
@@ -159,6 +170,9 @@ var Tools = (() => {
         case 'searchKnowledge':
           if (!args.query) return '缺少必要參數：query。';
           return GoogleSheet.searchKnowledge(args.query);
+
+        case 'getDividendHistory':
+          return GoogleSheet.getDividendHistory(args.year);
 
         case 'recordDividend':
           if (!args.symbol || !args.amount) return '缺少必要參數：symbol 與 amount 皆為必填。';

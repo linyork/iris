@@ -68,3 +68,112 @@ function dailyReport() {
     Logger.error('dailyReport', '早報發送失敗', ex);
   }
 }
+
+/**
+ * 每週六 09:00 發送週報
+ */
+function weeklyReport() {
+  try {
+    var nowStr  = Utilities.formatDate(new Date(), 'GMT+8', 'yyyy/MM/dd HH:mm');
+    var dateStr = Utilities.formatDate(new Date(), 'GMT+8', 'MM/dd');
+    Logger.info('weeklyReport', '開始產生週報', nowStr);
+
+    var history  = GoogleSheet.getHistory(7);
+    var holdings = GoogleSheet.getHoldings();
+    var dividend = GoogleSheet.getDividendHistory(new Date().getFullYear());
+    var news     = WebSearch.search('台股 美股 本週財經重點');
+    var knowledge = GoogleSheet.searchKnowledge('投資策略 配置');
+
+    var systemContext = Config.SYSTEM_PROMPT + '\n\n[System Info]\nCurrent Time: ' + nowStr + '\nUser: 主人 (Master)';
+    if (knowledge && !knowledge.includes('沒有找到')) systemContext += '\n\n[相關長期知識]:\n' + knowledge;
+
+    var userPrompt =
+      '請根據以下資料，產生本週（截至 ' + dateStr + '）的投資週報。\n' +
+      '格式適合 LINE 純文字，不使用 Markdown，用全形符號排版。\n' +
+      '內容請包含：\n' +
+      '1. 本週總資產變化與績效\n' +
+      '2. 各 ETF 本週表現（漲跌幅）\n' +
+      '3. 本週重要財經事件\n' +
+      '4. 下週需關注的重點\n' +
+      '5. 一句話操作建議\n\n' +
+      '【本週歷史走勢】\n' + history + '\n\n' +
+      '【持倉現況】\n' + holdings + '\n\n' +
+      '【今年股利統計】\n' + dividend + '\n\n' +
+      '【本週財經新聞】\n' + news;
+
+    var contents = [
+      { role: 'user',  parts: [{ text: systemContext }] },
+      { role: 'model', parts: [{ text: Prompt.ACKNOWLEDGEMENT }] },
+      { role: 'user',  parts: [{ text: userPrompt }] }
+    ];
+
+    var response = AIServiceFactory.callAPI(contents, { model: 'SMART', caller: 'weeklyReport' });
+    var report   = Utils.extractText(response);
+    if (!report) { Logger.error('weeklyReport', '產生失敗'); return; }
+
+    var masters = Config.ADMIN_STRING.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
+    masters.forEach(function(userId) {
+      Line.pushMsg(userId, '【Iris 週報 ' + dateStr + '】\n\n' + report);
+    });
+
+    Logger.info('weeklyReport', '週報發送完成', { recipients: masters.length });
+  } catch (ex) {
+    Logger.error('weeklyReport', '週報發送失敗', ex);
+  }
+}
+
+/**
+ * 每月 1 日 09:00 發送上月月報
+ */
+function monthlyReport() {
+  try {
+    var now     = new Date();
+    var nowStr  = Utilities.formatDate(now, 'GMT+8', 'yyyy/MM/dd HH:mm');
+    var lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    var yearStr = Utilities.formatDate(lastMonth, 'GMT+8', 'yyyy');
+    var monthStr = Utilities.formatDate(lastMonth, 'GMT+8', 'MM');
+    Logger.info('monthlyReport', '開始產生月報', nowStr);
+
+    var history   = GoogleSheet.getHistory(35);
+    var dashboard = GoogleSheet.getDashboard();
+    var dividend  = GoogleSheet.getDividendHistory(parseInt(yearStr));
+    var news      = WebSearch.search('上個月 台股 總體經濟 回顧');
+    var knowledge = GoogleSheet.searchKnowledge('投資策略 目標 配置');
+
+    var systemContext = Config.SYSTEM_PROMPT + '\n\n[System Info]\nCurrent Time: ' + nowStr + '\nUser: 主人 (Master)';
+    if (knowledge && !knowledge.includes('沒有找到')) systemContext += '\n\n[相關長期知識]:\n' + knowledge;
+
+    var userPrompt =
+      '請根據以下資料，產生 ' + yearStr + ' 年 ' + monthStr + ' 月的投資月報。\n' +
+      '格式適合 LINE 純文字，不使用 Markdown，用全形符號排版。\n' +
+      '內容請包含：\n' +
+      '1. 上月整體績效（資產增減、收益率變化）\n' +
+      '2. 上月股利收入\n' +
+      '3. 配置與目標的偏差\n' +
+      '4. 上月重大事件回顧\n' +
+      '5. 本月操作建議\n\n' +
+      '【近 35 天走勢】\n' + history + '\n\n' +
+      '【資產總覽】\n' + dashboard + '\n\n' +
+      '【' + yearStr + ' 年股利統計】\n' + dividend + '\n\n' +
+      '【上月財經新聞】\n' + news;
+
+    var contents = [
+      { role: 'user',  parts: [{ text: systemContext }] },
+      { role: 'model', parts: [{ text: Prompt.ACKNOWLEDGEMENT }] },
+      { role: 'user',  parts: [{ text: userPrompt }] }
+    ];
+
+    var response = AIServiceFactory.callAPI(contents, { model: 'SMART', caller: 'monthlyReport' });
+    var report   = Utils.extractText(response);
+    if (!report) { Logger.error('monthlyReport', '產生失敗'); return; }
+
+    var masters = Config.ADMIN_STRING.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
+    masters.forEach(function(userId) {
+      Line.pushMsg(userId, '【Iris 月報 ' + yearStr + '/' + monthStr + '】\n\n' + report);
+    });
+
+    Logger.info('monthlyReport', '月報發送完成', { recipients: masters.length });
+  } catch (ex) {
+    Logger.error('monthlyReport', '月報發送失敗', ex);
+  }
+}

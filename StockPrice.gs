@@ -7,6 +7,39 @@
 var StockPrice = (() => {
   var sp = {};
 
+  var _fetch = (list) => {
+    try {
+      var codes    = list.map(s => 'tse_' + s + '.tw').join('|');
+      var url      = 'https://mis.twse.com.tw/stock/api/getStockInfo.jsp' +
+                     '?ex_ch=' + encodeURIComponent(codes) + '&_=' + Date.now();
+      var response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+      if (response.getResponseCode() !== 200) return [];
+      var data = JSON.parse(response.getContentText());
+      return data.msgArray || [];
+    } catch (ex) {
+      Logger.error('StockPrice._fetch', '失敗', ex);
+      return [];
+    }
+  };
+
+  /**
+   * 供內部使用：回傳結構化股價陣列
+   * @returns {Array<{code, name, current, yesterday, changePct, isClosed}>}
+   */
+  sp.getRawPrices = (symbols) => {
+    var list  = typeof symbols === 'string'
+      ? symbols.split(/[,\s]+/).map(s => s.trim()).filter(s => s)
+      : symbols;
+    var items = _fetch(list);
+    return items.map(item => {
+      var isClosed  = !item.z || item.z === '-';
+      var current   = parseFloat(isClosed ? item.y : item.z) || 0;
+      var yesterday = parseFloat(item.y) || 0;
+      var changePct = yesterday ? (current - yesterday) / yesterday : 0;
+      return { code: item.c, name: item.n, current: current, yesterday: yesterday, changePct: changePct, isClosed: isClosed };
+    });
+  };
+
   /**
    * 查詢一或多檔股票的即時股價
    * @param {string} symbols - 股票代號，多檔用逗號或空白分隔，例如 "0056,2330"
@@ -20,25 +53,10 @@ var StockPrice = (() => {
 
       Logger.info('StockPrice.getPrice', '查詢股價', { symbols: list });
 
-      var codes = list.map(s => 'tse_' + s + '.tw').join('|');
-      var url   = 'https://mis.twse.com.tw/stock/api/getStockInfo.jsp' +
-                  '?ex_ch=' + encodeURIComponent(codes) +
-                  '&_=' + Date.now();
+      var items = _fetch(list);
+      if (items.length === 0) return '查無資料，請確認代號是否正確（僅支援上市股票）';
 
-      var response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-      var code     = response.getResponseCode();
-
-      if (code !== 200) {
-        Logger.error('StockPrice.getPrice', 'HTTP ' + code);
-        return '股價查詢失敗（HTTP ' + code + '）';
-      }
-
-      var data = JSON.parse(response.getContentText());
-      if (!data.msgArray || data.msgArray.length === 0) {
-        return '查無資料，請確認代號是否正確（僅支援上市股票）';
-      }
-
-      var lines = data.msgArray.map(item => {
+      var lines = items.map(item => {
         var isClosed  = !item.z || item.z === '-';
         var price     = isClosed ? item.y : item.z;
         var yesterday = parseFloat(item.y) || 0;

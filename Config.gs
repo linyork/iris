@@ -79,7 +79,8 @@ var Config = (() => {
     // ─── 對話管理 ─────────────────────────────────────────────
     CHAT_MAX_TURNS:      5,
     CHAT_CLEANUP_DAYS:   30,
-    TOOL_MAX_ITERATIONS: 3,
+    TOOL_MAX_ITERATIONS: 5,
+    ALERT_ETF_DROP:      0.03,  // 單檔 ETF 日跌幅超過此值觸發警報
 
     // ─── 系統提示詞 ───────────────────────────────────────────
     get SYSTEM_PROMPT() { return Prompt.SYSTEM_PROMPT; },
