@@ -56,6 +56,12 @@ var Utils = (() => {
     return str.slice(0, limit) + '\n\n（回覆過長已截斷，可詢問更具體的問題以取得完整資訊）';
   };
 
+  // 清除模型誤輸出的 <tool_call>...</tool_call> XML 殘留
+  utils.stripToolCallXml = (str) => {
+    if (typeof str !== 'string') return str;
+    return str.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim();
+  };
+
   // 強制在段落符號前插入換行，防止模型輸出密集連續文字
   utils.formatForLine = (str) => {
     if (typeof str !== 'string') return str;

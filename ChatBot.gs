@@ -159,7 +159,19 @@ var ChatBot = (() => {
 
       if (!finalResponse) return '抱歉，我有點混亂，請再試一次。';
 
-      finalResponse = Utils.formatForLine(finalResponse);
+      // 清除模型誤輸出的 <tool_call> XML（GLM-5.1 在最後一輪有時會用 XML 格式輸出工具呼叫）
+      var cleanedResponse = Utils.stripToolCallXml(finalResponse);
+      if (!cleanedResponse && finalResponse) {
+        // 整個回覆都是 XML，強制要求文字回覆
+        Logger.warning('ChatBot.reply', '偵測到純 XML 工具呼叫回應，強制重新取得文字', finalResponse.slice(0, 100));
+        contents.push({
+          role: 'user',
+          parts: [{ text: '請直接用繁體中文文字回答，不要輸出任何 XML 或工具呼叫格式。' }]
+        });
+        var retryResp = AIServiceFactory.callAPI(contents, { model: 'FAST', caller: 'ChatBot.xmlRetry' });
+        cleanedResponse = Utils.extractText(retryResp) || '抱歉，我有點混亂，請再試一次。';
+      }
+      finalResponse = Utils.formatForLine(cleanedResponse || finalResponse);
 
       // 儲存對話
       HistoryManager.saveMessage(userId, 'user', message);
