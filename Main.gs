@@ -63,6 +63,7 @@ function doPost(e) {
 function dailyCleanUp() {
   try {
     GoogleSheet.cleanExpiredShortTermMemories();
+    AlertLog.cleanOld();
 
     var ss = SpreadsheetApp.openById(Config.SHEET_ID);
 
@@ -169,6 +170,14 @@ function setupAllTriggers() {
       .everyDays(1)
       .create();
 
+    // 每日 19:00 — 主動顧問感知（setData 寫完快照之後跑，
+    // 留 1 小時 buffer 因為 GAS atHour 是 1 小時窗口非精準時間）
+    ScriptApp.newTrigger('advisorCheckEvening')
+      .timeBased()
+      .atHour(19)
+      .everyDays(1)
+      .create();
+
     console.log('✅ Trigger 設定完成：');
     console.log('   每日 04:00 → dailyCleanUp');
     console.log('   每日 09:00 → dailyReport');
@@ -177,6 +186,7 @@ function setupAllTriggers() {
     console.log('   每週六 09:00 → weeklyReport');
     console.log('   每月 1 日 10:00 → monthlyReport');
     console.log('   每日 18:00 → setData');
+    console.log('   每日 19:00 → advisorCheckEvening');
   } catch (ex) {
     Logger.error('setupAllTriggers', '設定 Trigger 失敗', ex);
     console.log('❌ 設定失敗：' + ex.message);
@@ -189,7 +199,7 @@ function setupAllTriggers() {
  * - 列印環境變數狀態
  */
 function setup() {
-  var requiredSheets = ['env', 'consolelog', 'chat', 'short_term_memory', 'knowledge'];
+  var requiredSheets = ['env', 'consolelog', 'chat', 'short_term_memory', 'knowledge', 'alert_log'];
   var ss = SpreadsheetApp.openById(Config.SHEET_ID);
 
   requiredSheets.forEach(name => {
