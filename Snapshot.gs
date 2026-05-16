@@ -14,7 +14,10 @@ var Snapshot = (() => {
 
   var _num = (v) => {
     if (v === null || v === undefined || v === '') return 0;
-    var n = parseFloat(String(v).replace(/[,%$]/g, ''));
+    var s = String(v).trim();
+    // GOOGLEFINANCE 錯誤值或 loading 狀態
+    if (s.startsWith('#') || /^Loading/i.test(s) || s === 'N/A') return 0;
+    var n = parseFloat(s.replace(/[,%$]/g, ''));
     return isNaN(n) ? 0 : n;
   };
 
@@ -71,47 +74,81 @@ var Snapshot = (() => {
 
   /**
    * 持倉明細：每檔當日漲跌、市值、佔比、累計股利
-   * 資料來源：所有股票 sheet（row3+ 為個別持股，row2 為 0000 合計）
+   * 資料源：
+   *   主：所有股票 sheet → 代號/名稱/股數/總成本/當前市價/總股利
+   *        marketValue = 股數 × 當前市價
+   *   備援：配置 sheet → 當前價值（用代號 join，當 GOOGLEFINANCE 出錯時補）
    */
   snap._holdings = (ss) => {
-    var sheet = ss.getSheetByName('所有股票');
-    if (!sheet) return [];
-    var lastRow = sheet.getLastRow();
-    var lastCol = sheet.getLastColumn();
+    var stockSheet = ss.getSheetByName('所有股票');
+    var allocSheet = ss.getSheetByName('配置');
+    if (!stockSheet) return [];
+    var lastRow = stockSheet.getLastRow();
+    var lastCol = stockSheet.getLastColumn();
     if (lastRow < 3) return [];
 
-    var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0]
+    // ── 「配置」sheet 的當前價值 fallback ──
+    var fallbackValue = {};
+    if (allocSheet) {
+      try {
+        var aLastRow = allocSheet.getLastRow();
+        var aLastCol = allocSheet.getLastColumn();
+        var aHeaders = allocSheet.getRange(1, 1, 1, aLastCol).getValues()[0]
+          .map(h => String(h || '').trim());
+        var aIdx = (n) => aHeaders.findIndex(h => h === n);
+        var iaCode    = aIdx('代號');
+        var iaCurrent = aIdx('當前價值');
+        if (iaCode >= 0 && iaCurrent >= 0 && aLastRow >= 2) {
+          var aData = allocSheet.getRange(2, 1, aLastRow - 1, aLastCol).getValues();
+          aData.forEach(r => {
+            var code = String(r[iaCode] || '').trim();
+            if (!code || code === '0000') return;
+            fallbackValue[code] = _num(r[iaCurrent]);
+          });
+        }
+      } catch (e) {
+        Logger.warning('Snapshot._holdings', '讀取配置 fallback 失敗', e.message);
+      }
+    }
+
+    // ── 從「所有股票」讀本表 ──
+    var headers = stockSheet.getRange(1, 1, 1, lastCol).getValues()[0]
       .map(h => String(h || '').trim());
-    var data = sheet.getRange(3, 1, lastRow - 2, lastCol).getValues();
-
+    var data = stockSheet.getRange(3, 1, lastRow - 2, lastCol).getValues();
     var idx = (name) => headers.findIndex(h => h === name);
-    var iCode      = idx('代號') >= 0 ? idx('代號') : 0;
-    var iName      = idx('名稱') >= 0 ? idx('名稱') : 1;
-    var iPrice     = idx('股價') >= 0 ? idx('股價') : 6;  // G 欄
-    var iMarketVal = idx('市值');
-    var iCost      = idx('成本');
-    var iDividend  = idx('總股利') >= 0 ? idx('總股利') : 10; // K 欄
-    var iPnL       = idx('損益');
-    var iPnLPct    = idx('報酬率');
+    var iCode     = idx('代號')   >= 0 ? idx('代號')   : 0;
+    var iName     = idx('名稱')   >= 0 ? idx('名稱')   : 1;
+    var iShares   = idx('股數')   >= 0 ? idx('股數')   : 4;  // E 欄
+    var iCost     = idx('總成本') >= 0 ? idx('總成本') : 5;  // F 欄
+    var iPrice    = idx('當前市價') >= 0 ? idx('當前市價') : 6; // G 欄
+    var iDividend = idx('總股利') >= 0 ? idx('總股利') : 10; // K 欄
 
-    // 先算總市值供計算佔比
-    var totalMarketValue = 0;
     var rawRows = data
       .filter(r => r[iCode] && String(r[iCode]).trim() !== '')
-      .map(r => ({
-        code: String(r[iCode]).trim(),
-        name: String(r[iName] || '').trim(),
-        price: _num(r[iPrice]),
-        marketValue: iMarketVal >= 0 ? _num(r[iMarketVal]) : 0,
-        costBasis: iCost >= 0 ? _num(r[iCost]) : 0,
-        totalDividend: iDividend >= 0 ? _num(r[iDividend]) : 0,
-        pnl: iPnL >= 0 ? _num(r[iPnL]) : null,
-        pnlPct: iPnLPct >= 0 ? _num(r[iPnLPct]) : null
-      }));
+      .map(r => {
+        var code   = String(r[iCode]).trim();
+        var shares = _num(r[iShares]);
+        var price  = _num(r[iPrice]);
+        var costBasis = _num(r[iCost]);
+        var marketValue = shares > 0 && price > 0 ? shares * price : 0;
+        // 若 GOOGLEFINANCE 故障，用配置 sheet 當 fallback
+        var priceMissing = !price && (fallbackValue[code] || 0) > 0;
+        if (!marketValue && fallbackValue[code]) marketValue = fallbackValue[code];
+        return {
+          code: code,
+          name: String(r[iName] || '').trim(),
+          price: price,
+          shares: shares,
+          marketValue: marketValue,
+          costBasis: costBasis,
+          totalDividend: _num(r[iDividend]),
+          priceMissing: priceMissing
+        };
+      });
 
-    rawRows.forEach(h => { totalMarketValue += h.marketValue; });
+    var totalMarketValue = rawRows.reduce((s, h) => s + h.marketValue, 0);
 
-    // 抓即時漲跌幅
+    // ── 抓即時漲跌幅 ──
     var codes = rawRows.map(h => h.code);
     var livePrices = {};
     try {
@@ -123,19 +160,25 @@ var Snapshot = (() => {
 
     return rawRows.map(h => {
       var live = livePrices[h.code];
-      return {
+      var pnl = h.marketValue && h.costBasis ? h.marketValue - h.costBasis : null;
+      var pnlPct = h.costBasis > 0 ? (h.marketValue - h.costBasis) / h.costBasis : null;
+      var displayPrice = (live && live.current) ? live.current : h.price;
+      var result = {
         code: h.code,
         name: h.name,
-        price: live ? _round(live.current, 2) : _round(h.price, 2),
+        shares: h.shares,
+        price: _round(displayPrice, 2),
         marketValue: _round(h.marketValue),
         costBasis: _round(h.costBasis),
         totalDividendReceived: _round(h.totalDividend),
-        pnl: h.pnl !== null ? _round(h.pnl) : null,
-        pnlPct: h.pnlPct !== null ? _round(h.pnlPct, 4) : null,
+        pnl: pnl !== null ? _round(pnl) : null,
+        pnlPct: pnlPct !== null ? _round(pnlPct, 4) : null,
         dayChangePct: live ? _round(live.changePct, 4) : null,
         ratioOfPortfolio: totalMarketValue > 0 ? _round(h.marketValue / totalMarketValue, 4) : 0,
         isClosed: live ? !!live.isClosed : null
       };
+      if (h.priceMissing) result.priceMissing = true;  // 提示 LLM 此檔當前市價是用配置 sheet 補的
+      return result;
     });
   };
 
