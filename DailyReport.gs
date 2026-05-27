@@ -11,6 +11,8 @@ function dailyReport() {
 
     var nowStr  = Utilities.formatDate(today, 'GMT+8', 'yyyy/MM/dd HH:mm');
     var dateStr = Utilities.formatDate(today, 'GMT+8', 'MM/dd');
+    var todayFull = Utilities.formatDate(today, 'GMT+8', 'yyyy-MM-dd');
+    var currentYear = Utilities.formatDate(today, 'GMT+8', 'yyyy');
 
     Logger.info('dailyReport', '開始產生早報', nowStr);
 
@@ -25,7 +27,13 @@ function dailyReport() {
 
     // 3. 組裝 prompt
     var systemContext = Config.SYSTEM_PROMPT +
-      '\n\n[System Info]\nCurrent Time: ' + nowStr + '\nUser: 主人 (Master)';
+      '\n\n[System Info]\nCurrent Time: ' + nowStr +
+      '\nToday: ' + todayFull + '（今天的日期，年份為 ' + currentYear + '）' +
+      '\nUser: 主人 (Master)' +
+      '\n\n[重要：日期與年份規則]\n' +
+      '- 報告內容必須以 Today（' + todayFull + '）為基準\n' +
+      '- 引用新聞或事件時，若新聞日期不屬於 ' + currentYear + ' 年或鄰近日期，視為過時資料，須誠實標註「資料時點較舊」或「未取得當日資訊」，不得當成今日資訊呈現\n' +
+      '- 禁止在報告中沿用其他年份的舊事件假裝為今日重點';
     if (knowledge && !knowledge.includes('沒有找到')) {
       systemContext += '\n\n[相關長期知識]:\n' + knowledge;
     }
@@ -34,7 +42,7 @@ function dailyReport() {
     }
 
     var userPrompt =
-      '請根據以下資料，產生今日（' + dateStr + '）的個人化財經早報。\n' +
+      '請根據以下資料，產生今日（' + currentYear + '/' + dateStr + '）的個人化財經早報。\n' +
       '格式須適合 LINE 純文字閱讀，不使用 Markdown，以換行和符號（▸ ◆ 【】）排版。\n' +
       '內容請包含：\n' +
       '1. 今日市場概況（台股、美股、相關指數）\n' +
@@ -78,8 +86,11 @@ function dailyReport() {
  */
 function weeklyReport() {
   try {
-    var nowStr  = Utilities.formatDate(new Date(), 'GMT+8', 'yyyy/MM/dd HH:mm');
-    var dateStr = Utilities.formatDate(new Date(), 'GMT+8', 'MM/dd');
+    var _now = new Date();
+    var nowStr  = Utilities.formatDate(_now, 'GMT+8', 'yyyy/MM/dd HH:mm');
+    var dateStr = Utilities.formatDate(_now, 'GMT+8', 'MM/dd');
+    var todayFull = Utilities.formatDate(_now, 'GMT+8', 'yyyy-MM-dd');
+    var currentYear = Utilities.formatDate(_now, 'GMT+8', 'yyyy');
     Logger.info('weeklyReport', '開始產生週報', nowStr);
 
     var history  = GoogleSheet.getHistory(7);
@@ -88,11 +99,17 @@ function weeklyReport() {
     var news     = WebSearch.search('台股 美股 本週財經重點');
     var knowledge = GoogleSheet.searchKnowledge('投資策略 配置');
 
-    var systemContext = Config.SYSTEM_PROMPT + '\n\n[System Info]\nCurrent Time: ' + nowStr + '\nUser: 主人 (Master)';
+    var systemContext = Config.SYSTEM_PROMPT +
+      '\n\n[System Info]\nCurrent Time: ' + nowStr +
+      '\nToday: ' + todayFull + '（年份為 ' + currentYear + '）' +
+      '\nUser: 主人 (Master)' +
+      '\n\n[重要：日期與年份規則]\n' +
+      '- 週報內容必須以 ' + currentYear + ' 年為基準\n' +
+      '- 引用新聞時若日期不屬於本年度或鄰近日期，須標註「資料時點較舊」，禁止當成本週重點呈現';
     if (knowledge && !knowledge.includes('沒有找到')) systemContext += '\n\n[相關長期知識]:\n' + knowledge;
 
     var userPrompt =
-      '請根據以下資料，產生本週（截至 ' + dateStr + '）的投資週報。\n' +
+      '請根據以下資料，產生本週（截至 ' + currentYear + '/' + dateStr + '）的投資週報。\n' +
       '格式適合 LINE 純文字，不使用 Markdown，用全形符號排版。\n' +
       '內容請包含：\n' +
       '1. 本週總資產變化與績效\n' +
@@ -144,7 +161,15 @@ function monthlyReport() {
     var news      = WebSearch.search('上個月 台股 總體經濟 回顧');
     var knowledge = GoogleSheet.searchKnowledge('投資策略 目標 配置');
 
-    var systemContext = Config.SYSTEM_PROMPT + '\n\n[System Info]\nCurrent Time: ' + nowStr + '\nUser: 主人 (Master)';
+    var todayFull = Utilities.formatDate(now, 'GMT+8', 'yyyy-MM-dd');
+    var systemContext = Config.SYSTEM_PROMPT +
+      '\n\n[System Info]\nCurrent Time: ' + nowStr +
+      '\nToday: ' + todayFull +
+      '\nReport Period: ' + yearStr + '-' + monthStr + '（上月）' +
+      '\nUser: 主人 (Master)' +
+      '\n\n[重要：日期與年份規則]\n' +
+      '- 月報主題為 ' + yearStr + '/' + monthStr + '，所有事件回顧須屬於該月\n' +
+      '- 引用新聞時若日期不屬於該月，須標註資料時點，不得張冠李戴';
     if (knowledge && !knowledge.includes('沒有找到')) systemContext += '\n\n[相關長期知識]:\n' + knowledge;
 
     var userPrompt =

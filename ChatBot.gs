@@ -19,7 +19,10 @@ var ChatBot = (() => {
       var history = HistoryManager.getUserHistory(userId, Config.CHAT_MAX_TURNS);
 
       // 組裝 contents
-      var nowStr = Utilities.formatDate(new Date(), 'GMT+8', 'yyyy/MM/dd HH:mm:ss');
+      var now = new Date();
+      var nowStr = Utilities.formatDate(now, 'GMT+8', 'yyyy/MM/dd HH:mm:ss');
+      var todayStr = Utilities.formatDate(now, 'GMT+8', 'yyyy-MM-dd');
+      var currentYear = Utilities.formatDate(now, 'GMT+8', 'yyyy');
 
       // 讀取短期記憶與知識（搜尋與當前訊息相關的知識）
       var stm               = GoogleSheet.getValidShortTermMemories();
@@ -33,7 +36,12 @@ var ChatBot = (() => {
 
       var systemContext = Config.SYSTEM_PROMPT +
         '\n\n[System Info]\nCurrent Time: ' + nowStr +
-        '\nUser: ' + (event.isMaster ? '主人 (Master)' : '訪客 (Guest)');
+        '\nToday: ' + todayStr + '（今天的日期，年份為 ' + currentYear + '）' +
+        '\nUser: ' + (event.isMaster ? '主人 (Master)' : '訪客 (Guest)') +
+        '\n\n[重要：日期與年份規則]\n' +
+        '- 凡是查詢「今日/最近/本週/近期」相關資訊（如 searchWeb），必須使用上方 Today 的實際年份 ' + currentYear + '\n' +
+        '- 禁止在查詢字串或回覆內容中自行假設、寫死、沿用其他年份\n' +
+        '- 工具回傳結果若日期與 Today 不符（例如撈到去年同日新聞），須誠實告知主人「未取得當日資訊」，不可當成今日資訊呈現';
 
       if (relevantKnowledge && !relevantKnowledge.includes('沒有找到') && !relevantKnowledge.includes('尚無資料')) {
         systemContext += '\n\n[相關長期知識]:\n' + relevantKnowledge;

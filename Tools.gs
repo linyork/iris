@@ -133,7 +133,7 @@ var Tools = (() => {
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: '搜尋關鍵字，建議用具體的財經或時事詞彙，例如「Fed 利率決策 2025」、「台幣匯率走勢」' }
+          query: { type: 'string', description: '搜尋關鍵字，用具體的財經或時事詞彙。重要：查詢涉及「今日/最近/本週」時，必須使用 [System Info] Current Time 的實際年份與日期，禁止自行假設或寫死年份。例如「Fed 利率決策」、「台幣匯率走勢 本週」。' }
         },
         required: ['query']
       }
