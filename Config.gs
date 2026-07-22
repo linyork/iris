@@ -72,13 +72,19 @@ var Config = (() => {
     // ─── NVIDIA ───────────────────────────────────────────────
     get NVIDIA_API_KEY() { return scriptProperties.getProperty(ENV_KEYS.NVIDIA_KEY); },
     NVIDIA_API_BASE:     'https://integrate.api.nvidia.com/v1',
-    NVIDIA_DEFAULT_MODEL: 'z-ai/glm-5.1',
+    NVIDIA_DEFAULT_MODEL: 'minimaxai/minimax-m2.7',
 
-    // 全檔次使用 GLM-5.1：原生中文、agentic 工作流、原生 Function Calling
+    // 全檔次使用 MiniMax-M2.7（前代 z-ai/glm-5.1 已於 2026-07-02 EOL，API 回 410）
+    // 規格：context 204,800 tokens、原生 Function Calling、官方建議 temperature 1.0 / top_p 0.95
+    //
+    // ⚠️ M2.7 是 reasoning 模型且無法關閉思考（NIM 未提供 GLM 那種 enable_thinking 開關），
+    //    思考內容與答案共用 max_tokens 預算。預算抓太緊會讓 token 全被思考吃光、
+    //    content 回空字串 → ChatBot 判定「無效回應」，所以下列數字比 GLM 時代加倍。
+    //    模型本身輸出上限遠高於此（131k），這裡的值是為了壓住 GAS 執行時間而非模型限制。
     NVIDIA_MODELS: {
-      LITE:  { model: 'z-ai/glm-5.1', maxOutputTokens: 3072, temperature: 0.5, enableThinking: false },
-      FAST:  { model: 'z-ai/glm-5.1', maxOutputTokens: 4096, temperature: 0.7, enableThinking: false },
-      SMART: { model: 'z-ai/glm-5.1', maxOutputTokens: 8192, temperature: 0.7, enableThinking: false }
+      LITE:  { model: 'minimaxai/minimax-m2.7', maxOutputTokens: 6144,  temperature: 1.0, topP: 0.95 },
+      FAST:  { model: 'minimaxai/minimax-m2.7', maxOutputTokens: 8192,  temperature: 1.0, topP: 0.95 },
+      SMART: { model: 'minimaxai/minimax-m2.7', maxOutputTokens: 12288, temperature: 1.0, topP: 0.95 }
     },
 
     // ─── 對話管理 ─────────────────────────────────────────────

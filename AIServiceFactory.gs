@@ -30,6 +30,9 @@ var AIServiceFactory = (() => {
                 if (provider === 'NVIDIA' && options.enableThinking === undefined) {
                     options.enableThinking = modelConfig.enableThinking;
                 }
+                if (provider === 'NVIDIA' && options.topP === undefined) {
+                    options.topP = modelConfig.topP;
+                }
             }
 
             var caller = options.caller || 'AIServiceFactory';

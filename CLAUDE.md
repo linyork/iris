@@ -42,7 +42,9 @@ The **pre-push git hook** (`.git/hooks/pre-push`) automatically runs `clasp push
 5. `GoogleSheet.gs` — All data access. Single spreadsheet instance cached per execution.
 
 ### AI Provider Switching
-Switch provider by setting `env!B3` in the Google Sheet to `GEMINI` or `NVIDIA`. Model tiers (`LITE`/`FAST`/`SMART`) are defined in `Config.gs` for both providers. Current NVIDIA model: `z-ai/glm-5.1` for all tiers.
+Switch provider by setting `env!B3` in the Google Sheet to `GEMINI` or `NVIDIA`. Model tiers (`LITE`/`FAST`/`SMART`) are defined in `Config.gs` for both providers. Current NVIDIA model: `minimaxai/minimax-m2.7` for all tiers (204,800-token context, native function calling, vendor-recommended `temperature 1.0` / `top_p 0.95`).
+
+M2.7 is a reasoning model with **no way to disable thinking** — unlike the GLM/DeepSeek branches in `NvidiaService.gs`, NIM exposes no `enable_thinking` switch for it. Thinking text arrives in `reasoning_content` (separated out by `AIAdapter.fromOpenAIResponse`) but still consumes the `max_tokens` budget, so tier budgets are set well above what the visible answer needs. Starving the budget makes `content` come back empty, which `ChatBot` reports as 「無效回應」.
 
 ### Memory System
 - **Short-term** (`short_term_memory` sheet): keyed entries with expiry timestamps, injected into every prompt, cleaned by daily trigger

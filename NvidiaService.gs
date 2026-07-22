@@ -7,6 +7,8 @@
  * 思考模式依模型廠商分流：
  *   z-ai/glm*        → chat_template_kwargs.{enable_thinking, clear_thinking}
  *   deepseek-ai/v4*  → chat_template_kwargs.{enable_thinking, thinking}
+ *   minimaxai/*      → 無開關，恆為 reasoning 模式（思考文字走 reasoning_content 欄位，
+ *                      由 AIAdapter.fromOpenAIResponse 分離，但仍佔用 max_tokens 預算）
  * ⚠️ GLM / DeepSeek 必須明確設定 enable_thinking，否則 NIM 端可能 hang
  */
 var NvidiaService = (() => {
@@ -32,6 +34,12 @@ var NvidiaService = (() => {
                 temperature: options.temperature !== undefined ? options.temperature : 0.7,
                 max_tokens:  options.maxOutputTokens || 6144
             };
+
+            // top_p — MiniMax-M2.7 官方建議搭配 temperature 1.0 使用 0.95
+            // （未指定就不送，維持各模型自身預設值）
+            if (options.topP !== undefined) {
+                payload.top_p = options.topP;
+            }
 
             // 思考模式控制
             if (modelName.indexOf('z-ai/glm') === 0) {
