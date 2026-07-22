@@ -108,51 +108,60 @@ var ChatBot = (() => {
         var finishReason = candidate.finishReason || 'UNKNOWN';
         var parts        = (candidate.content && candidate.content.parts) || [];
 
-        var textPart         = parts.find(p => p.text);
-        var functionCallPart = parts.find(p => p.functionCall);
+        var textPart          = parts.find(p => p.text);
+        var functionCallParts = parts.filter(p => p.functionCall);
 
         Logger.info('ChatBot.reply', 'Turn ' + turn + ' 回應', {
           finishReason:  finishReason,
-          hasToolCall:   !!functionCallPart,
-          toolName:      functionCallPart ? functionCallPart.functionCall.name : null,
+          toolCallCount: functionCallParts.length,
+          toolNames:     functionCallParts.map(p => p.functionCall.name),
           hasText:       !!textPart
         });
 
-        // 工具呼叫
-        if (functionCallPart && !isLastTurn) {
-          var fc   = functionCallPart.functionCall;
-          var name = fc.name;
-          var args = fc.args || {};
+        // 工具呼叫 —— 模型可能一次要求多個（M2.7 很常平行丟出好幾個 searchWeb）。
+        // 舊版只取第一個、其餘丟棄，模型下一輪得重問一次，等於白白多燒一輪 75 秒的思考。
+        // 這裡全部執行，回應順序必須與呼叫順序一致，AIAdapter 靠順序配對 tool_call_id。
+        if (functionCallParts.length > 0 && !isLastTurn) {
+          var responseParts = [];
 
-          var callKey = name + '|' + JSON.stringify(args);
-          var result;
-          if (calledTools[callKey] !== undefined) {
-            result = calledTools[callKey];
-            Logger.info('ChatBot.reply', '使用快取工具結果: ' + name);
-          } else {
-            Logger.info('ChatBot.reply', '呼叫工具', { name: name, args: args });
-            result = Tools.execute(name, args);
-            calledTools[callKey] = result;
-            Logger.info('ChatBot.reply', '工具回傳', {
-              name:   name,
-              length: String(result).length,
-              preview: String(result).slice(0, 100)
-            });
-          }
-          lastToolResult = result;
+          functionCallParts.forEach((p, i) => {
+            var fc   = p.functionCall;
+            var name = fc.name;
+            var args = fc.args || {};
 
-          contents.push({ role: 'model', parts: parts });
-          contents.push({
-            role: 'user',
-            parts: [{
+            var callKey = name + '|' + JSON.stringify(args);
+            var result;
+            if (calledTools[callKey] !== undefined) {
+              result = calledTools[callKey];
+              Logger.info('ChatBot.reply', '使用快取工具結果: ' + name);
+            } else {
+              Logger.info('ChatBot.reply', '呼叫工具', { name: name, args: args });
+              result = Tools.execute(name, args);
+              calledTools[callKey] = result;
+              Logger.info('ChatBot.reply', '工具回傳', {
+                name:   name,
+                length: String(result).length,
+                preview: String(result).slice(0, 100)
+              });
+            }
+            lastToolResult = result;
+
+            // 收斂提示只掛在最後一筆，避免同一輪內重複疊加同樣的句子
+            var isLastCall = (i === functionCallParts.length - 1);
+            responseParts.push({
               functionResponse: {
                 name: name,
                 response: {
-                  result: result + '\n\n（若資訊已足夠，請直接以繁體中文回覆，勿再呼叫工具。）'
+                  result: result + (isLastCall
+                    ? '\n\n（若資訊已足夠，請直接以繁體中文回覆，勿再呼叫工具。）'
+                    : '')
                 }
               }
-            }]
+            });
           });
+
+          contents.push({ role: 'model', parts: parts });
+          contents.push({ role: 'user', parts: responseParts });
           continue;
         }
 

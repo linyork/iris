@@ -16,60 +16,80 @@ var AIAdapter = (() => {
         try {
             if (!geminiContents || !Array.isArray(geminiContents)) return [];
 
-            return geminiContents.map((item, index) => {
+            // tool_call id 必須讓 assistant 的 tool_calls 與後續的 tool 訊息一一配對。
+            // 舊版用 'call_' + 工具名，模型平行呼叫同一個工具時（M2.7 很常一次丟三個
+            // searchWeb）三個 id 會完全相同，配對就壞了。改成「序號 + 名稱」，
+            // 兩邊都以「同一則訊息內的第幾個」為準，只要 ChatBot 回應時維持與呼叫
+            // 相同的順序就能對上。
+            var callId = (name, i) => 'call_' + i + '_' + name;
+
+            // 一則 Gemini content 可能展開成多則 OpenAI 訊息（多個 functionResponse
+            // 各自要一則 tool 訊息），所以不能用 map 一對一轉換。
+            var messages = [];
+
+            geminiContents.forEach((item, index) => {
                 // 第一筆永遠是 ChatBot 注入的 system context，轉為 system role 讓模型更嚴格遵守
                 if (index === 0 && item.role === 'user') {
                     var sysContent = item.parts ? item.parts.filter(p => p.text).map(p => p.text).join('\n') : '';
-                    return { role: 'system', content: sysContent };
+                    messages.push({ role: 'system', content: sysContent });
+                    return;
                 }
 
                 var role = item.role === 'model' ? 'assistant' : item.role;
-                var content = null;
-                var tool_calls;
-                var tool_call_id;
 
-                if (item.parts && Array.isArray(item.parts)) {
-                    // functionResponse → tool message
-                    var funcResPart = item.parts.find(p => p.functionResponse);
-                    if (funcResPart) {
-                        return {
-                            role:        'tool',
-                            content:     JSON.stringify(funcResPart.functionResponse.response),
-                            tool_call_id: 'call_' + funcResPart.functionResponse.name
-                        };
-                    }
-
-                    // functionCall → assistant with tool_calls
-                    var funcCallPart = item.parts.find(p => p.functionCall);
-                    if (funcCallPart) {
-                        var fc = funcCallPart.functionCall;
-                        tool_calls = [{
-                            id:       'call_' + fc.name,
-                            type:     'function',
-                            function: { name: fc.name, arguments: JSON.stringify(fc.args || {}) }
-                        }];
-                        var textParts = item.parts.filter(p => p.text).map(p => p.text).join('\n');
-                        return { role, content: textParts || null, tool_calls };
-                    }
-
-                    // 一般文字（含圖片 fallback）
-                    var hasImage = item.parts.some(p => p.inlineData);
-                    if (hasImage) {
-                        content = item.parts.map(p => {
-                            if (p.text) return { type: 'text', text: p.text };
-                            if (p.inlineData) return {
-                                type:      'image_url',
-                                image_url: { url: 'data:' + p.inlineData.mimeType + ';base64,' + p.inlineData.data }
-                            };
-                            return null;
-                        }).filter(p => p !== null);
-                    } else {
-                        content = item.parts.filter(p => p.text).map(p => p.text).join('\n');
-                    }
+                if (!item.parts || !Array.isArray(item.parts)) {
+                    messages.push({ role: role, content: null });
+                    return;
                 }
 
-                return { role, content };
+                // functionResponse → tool message（每筆回應各自一則）
+                var funcResParts = item.parts.filter(p => p.functionResponse);
+                if (funcResParts.length > 0) {
+                    funcResParts.forEach((p, i) => {
+                        messages.push({
+                            role:         'tool',
+                            content:      JSON.stringify(p.functionResponse.response),
+                            tool_call_id: callId(p.functionResponse.name, i)
+                        });
+                    });
+                    return;
+                }
+
+                // functionCall → assistant with tool_calls（平行呼叫全部保留）
+                var funcCallParts = item.parts.filter(p => p.functionCall);
+                if (funcCallParts.length > 0) {
+                    var tool_calls = funcCallParts.map((p, i) => ({
+                        id:       callId(p.functionCall.name, i),
+                        type:     'function',
+                        function: {
+                            name:      p.functionCall.name,
+                            arguments: JSON.stringify(p.functionCall.args || {})
+                        }
+                    }));
+                    var textParts = item.parts.filter(p => p.text).map(p => p.text).join('\n');
+                    messages.push({ role: role, content: textParts || null, tool_calls: tool_calls });
+                    return;
+                }
+
+                // 一般文字（含圖片 fallback）
+                var content;
+                var hasImage = item.parts.some(p => p.inlineData);
+                if (hasImage) {
+                    content = item.parts.map(p => {
+                        if (p.text) return { type: 'text', text: p.text };
+                        if (p.inlineData) return {
+                            type:      'image_url',
+                            image_url: { url: 'data:' + p.inlineData.mimeType + ';base64,' + p.inlineData.data }
+                        };
+                        return null;
+                    }).filter(p => p !== null);
+                } else {
+                    content = item.parts.filter(p => p.text).map(p => p.text).join('\n');
+                }
+                messages.push({ role: role, content: content });
             });
+
+            return messages;
         } catch (error) {
             Logger.error('AIAdapter.toOpenAIMessages', '格式轉換失敗', error);
             return [];
