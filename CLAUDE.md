@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Iris is a personal asset management LINE bot built on Google Apps Script (GAS). The architecture is:
 
-**LINE Messaging API → GAS Web App (doPost) → ChatBot (ReAct loop) → AIServiceFactory → Gemini or NVIDIA NIM API**
+**LINE / Telegram Bot API → GAS Web App (doPost) → ChatBot (ReAct loop) → AIServiceFactory → Gemini or NVIDIA NIM API**
+
+Outbound messages go the other way through `MessagingServiceFactory`, which dispatches to `Line.gs` or `Telegram.gs`.
 
 All persistence is in a single Google Sheet (`Config.SHEET_ID`).
 
@@ -33,7 +35,7 @@ The **pre-push git hook** (`.git/hooks/pre-push`) automatically runs `clasp push
 ## Architecture
 
 ### Request Flow
-1. `Main.gs` — `doPost()` receives LINE webhook, deduplicates events via `CacheService`, validates master user, calls `ChatBot.reply()`
+1. `Main.gs` — `doPost()` receives the LINE **or** Telegram webhook, normalizes it into a single LINE-shaped event object, deduplicates via `CacheService` (6h TTL), silently drops non-master events, calls `ChatBot.reply()`
 2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 3 turns). Injects short-term memory + relevant knowledge into system context before each call. Caches tool results within a single turn to prevent duplicate calls.
 3. `AIServiceFactory.gs` — Routes to `GeminiService` or `NvidiaService` based on `env!B3`. NVIDIA path goes through `AIAdapter` (Gemini ↔ OpenAI format conversion) so the rest of the codebase always speaks Gemini format.
 4. `Tools.gs` — Defines and executes 6 tools: `getHoldings`, `getDashboard`, `getHistory`, `rememberShortTerm`, `saveKnowledge`, `searchKnowledge`
@@ -69,8 +71,9 @@ All secrets are stored in GAS **Script Properties** (not in code):
 
 | Property Key | Purpose |
 |---|---|
-| `LINE_API_KEY` | LINE channel access token |
-| `LINE_CHANNEL_SECRET` | LINE webhook signature verification |
+| `LINE_API_KEY` | LINE channel access token (optional if using Telegram) |
+| `LINE_CHANNEL_SECRET` | LINE webhook signature verification (optional if using Telegram) |
+| `TELEGRAM_API_KEY` | Telegram bot token from @BotFather (optional if using LINE) |
 | `SHEET_ID` | Google Sheet ID |
 | `ADMIN_STRING` | Master user LINE userId |
 | `GEMINI_API_KEY` | Gemini API key (optional if using NVIDIA) |
@@ -80,4 +83,11 @@ All secrets are stored in GAS **Script Properties** (not in code):
 
 1. Run `setup()` in GAS to verify all sheets exist and properties are set
 2. Run `setupAllTriggers()` once to register the 04:00 / 18:00 triggers
-3. Set LINE webhook URL to the fixed deployment URL ending in `/exec`
+3. Point the platform at the fixed deployment URL ending in `/exec`:
+   - **Telegram** — run `setupTelegramWebhook()` in the GAS editor (registers the webhook via the Bot API)
+   - **LINE** — paste the `/exec` URL into the LINE Developers console
+
+`ADMIN_STRING` holds the allowlist of master userIds, comma-separated. Telegram IDs are stored with a
+`TELEGRAM:` prefix (e.g. `TELEGRAM:123456789`); LINE IDs are stored bare. That prefix is also how
+`MessagingServiceFactory.push()` decides which platform to send a proactive message on, so per-user
+history and scheduled pushes keep working with both platforms registered at once.

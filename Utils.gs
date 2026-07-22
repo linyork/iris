@@ -50,6 +50,16 @@ var Utils = (() => {
     return str.replace(TIMESTAMP_RE, '');
   };
 
+  // 剝除 Markdown 標記 — Telegram 未設 parse_mode 時 ** 會顯示成字面星號
+  utils.stripMarkdown = (str) => {
+    if (typeof str !== 'string') return str;
+    return str
+      .replace(/\*\*([^*]+)\*\*/g, '$1')   // **粗體**
+      .replace(/\*([^*\n]+)\*/g, '$1')     // *斜體*
+      .replace(/__([^_\n]+)__/g, '$1')     // __底線粗體__
+      .replace(/`([^`\n]+)`/g, '$1');      // `行內程式碼`
+  };
+
   utils.truncateForLine = (str, limit) => {
     limit = limit || 4900;
     if (typeof str !== 'string' || str.length <= limit) return str;

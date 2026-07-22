@@ -66,7 +66,7 @@ function marketAlert() {
 
     var message = lines.join('\n');
     var masters = Config.ADMIN_STRING.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
-    masters.forEach(function(userId) { Line.pushMsg(userId, message); });
+    masters.forEach(function(userId) { MessagingServiceFactory.push(userId, message); });
 
     Logger.info('marketAlert', '警報發送', { count: alerts.length, time: timeStr });
   } catch (ex) {

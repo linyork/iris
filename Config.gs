@@ -8,6 +8,7 @@ var Config = (() => {
   var ENV_KEYS = {
     LINE_TOKEN:   'LINE_API_KEY',
     LINE_SECRET:  'LINE_CHANNEL_SECRET',
+    TELEGRAM_TOKEN: 'TELEGRAM_API_KEY',
     SHEET_ID:     'SHEET_ID',
     ADMIN_STRING: 'ADMIN_STRING',
     GEMINI_KEY:   'GEMINI_API_KEY',
@@ -24,6 +25,10 @@ var Config = (() => {
     get LINE_CHANNEL_TOKEN()  { return scriptProperties.getProperty(ENV_KEYS.LINE_TOKEN); },
     get LINE_CHANNEL_SECRET() { return scriptProperties.getProperty(ENV_KEYS.LINE_SECRET); },
     LINE_API_BASE: 'https://api.line.me/v2/bot',
+
+    // ─── Telegram API ─────────────────────────────────────────
+    get TELEGRAM_API_KEY()  { return scriptProperties.getProperty(ENV_KEYS.TELEGRAM_TOKEN); },
+    get TELEGRAM_API_BASE() { return 'https://api.telegram.org/bot' + this.TELEGRAM_API_KEY; },
 
     // ─── Google Sheets ────────────────────────────────────────
     get SHEET_ID()     { return scriptProperties.getProperty(ENV_KEYS.SHEET_ID); },

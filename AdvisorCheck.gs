@@ -67,7 +67,7 @@ var AdvisorCheck = (() => {
 
       var masters = String(Config.ADMIN_STRING || '').split(',')
         .map(s => s.trim()).filter(s => s);
-      masters.forEach(userId => Line.pushMsg(userId, message));
+      masters.forEach(userId => MessagingServiceFactory.push(userId, message));
 
       // 8. 記錄到 alert_log
       var summary = ac._summarizeSnapshot(snapshot);

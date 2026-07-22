@@ -72,7 +72,7 @@ function dailyReport() {
     var header  = '【Iris 早報 ' + dateStr + '】\n\n';
     var masters = Config.ADMIN_STRING.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
     masters.forEach(function(userId) {
-      Line.pushMsg(userId, header + report);
+      MessagingServiceFactory.push(userId, header + report);
     });
 
     Logger.info('dailyReport', '早報發送完成', { recipients: masters.length });
@@ -134,7 +134,7 @@ function weeklyReport() {
 
     var masters = Config.ADMIN_STRING.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
     masters.forEach(function(userId) {
-      Line.pushMsg(userId, '【Iris 週報 ' + dateStr + '】\n\n' + report);
+      MessagingServiceFactory.push(userId, '【Iris 週報 ' + dateStr + '】\n\n' + report);
     });
 
     Logger.info('weeklyReport', '週報發送完成', { recipients: masters.length });
@@ -198,7 +198,7 @@ function monthlyReport() {
 
     var masters = Config.ADMIN_STRING.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
     masters.forEach(function(userId) {
-      Line.pushMsg(userId, '【Iris 月報 ' + yearStr + '/' + monthStr + '】\n\n' + report);
+      MessagingServiceFactory.push(userId, '【Iris 月報 ' + yearStr + '/' + monthStr + '】\n\n' + report);
     });
 
     Logger.info('monthlyReport', '月報發送完成', { recipients: masters.length });

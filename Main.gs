@@ -1,58 +1,92 @@
 /**
  * Main
- * @description 系統入口點 — 接收 LINE Webhook 並分發處理
+ * @description 系統入口點 — 接收 LINE / Telegram Webhook 並分發處理
  */
 
 /**
- * LINE Webhook 處理程序
+ * Webhook 處理程序（LINE / Telegram 共用入口）
  * @param {object} e - Google Apps Script doPost 事件
  */
 function doPost(e) {
   try {
-    if (!Line.isLine(e.postData.contents)) return;
+    // 判斷來源平台，統一組出中立事件陣列（形狀與 LINE event 一致，下游不用區分平台）
+    var raw    = e.postData.contents;
+    var events = null;
 
-    var jsonData = JSON.parse(e.postData.contents);
-    if (!jsonData.events) return;
+    if (Line.isLine(raw)) {
+      events = JSON.parse(raw).events || [];
+      events.forEach(ev => { ev.platform = 'LINE'; });
+    } else if (Telegram.isTelegram(raw)) {
+      events = [Telegram.normalizeEvent(JSON.parse(raw))];
+    }
+
+    if (!events) {
+      Logger.info('doPost', '無法辨識的來源，忽略');
+      return;
+    }
 
     var cache = CacheService.getScriptCache();
 
-    for (var i = 0; i < jsonData.events.length; i++) {
-      var event = jsonData.events[i];
+    for (var i = 0; i < events.length; i++) {
+      var event = events[i];
 
       // 防止重複事件
+      // TTL 拉到 6 小時（CacheService 上限）：單次 ReAct 迴圈可能跑數十秒到數分鐘，
+      // 平台若遲遲收不到 200 OK 而重送同一則 update，短 TTL 會讓它被當成新事件完整重跑。
       var eventId = event.webhookEventId;
       if (eventId) {
         if (cache.get(eventId)) {
           Logger.info('doPost', '忽略重複事件', eventId);
           continue;
         }
-        cache.put(eventId, '1', 60);
+        cache.put(eventId, '1', 21600);
       }
 
-      Line.init(event);
+      if (event.platform === 'TELEGRAM') {
+        event.isMaster = Utils.checkMaster(event.source.userId);
+      } else {
+        Line.init(event);  // 設定 isMaster / profile / sourceId
+        if (event.type !== 'message') continue;
+      }
 
-      if (event.type !== 'message' || event.message.type !== 'text') continue;
+      if (!event.message || event.message.type !== 'text') continue;
 
       Logger.info('doPost', '收到訊息', {
         userId: event.source.userId,
         msg:    event.message.text.slice(0, 80)
       });
 
-      // 非主人拒絕服務
-      if (!Line.event.isMaster) {
-        Line.replyMsg(event.replyToken, '抱歉，我是專屬助理，無法為您提供服務。');
-        Logger.info('doPost', '拒絕非主人用戶', event.source.userId);
+      // 非主人事件靜默忽略：Telegram bot 公開可搜尋，任何人都能 DM。
+      // 不回覆（避免反射放大）、不寫 chat history、不消耗 LLM 配額。
+      if (!event.isMaster) {
+        Logger.info('doPost', '忽略非主人事件', event.source.userId);
         continue;
       }
 
-      var reply = ChatBot.reply(Line.event);
+      // 開始處理就先送「正在輸入…」，讓使用者馬上看到反應
+      MessagingServiceFactory.indicateTyping(event);
+
+      var reply = ChatBot.reply(event);
       if (reply) {
-        Line.pushMsg(event.source.userId, reply);
+        MessagingServiceFactory.push(event.source.userId, reply);
       }
     }
   } catch (error) {
     Logger.error('doPost', 'Webhook 處理失敗', error);
   }
+}
+
+/**
+ * 註冊 Telegram Webhook（首次設定或更換部署時，於 GAS 編輯器手動執行一次）
+ *
+ * 固定使用既有的版本化部署 URL（與原 LINE webhook 同一個），不用 ScriptApp.getService()
+ * ——後者從編輯器執行時可能回傳 /dev 網址，那個需要登入驗證，Telegram 打不進來。
+ */
+function setupTelegramWebhook() {
+  var WEB_APP_URL = 'https://script.google.com/macros/s/' +
+    'AKfycbxN-6Yx2GEiLvyBIeZ9z0CyZPbUuBXMyoD6xtN3j_XOc38_S2OBrOonVPaxXM4NVRcI' + '/exec';
+  console.log('註冊 webhook → ' + WEB_APP_URL);
+  console.log(Telegram.setupWebhook(WEB_APP_URL));
 }
 
 /**
@@ -212,8 +246,9 @@ function setup() {
   });
 
   console.log('--- 環境變數 ---');
-  console.log('LINE_CHANNEL_TOKEN:  ' + (Config.LINE_CHANNEL_TOKEN  ? '已設定' : '❌ 未設定'));
-  console.log('LINE_CHANNEL_SECRET: ' + (Config.LINE_CHANNEL_SECRET ? '已設定' : '❌ 未設定'));
+  console.log('LINE_CHANNEL_TOKEN:  ' + (Config.LINE_CHANNEL_TOKEN  ? '已設定' : '（選用）'));
+  console.log('LINE_CHANNEL_SECRET: ' + (Config.LINE_CHANNEL_SECRET ? '已設定' : '（選用）'));
+  console.log('TELEGRAM_API_KEY:    ' + (Config.TELEGRAM_API_KEY    ? '已設定' : '（選用）'));
   console.log('SHEET_ID:            ' + (Config.SHEET_ID            ? '已設定' : '❌ 未設定'));
   console.log('ADMIN_STRING:        ' + (Config.ADMIN_STRING        ? '已設定' : '❌ 未設定'));
   console.log('GEMINI_API_KEY:      ' + (Config.GEMINI_API_KEY      ? '已設定' : '（選用）'));
