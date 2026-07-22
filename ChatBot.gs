@@ -66,13 +66,28 @@ var ChatBot = (() => {
       var lastToolResult = null;
       var calledTools = {};
       var startTime = new Date().getTime();
-      var MAX_EXEC_MS = 270000; // 4.5 分鐘
+      var elapsed   = () => new Date().getTime() - startTime;
+      var timedOut  = false;
+
+      // 時間預算：GAS 硬上限為 6 分鐘（360s），超過會被直接砍掉。
+      // 被砍掉的後果比中途放棄嚴重得多 —— doPost 來不及回 200，平台會重送 webhook，
+      // 但去重快取在處理前就寫入了，重送會被擋掉，使用者最後什麼都收不到（靜默失敗）。
+      // 因此兩道關卡都往前抓，寧可少跑一輪也要留時間把話講完：
+      var NEW_TURN_DEADLINE_MS  = 200000; // 200s 後不再開新一輪（單輪思考可能要 60~90s）
+      var TAIL_CALL_DEADLINE_MS = 280000; // 280s 後不再做補救型 API 呼叫，留 80s 收尾
 
       for (var turn = 0; turn < maxTurns; turn++) {
-        if (new Date().getTime() - startTime > MAX_EXEC_MS) {
-          Logger.warning('ChatBot.reply', 'GAS 執行接近時限，提前結束', 'Turn=' + turn);
+        if (elapsed() > NEW_TURN_DEADLINE_MS) {
+          Logger.warning('ChatBot.reply', 'GAS 執行接近時限，提前結束',
+            'Turn=' + turn + ' Elapsed=' + elapsed() + 'ms');
+          timedOut = true;
           break;
         }
+
+        // 續命「正在輸入…」：Telegram 的 typing 狀態只維持約 5 秒，而 M2.7 是
+        // reasoning 模型，單輪思考常遠超過這個長度。不每輪重送的話，使用者會看到
+        // 提示閃一下就消失、接著長時間全無動靜，觀感等同當機。
+        MessagingServiceFactory.indicateTyping(event);
 
         var isLastTurn = (turn === maxTurns - 1);
         Logger.info('ChatBot.reply', 'ReAct Turn ' + turn, {
@@ -152,32 +167,59 @@ var ChatBot = (() => {
 
       Logger.info('ChatBot.reply', 'ReAct 迴圈結束', {
         finalResponse: !!finalResponse,
-        totalTurns:    turn
+        totalTurns:    turn,
+        timedOut:      timedOut,
+        elapsedMs:     elapsed()
       });
 
       // 工具結果總結
       if (!finalResponse && lastToolResult) {
-        contents.push({
-          role: 'user',
-          parts: [{ text: '（工具迴圈結束）請根據上述工具結果，用繁體中文給出最終回覆，不要再呼叫工具。' }]
-        });
-        var summary = AIServiceFactory.callAPI(contents, { model: 'FAST', caller: 'ChatBot.forceSummary' });
-        finalResponse = Utils.extractText(summary) || '已完成查詢，但無法整理出完整回覆。';
+        if (elapsed() > TAIL_CALL_DEADLINE_MS) {
+          // 沒時間再叫一次模型了。資料其實已經拿到，與其硬跑總結而被 GAS 砍掉、
+          // 讓使用者什麼都收不到，不如直接把原始工具結果交出去。
+          Logger.warning('ChatBot.reply', '時間不足，略過總結呼叫，直接回傳工具結果',
+            'Elapsed=' + elapsed() + 'ms');
+          finalResponse = '（這次查詢花的時間比預期久，來不及整理，先把原始結果給你）\n\n' + lastToolResult;
+        } else {
+          // 迴圈是因為逾時才結束的，代表已經等很久了，而總結呼叫還要再等一輪思考。
+          // 先送一則實體訊息（不是只有 5 秒的 typing 狀態）出去：萬一收尾階段真的
+          // 被 GAS 砍掉，使用者至少知道發生什麼事，而不是對著空氣等一則永遠不會來的回覆。
+          if (timedOut) {
+            MessagingServiceFactory.reply(event, '（這次要查的東西有點多，還在整理，再稍等一下…）');
+          }
+          MessagingServiceFactory.indicateTyping(event);
+          contents.push({
+            role: 'user',
+            parts: [{ text: '（工具迴圈結束）請根據上述工具結果，用繁體中文給出最終回覆，不要再呼叫工具。' }]
+          });
+          var summary = AIServiceFactory.callAPI(contents, { model: 'FAST', caller: 'ChatBot.forceSummary' });
+          finalResponse = Utils.extractText(summary) || '已完成查詢，但無法整理出完整回覆。';
+        }
       }
 
-      if (!finalResponse) return '抱歉，我有點混亂，請再試一次。';
+      if (!finalResponse) {
+        return timedOut
+          ? '這次查詢花的時間超過我的處理上限，已經先停下來了。請再問一次，或把問題範圍縮小一點。'
+          : '抱歉，我有點混亂，請再試一次。';
+      }
 
       // 清除模型誤輸出的 <tool_call> XML（GLM-5.1 在最後一輪有時會用 XML 格式輸出工具呼叫）
       var cleanedResponse = Utils.stripToolCallXml(finalResponse);
       if (!cleanedResponse && finalResponse) {
         // 整個回覆都是 XML，強制要求文字回覆
-        Logger.warning('ChatBot.reply', '偵測到純 XML 工具呼叫回應，強制重新取得文字', finalResponse.slice(0, 100));
-        contents.push({
-          role: 'user',
-          parts: [{ text: '請直接用繁體中文文字回答，不要輸出任何 XML 或工具呼叫格式。' }]
-        });
-        var retryResp = AIServiceFactory.callAPI(contents, { model: 'FAST', caller: 'ChatBot.xmlRetry' });
-        cleanedResponse = Utils.extractText(retryResp) || '抱歉，我有點混亂，請再試一次。';
+        if (elapsed() > TAIL_CALL_DEADLINE_MS) {
+          Logger.warning('ChatBot.reply', '時間不足，略過 XML 重試', 'Elapsed=' + elapsed() + 'ms');
+          cleanedResponse = '抱歉，這次沒能整理出可讀的回覆，請再問一次。';
+        } else {
+          Logger.warning('ChatBot.reply', '偵測到純 XML 工具呼叫回應，強制重新取得文字', finalResponse.slice(0, 100));
+          MessagingServiceFactory.indicateTyping(event);
+          contents.push({
+            role: 'user',
+            parts: [{ text: '請直接用繁體中文文字回答，不要輸出任何 XML 或工具呼叫格式。' }]
+          });
+          var retryResp = AIServiceFactory.callAPI(contents, { model: 'FAST', caller: 'ChatBot.xmlRetry' });
+          cleanedResponse = Utils.extractText(retryResp) || '抱歉，我有點混亂，請再試一次。';
+        }
       }
       finalResponse = Utils.formatForLine(cleanedResponse || finalResponse);
 

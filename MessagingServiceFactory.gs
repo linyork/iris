@@ -44,10 +44,16 @@ var MessagingServiceFactory = (() => {
    * 送出「正在輸入…」狀態提示（開始處理、尚未產生回覆前呼叫）
    * @param {object} event - 中立事件物件（含 platform、sourceId）
    * @note LINE 無對等的簡易 typing API，直接略過（不影響流程）
+   * @note 純提示性質，ReAct 迴圈每輪都會呼叫。失敗絕不能影響主回覆流程，
+   *       故這裡完全吞掉例外（Telegram.sendTyping 內部另有自己的 try/catch）。
    */
   factory.indicateTyping = (event) => {
-    if (event.platform === 'TELEGRAM') {
-      Telegram.sendTyping(event.sourceId);
+    try {
+      if (event && event.platform === 'TELEGRAM') {
+        Telegram.sendTyping(event.sourceId);
+      }
+    } catch (ex) {
+      Logger.error('MessagingServiceFactory.indicateTyping', '狀態提示失敗（已忽略）', ex);
     }
   };
 
