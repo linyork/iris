@@ -42,9 +42,19 @@ The **pre-push git hook** (`.git/hooks/pre-push`) automatically runs `clasp push
 5. `GoogleSheet.gs` — All data access. Single spreadsheet instance cached per execution.
 
 ### AI Provider Switching
-Switch provider by setting `env!B3` in the Google Sheet to `GEMINI` or `NVIDIA`. Model tiers (`LITE`/`FAST`/`SMART`) are defined in `Config.gs` for both providers. Current NVIDIA model: `minimaxai/minimax-m2.7` for all tiers (204,800-token context, native function calling, vendor-recommended `temperature 1.0` / `top_p 0.95`).
+Switch provider by setting `env!B3` in the Google Sheet to `GEMINI` or `NVIDIA`. Model tiers (`LITE`/`FAST`/`SMART`) are defined in `Config.gs` for both providers. Current NVIDIA model: `deepseek-ai/deepseek-v4-flash` for all tiers (284B MoE, 1M context, native function calling, `temperature 1.0` / `top_p 0.95` per NVIDIA's reference).
 
-M2.7 is a reasoning model with **no way to disable thinking** — unlike the GLM/DeepSeek branches in `NvidiaService.gs`, NIM exposes no `enable_thinking` switch for it. Thinking text arrives in `reasoning_content` (separated out by `AIAdapter.fromOpenAIResponse`) but still consumes the `max_tokens` budget, so tier budgets are set well above what the visible answer needs. Starving the budget makes `content` come back empty, which `ChatBot` reports as 「無效回應」.
+**Thinking is controllable on this model, and the tiers use it as the fast/quality dial:**
+
+| Tier | Used by | `enableThinking` |
+|---|---|---|
+| `FAST` | `ChatBot` ReAct loop — user is waiting | `false` |
+| `SMART` | daily/weekly/monthly reports, `AdvisorCheck` — scheduled background | `true` |
+| `LITE` | (no caller yet) | `false` |
+
+Control goes out as `chat_template_kwargs: {thinking, reasoning_effort}` from the `deepseek-ai/deepseek-v4` branch in `NvidiaService.gs`. ⚠️ **That field must always be sent for V4 models — omitting it makes NIM hang rather than error.** Reasoning text comes back in `reasoning_content` (separated by `AIAdapter.fromOpenAIResponse`) and consumes the `max_tokens` budget, which is why `SMART` gets a much larger budget than `FAST`.
+
+**Resilience.** deepseek-v4-flash is popular on NIM and overloads often (503 `ResourceExhausted`, 504, and dropped connections). Two layers cover this: `NvidiaService.callAPI` retries 3× with 2s→4s backoff, counting **both** bad status codes and thrown connection exceptions as retryable; if it still returns null, `AIServiceFactory` falls back once to `Config.NVIDIA_FALLBACK_MODEL` (`mistralai/ministral-14b-instruct-2512`, non-thinking, native function calling). When changing the primary model, verify the fallback is still alive too.
 
 ### Memory System
 - **Short-term** (`short_term_memory` sheet): keyed entries with expiry timestamps, injected into every prompt, cleaned by daily trigger

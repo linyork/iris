@@ -5,11 +5,12 @@
  * 格式轉換由 AIAdapter 負責，此層純 I/O。
  *
  * 思考模式依模型廠商分流：
- *   z-ai/glm*        → chat_template_kwargs.{enable_thinking, clear_thinking}
- *   deepseek-ai/v4*  → chat_template_kwargs.{enable_thinking, thinking}
- *   minimaxai/*      → 無開關，恆為 reasoning 模式（思考文字走 reasoning_content 欄位，
- *                      由 AIAdapter.fromOpenAIResponse 分離，但仍佔用 max_tokens 預算）
- * ⚠️ GLM / DeepSeek 必須明確設定 enable_thinking，否則 NIM 端可能 hang
+ *   deepseek-ai/deepseek-v4* → chat_template_kwargs.{thinking(bool)[, reasoning_effort]}（現役預設）
+ *   z-ai/glm*                → chat_template_kwargs.{enable_thinking, clear_thinking}
+ *   minimaxai/*              → 無開關，恆為 reasoning 模式（該模型已退役，保留說明備查）
+ *
+ * ⚠️ DeepSeek V4 系列必須明確送出 chat_template_kwargs，否則 NIM 端會 hang（不是回錯，是不回）。
+ *    因此該分支無論開或關思考都一定送出這個欄位，不可因 thinking=false 就省略。
  */
 var NvidiaService = (() => {
     var service = {};
@@ -35,24 +36,24 @@ var NvidiaService = (() => {
                 max_tokens:  options.maxOutputTokens || 6144
             };
 
-            // top_p — MiniMax-M2.7 官方建議搭配 temperature 1.0 使用 0.95
+            // top_p — NVIDIA 官方範例對 deepseek-v4-flash 建議搭配 temperature 1.0 使用 0.95
             // （未指定就不送，維持各模型自身預設值）
             if (options.topP !== undefined) {
                 payload.top_p = options.topP;
             }
 
             // 思考模式控制
-            if (modelName.indexOf('z-ai/glm') === 0) {
+            if (modelName.indexOf('deepseek-ai/deepseek-v4') === 0) {
+                // DeepSeek V4 系列：thinking 為布林開關，開啟時附 reasoning_effort。
+                // 這個欄位一定要送 —— 缺了 NIM 會 hang 住不回應（見檔頭警告）。
+                var dsThinking = options.enableThinking === true;
+                payload.chat_template_kwargs = { thinking: dsThinking };
+                if (dsThinking) payload.chat_template_kwargs.reasoning_effort = 'high';
+            } else if (modelName.indexOf('z-ai/glm') === 0) {
                 var glmThinking = options.enableThinking === true;
                 payload.chat_template_kwargs = {
                     enable_thinking: glmThinking,
                     clear_thinking:  !glmThinking
-                };
-            } else if (modelName.indexOf('deepseek-ai/deepseek-v4') === 0) {
-                var dsThinking = options.enableThinking === true;
-                payload.chat_template_kwargs = {
-                    enable_thinking: dsThinking,
-                    thinking:        dsThinking
                 };
             }
 
@@ -75,37 +76,71 @@ var NvidiaService = (() => {
                 muteHttpExceptions: true
             };
 
-            var response, responseCode;
-            for (var attempt = 0; attempt <= 2; attempt++) {
-                response     = UrlFetchApp.fetch(url, fetchOptions);
-                responseCode = response.getResponseCode();
-                if (responseCode === 200) break;
-                if ((responseCode === 429 || responseCode >= 500) && attempt < 2) {
-                    var waitMs = 2000 * Math.pow(2, attempt);
-                    Logger.warning('NvidiaService.callAPI',
-                        'API 錯誤 ' + responseCode + '，第 ' + (attempt + 1) + ' 次重試（' + waitMs + 'ms）',
-                        'Model=' + modelName);
-                    Utilities.sleep(waitMs);
-                } else {
+            // 重試策略：首次 + 2 次退避重試（2s → 4s）。
+            // deepseek-v4-flash 在 NIM 上很熱門，實測會回 503 ResourceExhausted 與 504，
+            // 也會直接把連線斷掉 —— 後者讓 UrlFetchApp.fetch 直接丟例外而非回傳狀態碼。
+            // 舊版沒有逐次 try/catch，這類連線層失敗會一路衝到最外層 catch，
+            // 等於「最該重試的情況反而一次都不重試」。這裡把例外也納入可重試範圍。
+            var MAX_ATTEMPTS = 3;
+            var response = null;
+
+            for (var attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+                var responseCode = 0;
+                var failReason   = '';
+
+                try {
+                    response     = UrlFetchApp.fetch(url, fetchOptions);
+                    responseCode = response.getResponseCode();
+                    if (responseCode === 200) break;
+
+                    // 4xx（429 除外）屬請求本身的問題，重試無意義
+                    if (responseCode !== 429 && responseCode < 500) {
+                        Logger.error('NvidiaService.callAPI',
+                            'API 錯誤碼: ' + responseCode + '（不可重試）',
+                            'Model=' + modelName + ' | ' + response.getContentText());
+                        return null;
+                    }
+                    failReason = 'HTTP ' + responseCode;
+                } catch (fetchEx) {
+                    // 連線被斷／逾時／DNS 失敗 —— 過載時最常見的形態，值得重試
+                    response   = null;
+                    failReason = '連線例外: ' + fetchEx;
+                }
+
+                if (attempt === MAX_ATTEMPTS) {
                     Logger.error('NvidiaService.callAPI',
-                        'API 錯誤碼: ' + responseCode,
-                        'Model=' + modelName + ' | ' + response.getContentText());
+                        'API 呼叫最終失敗（已試 ' + MAX_ATTEMPTS + ' 次）',
+                        'Model=' + modelName + ' | ' + failReason);
                     return null;
                 }
+
+                var waitMs = 2000 * Math.pow(2, attempt - 1);
+                Logger.warning('NvidiaService.callAPI',
+                    failReason + '，第 ' + attempt + '/' + MAX_ATTEMPTS + ' 次後重試（等待 ' + waitMs + 'ms）',
+                    'Model=' + modelName);
+                Utilities.sleep(waitMs);
             }
 
             var parsedResponse = JSON.parse(response.getContentText('UTF-8'));
 
-            if (parsedResponse && parsedResponse.choices && parsedResponse.choices[0]) {
-                if (parsedResponse.choices[0].finish_reason === 'length') {
-                    Logger.warning('NvidiaService.callAPI', 'AI 回應因 token 上限被截斷', 'Model=' + modelName);
-                }
+            // 200 但沒有 choices —— NIM 過載時偶爾會回錯誤 body 卻帶 200。
+            // 回 null 讓 AIServiceFactory 的備援模型接手，比丟例外有用。
+            if (!parsedResponse || !parsedResponse.choices || !parsedResponse.choices[0]) {
+                Logger.error('NvidiaService.callAPI', '回應缺少 choices',
+                    'Model=' + modelName + ' | ' + response.getContentText().slice(0, 300));
+                return null;
+            }
+
+            var choice = parsedResponse.choices[0];
+            if (choice.finish_reason === 'length') {
+                Logger.warning('NvidiaService.callAPI', 'AI 回應因 token 上限被截斷', 'Model=' + modelName);
             }
 
             Logger.info('NvidiaService.callAPI', '使用模型: ' + modelName, {
-              finish_reason: parsedResponse.choices[0].finish_reason,
+              finish_reason: choice.finish_reason,
               usage:         parsedResponse.usage || null,
-              hasToolCalls:  !!(parsedResponse.choices[0].message && parsedResponse.choices[0].message.tool_calls)
+              hasToolCalls:  !!(choice.message && choice.message.tool_calls),
+              thinking:      options.enableThinking === true
             });
             return parsedResponse;
         } catch (error) {

@@ -62,6 +62,25 @@ var AIServiceFactory = (() => {
                 }
 
                 var openaiResponse = NvidiaService.callAPI(openaiMessages, openaiOptions);
+
+                // N-1 可用性保底：NvidiaService 已自帶 429/5xx/連線例外的退避重試，
+                // 走到 null 多半代表主模型持續過載或已下架（deepseek-v4-flash 在 NIM 上很熱門）。
+                // 此時改用備援模型重試一次，上游只吃 Gemini shape，完全無感。
+                // openaiOptions 是 options 的複本，改 model 不影響呼叫端；
+                // 備援模型不支援思考，NvidiaService 的 deepseek 分支不會觸發，enableThinking 自然失效。
+                if (!openaiResponse && Config.AI_FALLBACK_ENABLED &&
+                    Config.NVIDIA_FALLBACK_MODEL &&
+                    openaiOptions.model !== Config.NVIDIA_FALLBACK_MODEL) {
+                    Logger.warning('AIServiceFactory.callAPI', '主模型失敗，改用備援模型重試',
+                        'From=' + openaiOptions.model + ' | To=' + Config.NVIDIA_FALLBACK_MODEL);
+                    openaiOptions.model = Config.NVIDIA_FALLBACK_MODEL;
+                    openaiResponse = NvidiaService.callAPI(openaiMessages, openaiOptions);
+                    if (openaiResponse) {
+                        Logger.info('AIServiceFactory.callAPI', '備援模型接手成功',
+                            'Model=' + Config.NVIDIA_FALLBACK_MODEL);
+                    }
+                }
+
                 if (!openaiResponse) return null;
 
                 response = AIAdapter.fromOpenAIResponse(openaiResponse);

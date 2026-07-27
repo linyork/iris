@@ -72,27 +72,38 @@ var Config = (() => {
     // ─── NVIDIA ───────────────────────────────────────────────
     get NVIDIA_API_KEY() { return scriptProperties.getProperty(ENV_KEYS.NVIDIA_KEY); },
     NVIDIA_API_BASE:     'https://integrate.api.nvidia.com/v1',
-    NVIDIA_DEFAULT_MODEL: 'minimaxai/minimax-m2.7',
+    NVIDIA_DEFAULT_MODEL: 'deepseek-ai/deepseek-v4-flash',
 
-    // 全檔次使用 MiniMax-M2.7（前代 z-ai/glm-5.1 已於 2026-07-02 EOL，API 回 410）
-    // 規格：context 204,800 tokens、原生 Function Calling、官方建議 temperature 1.0 / top_p 0.95
+    // 可用性保底（N-1）：主模型呼叫失敗（下架 404/410、過載 503/504、重試耗盡回 null）時，
+    // AIServiceFactory 會自動改用這個備援模型重試一次。deepseek-v4-flash 在 NIM 上很熱門、
+    // 過載機率高，這道保底就是為它準備的。ministral-14b 為非思考的 dense 模型、原生
+    // Function Calling、含繁中，christina 同樣用它當備援。換主模型時記得確認備援還活著。
+    AI_FALLBACK_ENABLED:   true,
+    NVIDIA_FALLBACK_MODEL: 'mistralai/ministral-14b-instruct-2512',
+
+    // 全檔次使用 DeepSeek-V4-Flash（前代 minimaxai/minimax-m2.7 將於 NIM 下架）
+    // 規格：284B MoE（13B active）、1M context、原生 Function Calling
     //
-    // ⚠️ M2.7 是 reasoning 模型且無法關閉思考（NIM 未提供 GLM 那種 enable_thinking 開關），
-    //    思考內容與答案共用 max_tokens 預算。預算抓太緊會讓 token 全被思考吃光、
-    //    content 回空字串 → ChatBot 判定「無效回應」，所以下列數字比 GLM 時代加倍。
-    //    模型本身輸出上限遠高於此（131k），這裡的值是為了壓住 GAS 執行時間而非模型限制。
+    // 選它的關鍵：思考「可開可關」，改用 enableThinking 依「使用者是否在等」分流 ——
+    //   FAST  → ChatBot ReAct 迴圈，使用者盯著畫面等 → 關思考求快
+    //           （M2.7 無法關思考，實測單輪要 74~77 秒；關掉後這段延遲才有救）
+    //   SMART → 早報/週報/月報、顧問檢查，全是排程背景任務，沒人在等 → 開思考求質
+    //   LITE  → 目前無呼叫端，比照 FAST 設定
+    // 思考開啟時 reasoning 會佔用 max_tokens 預算，故 SMART 預算給得比 FAST 寬。
     NVIDIA_MODELS: {
-      LITE:  { model: 'minimaxai/minimax-m2.7', maxOutputTokens: 6144,  temperature: 1.0, topP: 0.95 },
-      FAST:  { model: 'minimaxai/minimax-m2.7', maxOutputTokens: 8192,  temperature: 1.0, topP: 0.95 },
-      SMART: { model: 'minimaxai/minimax-m2.7', maxOutputTokens: 12288, temperature: 1.0, topP: 0.95 }
+      LITE:  { model: 'deepseek-ai/deepseek-v4-flash', maxOutputTokens: 3072,  temperature: 1.0, topP: 0.95, enableThinking: false },
+      FAST:  { model: 'deepseek-ai/deepseek-v4-flash', maxOutputTokens: 4096,  temperature: 1.0, topP: 0.95, enableThinking: false },
+      SMART: { model: 'deepseek-ai/deepseek-v4-flash', maxOutputTokens: 12288, temperature: 1.0, topP: 0.95, enableThinking: true  }
     },
 
     // ─── 對話管理 ─────────────────────────────────────────────
     CHAT_MAX_TURNS:      5,
     CHAT_CLEANUP_DAYS:   30,
-    // ReAct 迴圈上限。M2.7 是 reasoning 模型，單輪思考常要 60~90 秒，5 輪的最壞
-    // 情況會逼近 GAS 的 6 分鐘硬上限（GLM 時代不思考所以撐得住）。3 輪足夠涵蓋
-    // 「呼叫工具 → 讀結果 → 回答」這個主要路徑。
+    // ReAct 迴圈上限。當初從 5 降到 3，是因為 M2.7 無法關思考、單輪要 60~90 秒，
+    // 5 輪最壞情況會逼近 GAS 的 6 分鐘硬上限。改用關思考的 deepseek-v4-flash 後
+    // 單輪應大幅縮短，但過載重試（3 次退避）＋備援接手也會吃時間，故先維持 3 輪；
+    // 3 輪足夠涵蓋「呼叫工具 → 讀結果 → 回答」這個主要路徑。
+    // 想調回 4~5 輪的話，先看 consolelog 裡 ReAct 迴圈結束的 elapsedMs 實際分佈。
     TOOL_MAX_ITERATIONS: 3,
     ALERT_ETF_DROP:      0.03,  // 單檔 ETF 日跌幅超過此值觸發警報
 

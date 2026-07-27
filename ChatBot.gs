@@ -84,9 +84,10 @@ var ChatBot = (() => {
           break;
         }
 
-        // 續命「正在輸入…」：Telegram 的 typing 狀態只維持約 5 秒，而 M2.7 是
-        // reasoning 模型，單輪思考常遠超過這個長度。不每輪重送的話，使用者會看到
-        // 提示閃一下就消失、接著長時間全無動靜，觀感等同當機。
+        // 續命「正在輸入…」：Telegram 的 typing 狀態只維持約 5 秒，而單輪 LLM 呼叫
+        // 遠比這久（M2.7 時代實測 74~77 秒；改用關思考的 deepseek-v4-flash 後大幅縮短，
+        // 但過載重試與備援接手仍可能拉長）。不每輪重送的話，使用者會看到提示閃一下
+        // 就消失、接著長時間全無動靜，觀感等同當機。
         MessagingServiceFactory.indicateTyping(event);
 
         var isLastTurn = (turn === maxTurns - 1);
