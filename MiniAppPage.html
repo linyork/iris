@@ -107,12 +107,13 @@
     .state { text-align: center; color: var(--hint); padding: 60px 16px; font-size: 14px; }
     .state.err { color: var(--up); }
 
-    /* 確認條：固定在底部，不依賴 Telegram 的 showConfirm */
+    /* 確認條：不依賴 Telegram 的 showConfirm。
+       ⚠️ 不能用 position: fixed —— fixed 是相對於**整個 webview**，而 webview 比面板
+       看得到的區域高，bottom:0 會定位到螢幕外，症狀是「點了完全沒反應」。
+       改成一般流內元素，由 ask() 插到捲動容器最上方再捲到頂，那裡必定可見。 */
     .confirm {
-      position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
-      background: var(--card); border-top: 1px solid var(--line);
-      padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
-      box-shadow: 0 -8px 24px rgba(0,0,0,.3);
+      background: var(--card); border: 1px solid var(--accent);
+      border-radius: 14px; padding: 16px; margin-bottom: 12px;
     }
     .confirm .q { font-size: 14px; margin-bottom: 14px; }
     .confirm .q b { display: block; font-size: 11px; color: var(--hint);
@@ -266,8 +267,14 @@ function ask(question) {
   // 而我們被包在 GAS 的 iframe 裡，那條路不一定通——不通時 callback 永遠不會回來，
   // 使用者會覺得點了沒反應。頁面內自己畫最可靠。
   var box = document.getElementById('confirm');
+  var scroller = document.getElementById('scroll');
   document.getElementById('confirmText').textContent = question;
+
+  // 插到捲動容器最上方再捲到頂。面板可見的是 webview 的**上緣**那一段，
+  // 所以容器頂端必定看得見 —— 這是唯一能確定落在可見區的位置。
+  scroller.insertBefore(box, scroller.firstChild);
   box.hidden = false;
+  scroller.scrollTop = 0;
 
   document.getElementById('confirmOk').onclick = function () {
     box.hidden = true;
@@ -285,6 +292,7 @@ function ask(question) {
     s.innerHTML = '已送出，Iris 正在回覆…<br><br>' +
                   '<span style="font-size:13px">回到對話即可看到答案，可關閉此面板。</span>';
     document.getElementById('app').hidden = true;
+    scroller.scrollTop = 0;   // 同理，訊息也必須落在可見區
     // tg.close() 在 iframe 內不一定有效，所以上面那句話一定要先講清楚。
     setTimeout(function () { try { if (tg) tg.close(); } catch (e) {} }, 1500);
   };
