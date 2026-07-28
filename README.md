@@ -35,6 +35,7 @@ Iris 是一個建構在 **Google Apps Script (GAS)** 上的私人資產管理助
 - [AI 工具集](#ai-工具集)
 - [斜線指令](#斜線指令)
 - [網頁儀表板](#網頁儀表板)
+- [Telegram Mini App](#telegram-mini-app)
 - [排程任務](#排程任務)
 - [記憶與決策系統](#記憶與決策系統)
 - [環境設定](#環境設定)
@@ -137,6 +138,8 @@ Telegram Bot API ───┤        │
 | `Snapshot.gs` | 結構化資料層：總資產、持倉、現金、配置、股利、黃金，供顧問層與儀表板共用 |
 | `Dashboard.gs` | 網頁儀表板的 payload 組裝、快取與存取控制 |
 | `DashboardPage.html` | 儀表板前端單頁 |
+| `MiniApp.gs` | Telegram Mini App 的 `initData` 驗簽與後端進入點 |
+| `MiniAppPage.html` | Mini App 前端（手機優先，可點持倉問 Iris） |
 | `AdvisorCheck.gs` | 主動感知層：呼叫 LLM 判斷是否 push 通知 |
 | `AlertLog.gs` | 通知史記錄與去重 |
 | `DailyReport.gs` | `buildDailyReport()` 產生器，加上每日 09:00 早報、週六週報、每月 1 日月報 |
@@ -203,7 +206,7 @@ Telegram 的指令選單只是 UI 提示——點下去送出的仍是普通文�
 
 | 指令 | 行為 |
 |---|---|
-| `/dashboard` | 回傳 `DASHBOARD_URL`（Script Property，見下方說明） |
+| `/dashboard` | Telegram 上送出一則帶 Mini App 按鈕的訊息（點按鈕就地開啟面板）；其他平台回傳 `DASHBOARD_URL` |
 | `/report` | 立即產生今日早報，只回給發問者（排程版本會跳過週末並推給所有主人） |
 
 指令清單與分派共用同一份定義，並由 `Telegram.setupCommands()` 註冊到選單，
@@ -248,6 +251,51 @@ webhook 部署是 `ANYONE_ANONYMOUS`，所以 `doGet` 是公開可達的，必�
 `/exec` 是匿名的 webhook 部署，對 GET 一律回 `Not Found`。
 該網址存在 Script Property `DASHBOARD_URL`（`/dev` 的 deployment id 與 `/exec` 完全不同，
 無法從程式推導）。
+
+---
+
+## Telegram Mini App
+
+第三個介面：把儀表板嵌在 Telegram 的內嵌 webview 裡，由 `/dashboard` 送出的
+inline `web_app` 按鈕開啟，面板從底部滑出、不必離開 App、**不需要 Google 登入**。
+
+| 檔案 | 職責 |
+|---|---|
+| `MiniApp.gs` | `initData` 驗簽、`miniAppData()` / `miniAppAsk()` 進入點 |
+| `MiniAppPage.html` | 手機優先的面板前端 |
+
+### 為什麼要另一套認證
+
+Mini App 掛在 **`/exec`（匿名）** 部署上，因為 Google 的 OAuth 在 Telegram 的內嵌 webview 裡
+走不通，`/dev` 那道登入閘門在這裡沒有用。改用 Telegram 自己的機制：
+
+```
+data_check_string = 除 hash 外所有欄位，依 key 排序，"k=v" 以 \n 串接
+secret_key        = HMAC_SHA256(訊息 = bot_token, 金鑰 = "WebAppData")
+expected_hash     = hex(HMAC_SHA256(訊息 = data_check_string, 金鑰 = secret_key))
+```
+
+⚠️ **`doGet(?view=tg)` 回的頁面刻意不含任何資料**，它是公開的。
+資料要等前端把 `initData` 送回 `miniAppData()` / `miniAppAsk()`、通過
+`MiniApp.verifyInitData()` 才發。該函式除了驗簽，還會拒絕 `auth_date` 超過 24 小時的
+請求（防重放），並且**仍然**把 user id 丟進 `Utils.checkMaster` ——
+驗簽只證明「是誰開的」，不代表這個人有權限。
+
+### 面板內容與互動
+
+刻意**不是** `DashboardPage.html` 的複製品：手機面板該精簡，只放總資產、走勢、
+可點的持倉、現金、預設問題。完整版留在 `/dev`。
+
+配色走 Telegram 注入的 `--tg-theme-*` 變數，面板會跟隨使用者當前主題；
+漲跌色不跟主題走，紅漲綠跌是語意不是裝飾。
+
+點某一檔持倉會呼叫 `miniAppAsk()`，它組一個與 `doPost` 相同形狀的合成事件丟進
+`ChatBot.reply()`，因此工具、記憶、對話歷史全部沿用同一條路徑。答案 push 進對話而不是
+顯示在面板裡——面板是入口，對話才是 Iris 的主場。前端送出後不等回呼直接關閉面板，
+因為 ReAct 迴圈遠比任何人願意盯著面板的時間長。
+
+> `Telegram.WebApp.sendData()` 在這裡**不能用**——它只對「reply keyboard 按鈕」開啟的
+> Mini App 有效，inline 按鈕與選單按鈕都不行。所以走 `google.script.run`。
 
 ---
 

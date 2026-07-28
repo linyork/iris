@@ -51,6 +51,15 @@ Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），
 - [ ] **檔名不得與 `.gs` 撞名**：GAS 的檔名不含副檔名，`Dashboard.html` 會與 `Dashboard.gs` 衝突而 push 失敗
 - [ ] **HTML 內的 `<meta>` 會被 GAS 忽略**，viewport 只有 `addMetaTag` 那份生效
 
+### 如果 `MiniApp.gs` / `MiniAppPage.html` 有改動
+- [ ] **`doGet(?view=tg)` 回的頁面必須不含任何資料**——它掛在匿名 `/exec` 上，是公開的。
+      資料只能由 `miniAppData` / `miniAppAsk` 在 `verifyInitData` 通過後才發
+- [ ] **驗簽通過 ≠ 有權限**：`verifyInitData` 內仍要跑 `Utils.checkMaster`
+- [ ] **重放保護**：`auth_date` 逾時檢查不能拿掉，`initData` 本身永不過期
+- [ ] `Telegram.WebApp.sendData()` **不能用**——它只對 reply keyboard 按鈕開啟的 Mini App 有效，
+      inline 按鈕與選單按鈕都不行。要回傳資料一律走 `google.script.run`
+- [ ] 前端配色用 `--tg-theme-*`，但漲跌色維持紅漲綠跌（語意，不隨主題）
+
 ### 如果 `appsscript.json` 有變動
 - [ ] **新增 oauthScopes 會讓既有授權失效**，排程 trigger 會開始噴 "Authorization required"。
       push 後必須進 GAS 編輯器手動執行任一函式重新授權

@@ -71,7 +71,7 @@ answer is fixed skip the whole ReAct loop and one LLM call.
 
 | Command | Behaviour |
 |---|---|
-| `/dashboard` | Returns `Config.DASHBOARD_URL` (Script Property — the dashboard is on the HEAD deployment's `/dev`, whose deployment id differs from the webhook's `/exec`, so it cannot be derived) |
+| `/dashboard` | On Telegram, sends a message with an inline `web_app` button that opens the Mini App; elsewhere returns `Config.DASHBOARD_URL` (Script Property — the browser dashboard is on the HEAD deployment's `/dev`, whose deployment id differs from the webhook's `/exec`, so it cannot be derived). The handler sends its own message and returns `''` — "handled, nothing left to push" — which is distinct from `null`. |
 | `/report` | Runs `buildDailyReport()` — the same generator the 09:00 trigger uses, minus the weekend guard, replying only to the caller |
 
 The command list is shared between dispatch and `Telegram.setupCommands()` (`setMyCommands`) so the
@@ -117,6 +117,40 @@ The `/exec` URL is the anonymous webhook deployment and deliberately returns `No
 - `addMetaTag()` accepts only `viewport`, `apple-mobile-web-app-capable`, `mobile-web-app-capable`,
   and `google-site-verification`. Anything else (e.g. `theme-color`) throws. Meta tags written inside
   the HTML file are ignored entirely, so `addMetaTag` is the only route.
+
+### Telegram Mini App
+
+A third face: the dashboard rendered inside Telegram's webview, opened by an inline `web_app` button
+from `/dashboard`. Served by `doGet(?view=tg)` → `MiniAppPage.html`, backed by `MiniApp.gs`.
+
+It exists on the **`/exec` (anonymous) deployment**, because Google's OAuth does not work inside
+Telegram's embedded webview — so the `/dev` login gate is unusable here. Authentication is Telegram's
+own `initData` instead:
+
+```
+data_check_string = all fields except hash, sorted by key, "k=v" joined by \n
+secret_key        = HMAC_SHA256(message = bot_token, key = "WebAppData")
+expected_hash     = hex(HMAC_SHA256(message = data_check_string, key = secret_key))
+```
+
+⚠️ **The page served by `doGet(?view=tg)` deliberately contains no data.** It is public. Data is only
+released by `miniAppData()` / `miniAppAsk()` after `MiniApp.verifyInitData()` passes — which checks
+the signature, rejects `auth_date` older than 24h (replay), and then still runs the user id through
+`Utils.checkMaster`. A valid signature proves *who* opened it, not that they are allowed in.
+
+`MiniAppPage.html` is intentionally **not** a copy of `DashboardPage.html` — it is phone-first and
+narrower (total, trend, tappable holdings, cash, preset questions). Colours come from Telegram's
+`--tg-theme-*` variables so the panel matches the user's theme; red-up/green-down stays fixed because
+it is semantics, not decoration.
+
+Tapping a holding calls `miniAppAsk()`, which builds a `doPost`-shaped synthetic event and runs it
+through `ChatBot.reply()` — so tools, memory and chat history all follow the normal path. The answer
+is pushed to the chat, not shown in the panel; the front-end closes the panel without awaiting the
+callback because the ReAct loop takes far longer than anyone will hold a sheet open.
+
+> `Telegram.WebApp.sendData()` is **not** usable here — it only works for Mini Apps opened from a
+> reply-keyboard button, not from inline buttons or the menu button. Hence the `google.script.run`
+> round trip.
 
 ### Memory System
 - **Short-term** (`short_term_memory` sheet): keyed entries with expiry timestamps, injected into every prompt, cleaned by daily trigger

@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    /* 配色一律走 Telegram 注入的 --tg-theme-*，讓面板跟使用者當前主題一致；
+       後面的 fallback 只在非 Telegram 環境（例如直接用瀏覽器開）時生效。
+       漲跌色不跟主題走 —— 台股紅漲綠跌是語意，不是裝飾。 */
+    :root {
+      --bg:      var(--tg-theme-bg-color, #17212b);
+      --card:    var(--tg-theme-secondary-bg-color, #232e3c);
+      --text:    var(--tg-theme-text-color, #f5f5f5);
+      --hint:    var(--tg-theme-hint-color, #7d8b99);
+      --accent:  var(--tg-theme-button-color, #5288c1);
+      --onAccent:var(--tg-theme-button-text-color, #ffffff);
+      --up:      #ff5c5c;
+      --down:    #35c47a;
+      --line:    rgba(127,127,127,.22);
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC",
+                   "PingFang TC", sans-serif;
+      font-size: 15px; line-height: 1.5;
+      padding: 12px 12px calc(24px + env(safe-area-inset-bottom));
+      -webkit-font-smoothing: antialiased;
+    }
+    .card { background: var(--card); border-radius: 14px; padding: 16px; margin-bottom: 12px; }
+    h2 { font-size: 11px; font-weight: 600; color: var(--hint);
+         letter-spacing: .08em; text-transform: uppercase; margin: 0 0 12px; }
+
+    .total { font-size: 34px; font-weight: 650; letter-spacing: -.02em;
+             font-variant-numeric: tabular-nums; line-height: 1.15; }
+    .sub { font-size: 12px; color: var(--hint); margin-top: 4px; }
+    .deltas { display: flex; gap: 16px; margin-top: 14px; }
+    .delta .k { font-size: 11px; color: var(--hint); }
+    .delta .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .up { color: var(--up); } .down { color: var(--down); } .flat { color: var(--hint); }
+
+    .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .head h2 { margin: 0; }
+    .ranges { display: flex; gap: 6px; }
+    .ranges button {
+      background: transparent; border: 1px solid var(--line); color: var(--hint);
+      border-radius: 7px; padding: 4px 10px; font: inherit; font-size: 12px;
+    }
+    .ranges button[aria-pressed="true"] {
+      background: var(--accent); border-color: var(--accent); color: var(--onAccent); font-weight: 600;
+    }
+    .chart { position: relative; height: 170px; }
+
+    /* 持倉整列可點 —— 這是 Mini App 相對於獨立網頁真正多出來的能力 */
+    .hold {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 0; border-bottom: 1px solid var(--line);
+      cursor: pointer; transition: opacity .15s;
+    }
+    .hold:last-child { border-bottom: none; }
+    .hold:active { opacity: .5; }
+    .hold .id { flex: 1; min-width: 0; }
+    .hold .code { font-weight: 600; }
+    .hold .name { font-size: 12px; color: var(--hint);
+                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hold .nums { text-align: right; font-variant-numeric: tabular-nums; }
+    .hold .mv { font-weight: 500; }
+    .hold .pct { font-size: 12px; }
+    .chev { color: var(--hint); font-size: 18px; line-height: 1; }
+
+    .row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
+    .row .amt { font-variant-numeric: tabular-nums; }
+    .row.total-row { border-top: 1px solid var(--line); margin-top: 6px;
+                     padding-top: 10px; font-weight: 650; }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chips button {
+      background: transparent; border: 1px solid var(--line); color: var(--text);
+      border-radius: 999px; padding: 8px 14px; font: inherit; font-size: 13px;
+    }
+    .chips button:active { opacity: .5; }
+
+    .state { text-align: center; color: var(--hint); padding: 60px 16px; font-size: 14px; }
+    .state.err { color: var(--up); }
+  </style>
+</head>
+<body>
+
+<div id="state" class="state">讀取中…</div>
+
+<div id="app" hidden>
+  <div class="card">
+    <div class="total" id="total">—</div>
+    <div class="sub" id="stamp"></div>
+    <div class="deltas" id="deltas"></div>
+  </div>
+
+  <div class="card">
+    <div class="head">
+      <h2>總資產走勢</h2>
+      <div class="ranges" id="ranges">
+        <button type="button" data-days="30" aria-pressed="true">30天</button>
+        <button type="button" data-days="90">90天</button>
+        <button type="button" data-days="365">1年</button>
+      </div>
+    </div>
+    <div class="chart"><canvas id="trend"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h2>持倉 · 點選可問 Iris</h2>
+    <div id="holdings"></div>
+  </div>
+
+  <div class="card">
+    <h2>現金與其他</h2>
+    <div id="cash"></div>
+  </div>
+
+  <div class="card">
+    <h2>快速提問</h2>
+    <div class="chips" id="chips">
+      <button type="button" data-q="幫我看一下目前的資產配置有沒有需要調整的地方">配置檢視</button>
+      <button type="button" data-q="我最近的資產變化如何？有什麼值得注意的">近期變化</button>
+      <button type="button" data-q="以目前的持倉，接下來有什麼風險需要留意">風險提醒</button>
+      <button type="button" data-q="今年的股利收入狀況如何">股利狀況</button>
+    </div>
+  </div>
+</div>
+
+<script>
+var tg = window.Telegram && window.Telegram.WebApp;
+var DATA = null;
+var chart = null;
+
+if (tg) { tg.ready(); tg.expand(); }
+
+var fmt = function (n) {
+  if (n === null || n === undefined || isNaN(n)) return '—';
+  return Math.round(n).toLocaleString('zh-TW');
+};
+var pct = function (p) {
+  if (p === null || p === undefined || isNaN(p)) return '—';
+  return (p >= 0 ? '+' : '') + (p * 100).toFixed(2) + '%';
+};
+var signed = function (n) {
+  if (n === null || n === undefined || isNaN(n)) return '—';
+  return (n >= 0 ? '+' : '−') + Math.abs(Math.round(n)).toLocaleString('zh-TW');
+};
+var dir = function (n) {
+  if (n === null || n === undefined || isNaN(n) || n === 0) return 'flat';
+  return n > 0 ? 'up' : 'down';
+};
+var cssVar = function (n) {
+  return getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+};
+
+// ── 送問題給 Iris ────────────────────────────────────────
+// 答案會 push 進對話，不在面板裡顯示 —— 面板是入口，對話才是 Iris 的主場。
+function ask(question) {
+  var go = function () {
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    google.script.run
+      .withFailureHandler(function (err) {
+        if (tg) tg.showAlert('送出失敗：' + (err && err.message ? err.message : err));
+      })
+      .miniAppAsk(tg ? tg.initData : '', question);
+
+    // 不等回呼：ReAct 迴圈要數十秒，讓使用者卡在面板上盯著轉圈沒有意義。
+    // 稍微延遲再關，確保請求已經送出。
+    document.getElementById('state').hidden = false;
+    document.getElementById('state').className = 'state';
+    document.getElementById('state').textContent = '已送出，Iris 正在回覆…';
+    document.getElementById('app').hidden = true;
+    setTimeout(function () { if (tg) tg.close(); }, 1200);
+  };
+
+  if (tg && tg.showConfirm) {
+    tg.showConfirm('要問 Iris：\n\n' + question, function (ok) { if (ok) go(); });
+  } else {
+    go();
+  }
+}
+
+// ── 渲染 ────────────────────────────────────────────────
+function renderTotals(d) {
+  var t = d.totals;
+  if (!t) { document.getElementById('total').textContent = '尚無快照'; return; }
+  document.getElementById('total').textContent = 'NT$ ' + fmt(t.today);
+  document.getElementById('stamp').textContent = t.todayDate + ' 快照';
+  document.getElementById('deltas').innerHTML = [
+    { k: '單日', v: signed(t.dayChange) + ' ' + pct(t.dayChangePct), c: dir(t.dayChangePct) },
+    { k: '近一週', v: pct(t.weekChangePct),  c: dir(t.weekChangePct) },
+    { k: '近一月', v: pct(t.monthChangePct), c: dir(t.monthChangePct) }
+  ].map(function (x) {
+    return '<div class="delta"><div class="k">' + x.k + '</div>' +
+           '<div class="v ' + x.c + '">' + x.v + '</div></div>';
+  }).join('');
+}
+
+function renderTrend(days) {
+  var s = (DATA.series || []).slice(-days);
+  if (chart) chart.destroy();
+  if (!s.length) return;
+  var color = s[s.length - 1].total >= s[0].total ? cssVar('--up') : cssVar('--down');
+  var ctx = document.getElementById('trend').getContext('2d');
+  var grad = ctx.createLinearGradient(0, 0, 0, 170);
+  grad.addColorStop(0, color + '40');
+  grad.addColorStop(1, color + '00');
+
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: s.map(function (r) { return r.date.slice(5); }),
+      datasets: [{
+        data: s.map(function (r) { return r.total; }),
+        borderColor: color, backgroundColor: grad, borderWidth: 2,
+        pointRadius: 0, pointHoverRadius: 4, tension: .25, fill: true
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          displayColors: false, padding: 8,
+          callbacks: { label: function (c) { return 'NT$ ' + fmt(c.parsed.y); } }
+        }
+      },
+      scales: {
+        x: { grid: { display: false },
+             ticks: { color: cssVar('--hint'), maxRotation: 0, autoSkipPadding: 28, font: { size: 10 } } },
+        y: { grid: { color: cssVar('--line') },
+             ticks: { color: cssVar('--hint'), font: { size: 10 },
+               callback: function (v) {
+                 if (Math.abs(v) < 10000) return v;
+                 var w = v / 10000;
+                 return (Number.isInteger(w) ? w : w.toFixed(1)) + '萬';
+               } } }
+      }
+    }
+  });
+}
+
+function renderHoldings(d) {
+  var hs = (d.holdings || []).slice().sort(function (a, b) { return b.marketValue - a.marketValue; });
+  var box = document.getElementById('holdings');
+  if (!hs.length) { box.innerHTML = '<div class="row">尚無持倉</div>'; return; }
+
+  box.innerHTML = hs.map(function (h, i) {
+    return '<div class="hold" data-i="' + i + '">' +
+      '<div class="id"><div class="code">' + h.code + '</div>' +
+      '<div class="name">' + (h.name || '') + '</div></div>' +
+      '<div class="nums"><div class="mv">' + fmt(h.marketValue) + '</div>' +
+      '<div class="pct ' + dir(h.pnlPct) + '">' + pct(h.pnlPct) + '</div></div>' +
+      '<div class="chev">›</div></div>';
+  }).join('');
+
+  box.querySelectorAll('.hold').forEach(function (el) {
+    el.addEventListener('click', function () {
+      var h = hs[parseInt(el.dataset.i, 10)];
+      ask('分析我持有的 ' + h.code + ' ' + (h.name || '') +
+          '，目前市值 ' + fmt(h.marketValue) + '、報酬率 ' + pct(h.pnlPct) +
+          '，有什麼需要注意的嗎？');
+    });
+  });
+}
+
+function renderCash(d) {
+  var box = document.getElementById('cash');
+  if (!d.cash || !d.cash.accounts || !d.cash.accounts.length) {
+    box.innerHTML = '<div class="row">尚無資料</div>';
+    return;
+  }
+  box.innerHTML = d.cash.accounts.map(function (a) {
+    return '<div class="row"><span>' + a.account + '</span>' +
+           '<span class="amt">' + fmt(a.amount) + '</span></div>';
+  }).join('') +
+  '<div class="row total-row"><span>合計</span><span class="amt">' + fmt(d.cash.total) + '</span></div>';
+}
+
+function render(d) {
+  DATA = d;
+  document.getElementById('state').hidden = true;
+  document.getElementById('app').hidden = false;
+  renderTotals(d);
+  renderHoldings(d);
+  renderCash(d);
+  renderTrend(30);
+}
+
+document.getElementById('ranges').addEventListener('click', function (e) {
+  var b = e.target.closest('button');
+  if (!b) return;
+  this.querySelectorAll('button').forEach(function (x) { x.removeAttribute('aria-pressed'); });
+  b.setAttribute('aria-pressed', 'true');
+  renderTrend(parseInt(b.dataset.days, 10));
+});
+
+document.getElementById('chips').addEventListener('click', function (e) {
+  var b = e.target.closest('button');
+  if (b) ask(b.dataset.q);
+});
+
+// ── 載入 ────────────────────────────────────────────────
+(function load() {
+  var state = document.getElementById('state');
+  if (!tg || !tg.initData) {
+    state.className = 'state err';
+    state.textContent = '請從 Telegram 內開啟此頁面。';
+    return;
+  }
+  google.script.run
+    .withSuccessHandler(render)
+    .withFailureHandler(function (err) {
+      state.className = 'state err';
+      state.textContent = '載入失敗：' + (err && err.message ? err.message : err);
+    })
+    .miniAppData(tg.initData);
+})();
+</script>
+</body>
+</html>

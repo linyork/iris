@@ -19,8 +19,8 @@ var Commands = (() => {
   var definitions = [
     {
       name: 'dashboard',
-      description: '取得資產儀表板網址',
-      handler: () => handleDashboard()
+      description: '開啟資產儀表板',
+      handler: (event) => handleDashboard(event)
     },
     {
       name: 'report',
@@ -31,15 +31,48 @@ var Commands = (() => {
 
   // ─── 各指令實作 ────────────────────────────────────────────
 
-  var handleDashboard = () => {
-    var url = Config.DASHBOARD_URL;
-    if (!url) {
+  /**
+   * Mini App 網址 = webhook 的 /exec 加上 ?view=tg
+   *
+   * 這個能自動推導，不像 DASHBOARD_URL 得放 Script Property：Mini App 就掛在
+   * webhook 自己那支部署上，而 getService().getUrl() 從 doPost 執行時回傳的正是它。
+   * （從編輯器執行時會拿到 /dev，所以下面驗一下才用。）
+   */
+  var miniAppUrl = () => {
+    try {
+      var base = ScriptApp.getService().getUrl();
+      if (!base || base.indexOf('/exec') < 0) {
+        Logger.warning('Commands.miniAppUrl', '取得的網址不是 /exec，略過 Mini App 按鈕', base);
+        return '';
+      }
+      return base + '?view=tg';
+    } catch (ex) {
+      Logger.warning('Commands.miniAppUrl', '無法取得部署網址', ex.message);
+      return '';
+    }
+  };
+
+  var handleDashboard = (event) => {
+    var webUrl  = Config.DASHBOARD_URL;
+    var miniUrl = (event.platform === 'TELEGRAM') ? miniAppUrl() : '';
+
+    // Telegram 且拿得到網址時，改送一則帶 Mini App 按鈕的訊息：點按鈕就地滑出面板，
+    // 不必離開 App、不必 Google 登入。訊息由這裡自己送出，所以回傳空字串
+    // 告訴 doPost「已處理完畢、不用再 push」（回 null 才是「不是指令」）。
+    if (miniUrl) {
+      var body = '【資產儀表板】\n點下方按鈕就地開啟。';
+      if (webUrl) body += '\n\n完整版（瀏覽器，需 Google 登入）：\n' + webUrl;
+      Telegram.pushWithMiniAppButton(event.replyToken, body, '📊 開啟儀表板', miniUrl);
+      return '';
+    }
+
+    if (!webUrl) {
       Logger.warning('Commands.handleDashboard', 'DASHBOARD_URL 未設定');
       return '尚未設定儀表板網址。\n\n' +
              '請到 GAS 專案設定 → 指令碼屬性，新增 DASHBOARD_URL，' +
              '值填 HEAD 部署的 /dev 網址。';
     }
-    return '【資產儀表板】\n' + url + '\n\n' +
+    return '【資產儀表板】\n' + webUrl + '\n\n' +
            '（需以 Google 帳號登入，僅你本人開得起來）';
   };
 

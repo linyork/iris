@@ -131,6 +131,36 @@ var Telegram = (() => {
   };
 
   /**
+   * 送出帶 Mini App 按鈕的訊息
+   *
+   * inline keyboard 的 web_app 按鈕會在 Telegram 內嵌 webview 開啟頁面，
+   * 不會跳出 App、也不需要 Google 登入。網址必須是 HTTPS。
+   *
+   * @param {string} chatId
+   * @param {string} message    - 訊息本文
+   * @param {string} buttonText - 按鈕文字
+   * @param {string} url        - Mini App 網址（/exec?view=tg）
+   */
+  telegram.pushWithMiniAppButton = (chatId, message, buttonText, url) => {
+    try {
+      UrlFetchApp.fetch(Config.TELEGRAM_API_BASE + '/sendMessage', {
+        headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+        method:  'post',
+        payload: JSON.stringify({
+          chat_id: chatId,
+          text:    cleanMessage(message),
+          reply_markup: {
+            inline_keyboard: [[{ text: buttonText, web_app: { url: url } }]]
+          }
+        }),
+        muteHttpExceptions: true
+      });
+    } catch (ex) {
+      Logger.error('Telegram.pushWithMiniAppButton', '傳送失敗', ex);
+    }
+  };
+
+  /**
    * 註冊斜線指令選單（輸入框旁的 "/" 清單）
    *
    * 純粹是 UI 提示：使用者點選後 Telegram 送出的仍是普通文字訊息，

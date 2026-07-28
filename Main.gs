@@ -93,6 +93,17 @@ function doPost(e) {
  * @param {object} e - Google Apps Script doGet 事件
  */
 function doGet(e) {
+  var view = (e && e.parameter && e.parameter.view) || '';
+
+  // Telegram Mini App：走 /exec（匿名）進來，因為 Google 登入在 Telegram 的
+  // 內嵌 webview 裡走不通。這裡回的頁面**不含任何資料**，資料要等前端把 initData
+  // 送回 miniAppData / miniAppAsk、通過 MiniApp.verifyInitData 驗簽後才發。
+  if (view === 'tg') {
+    return HtmlService.createHtmlOutputFromFile('MiniAppPage')
+      .setTitle('Iris')
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover');
+  }
+
   if (!Dashboard.isAuthorized()) {
     Logger.info('doGet', '拒絕未授權的儀表板存取');
     return HtmlService.createHtmlOutput('<h1>Not Found</h1>')
