@@ -130,5 +130,24 @@ var Telegram = (() => {
     return response.getContentText();
   };
 
+  /**
+   * 註冊斜線指令選單（輸入框旁的 "/" 清單）
+   *
+   * 純粹是 UI 提示：使用者點選後 Telegram 送出的仍是普通文字訊息，
+   * 實際處理在 Commands.tryHandle。清單來源與分派共用 Commands 的定義。
+   *
+   * @returns {string} Bot API 回應
+   */
+  telegram.setupCommands = () => {
+    var response = UrlFetchApp.fetch(Config.TELEGRAM_API_BASE + '/setMyCommands', {
+      headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+      method:  'post',
+      payload: JSON.stringify({ commands: Commands.getDefinitions() }),
+      muteHttpExceptions: true
+    });
+    Logger.info('Telegram.setupCommands', 'setMyCommands 回應: ' + response.getContentText());
+    return response.getContentText();
+  };
+
   return telegram;
 })();

@@ -66,7 +66,13 @@ function doPost(e) {
       // 開始處理就先送「正在輸入…」，讓使用者馬上看到反應
       MessagingServiceFactory.indicateTyping(event);
 
-      var reply = ChatBot.reply(event);
+      // 斜線指令先攔截：答案固定的指令不必跑完整個 ReAct 迴圈。
+      // 回傳 null 才代表不是指令，交給 ChatBot 當自然語言處理。
+      var reply = Commands.tryHandle(event);
+      if (reply === null) {
+        reply = ChatBot.reply(event);
+      }
+
       if (reply) {
         MessagingServiceFactory.push(event.source.userId, reply);
       }
@@ -115,6 +121,14 @@ function setupTelegramWebhook() {
     'AKfycbxN-6Yx2GEiLvyBIeZ9z0CyZPbUuBXMyoD6xtN3j_XOc38_S2OBrOonVPaxXM4NVRcI' + '/exec';
   console.log('註冊 webhook → ' + WEB_APP_URL);
   console.log(Telegram.setupWebhook(WEB_APP_URL));
+}
+
+/**
+ * 註冊 Telegram 斜線指令選單（新增或修改指令後，於 GAS 編輯器手動執行一次）
+ */
+function setupTelegramCommands() {
+  console.log('註冊指令選單：' + JSON.stringify(Commands.getDefinitions()));
+  console.log(Telegram.setupCommands());
 }
 
 /**

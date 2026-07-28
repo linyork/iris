@@ -14,7 +14,8 @@ var Config = (() => {
     GEMINI_KEY:   'GEMINI_API_KEY',
     NVIDIA_KEY:   'NVIDIA_API_KEY',
     SEARCH_KEY:   'GOOGLE_SEARCH_KEY',
-    SEARCH_CX:    'GOOGLE_SEARCH_CX'
+    SEARCH_CX:    'GOOGLE_SEARCH_CX',
+    DASHBOARD_URL:'DASHBOARD_URL'
   };
 
   var _debugModeCache    = null;
@@ -33,6 +34,12 @@ var Config = (() => {
     // ─── Google Sheets ────────────────────────────────────────
     get SHEET_ID()     { return scriptProperties.getProperty(ENV_KEYS.SHEET_ID); },
     get ADMIN_STRING() { return scriptProperties.getProperty(ENV_KEYS.ADMIN_STRING); },
+
+    // ─── 儀表板網址（/dashboard 指令用）────────────────────────
+    // 放 Script Property 而非寫死：儀表板要的是 HEAD 部署的 /dev 網址，
+    // 而它的 deployment ID 與 webhook 的 /exec 完全不同（不是換字尾就能推導），
+    // ScriptApp.getService().getUrl() 從 doPost 執行時也只會拿到 /exec。
+    get DASHBOARD_URL() { return scriptProperties.getProperty(ENV_KEYS.DASHBOARD_URL); },
 
     // ─── AI Provider 切換（env!B3：GEMINI 或 NVIDIA）────────
     get AI_PROVIDER() {

@@ -3,12 +3,21 @@
  * @description 每日早上 9:00 自動產生個人化財經早報，透過 LINE push 給主人
  */
 
-function dailyReport() {
+/**
+ * 產生今日早報內文（不發送）
+ *
+ * 從 dailyReport() 抽出來，讓排程推播與 /report 指令共用同一段邏輯：
+ * 排程要「週末跳過 + 推給所有主人」，/report 要「隨時可跑 + 只回給發問的人」，
+ * 差異全部留在呼叫端，這裡只負責產生內容。
+ *
+ * ⚠️ 走 SMART 檔次（開思考）且含一次 WebSearch，耗時以分鐘計。
+ *    從 doPost 同步呼叫時務必先送出提示訊息，見 Commands.gs。
+ *
+ * @returns {{dateStr: string, body: string}|null} 產生失敗回 null
+ */
+function buildDailyReport() {
   try {
     var today = new Date();
-    var dow   = today.getDay();
-    if (dow === 0 || dow === 6) return; // 週六發週報、週日無報
-
     var nowStr  = Utilities.formatDate(today, 'GMT+8', 'yyyy/MM/dd HH:mm');
     var dateStr = Utilities.formatDate(today, 'GMT+8', 'MM/dd');
     var todayFull = Utilities.formatDate(today, 'GMT+8', 'yyyy-MM-dd');
@@ -64,15 +73,32 @@ function dailyReport() {
     var report   = Utils.extractText(response);
 
     if (!report) {
-      Logger.error('dailyReport', '早報產生失敗', 'AI 回傳空值');
-      return;
+      Logger.error('buildDailyReport', '早報產生失敗', 'AI 回傳空值');
+      return null;
     }
 
-    // 5. 發送給所有主人
-    var header  = '【Iris 早報 ' + dateStr + '】\n\n';
+    return { dateStr: dateStr, body: report };
+  } catch (ex) {
+    Logger.error('buildDailyReport', '早報產生失敗', ex);
+    return null;
+  }
+}
+
+/**
+ * 每日 09:00 排程：產生早報並推播給所有主人
+ */
+function dailyReport() {
+  try {
+    var dow = new Date().getDay();
+    if (dow === 0 || dow === 6) return; // 週六發週報、週日無報
+
+    var result = buildDailyReport();
+    if (!result) return;
+
+    var header  = '【Iris 早報 ' + result.dateStr + '】\n\n';
     var masters = Config.ADMIN_STRING.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
     masters.forEach(function(userId) {
-      MessagingServiceFactory.push(userId, header + report);
+      MessagingServiceFactory.push(userId, header + result.body);
     });
 
     Logger.info('dailyReport', '早報發送完成', { recipients: masters.length });
