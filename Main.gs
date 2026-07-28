@@ -77,6 +77,34 @@ function doPost(e) {
 }
 
 /**
+ * 資產儀表板網頁進入點
+ *
+ * ⚠️ 這支 doGet 在「任何人、匿名」的 webhook deployment 上同樣可達，
+ * 所以一定要靠 Dashboard.isAuthorized() 擋——匿名訪客的 getActiveUser()
+ * 是空字串，會被擋在外面。請另外建立一個「存取權：只有我自己」的
+ * deployment，用那支網址開儀表板。
+ *
+ * @param {object} e - Google Apps Script doGet 事件
+ */
+function doGet(e) {
+  if (!Dashboard.isAuthorized()) {
+    Logger.info('doGet', '拒絕未授權的儀表板存取');
+    return HtmlService.createHtmlOutput('<h1>Not Found</h1>')
+      .setTitle('Not Found');
+  }
+
+  // 檔名是 DashboardPage 而非 Dashboard：GAS 的檔名不含副檔名，
+  // 會與 Dashboard.gs 撞名而拒絕 push
+  return HtmlService.createHtmlOutputFromFile('DashboardPage')
+    .setTitle('Iris 資產儀表板')
+    // addMetaTag 只接受白名單內的名稱（viewport / apple-mobile-web-app-capable /
+    // mobile-web-app-capable / google-site-verification），其餘會直接丟例外。
+    // theme-color 不在白名單，別再加回來。
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover')
+    .addMetaTag('apple-mobile-web-app-capable', 'yes');
+}
+
+/**
  * 註冊 Telegram Webhook（首次設定或更換部署時，於 GAS 編輯器手動執行一次）
  *
  * 固定使用既有的版本化部署 URL（與原 LINE webhook 同一個），不用 ScriptApp.getService()

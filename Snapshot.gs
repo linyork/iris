@@ -324,6 +324,101 @@ var Snapshot = (() => {
     }
   };
 
+  // ─── Dashboard 專用（不進 collectAll）────────────────────────
+  //
+  // 以下兩個函式只給網頁儀表板畫圖用，刻意不併入 collectAll()：
+  // collectAll 的結果會整份序列化進 LLM prompt，灌一年份的逐日序列
+  // 只會吃掉 context 又對判斷沒幫助。
+
+  /**
+   * 總資產逐日序列（@所有股票紀錄 A:日期 B:總價值）
+   * @param {number} [days]  最近幾天（預設 365）
+   * @param {object} [ss]    可傳入已開啟的試算表以省一次 open
+   * @returns {Array<{date: string, total: number}>} 由舊到新
+   */
+  snap.totalSeries = (days, ss) => {
+    try {
+      ss = ss || SpreadsheetApp.openById(Config.SHEET_ID);
+      var sheet = ss.getSheetByName('@所有股票紀錄');
+      if (!sheet) return [];
+
+      var lastRow = sheet.getLastRow();
+      if (lastRow < 2) return [];
+
+      days = Math.min(days || 365, 3650);
+      var startRow = Math.max(2, lastRow - days + 1);
+      var data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 2).getValues();
+
+      return data
+        .filter(r => r[0] && r[1] !== '' && r[1] !== null)
+        .map(r => ({
+          date:  r[0] instanceof Date ? _ymd(r[0]) : String(r[0]),
+          total: _num(r[1])
+        }))
+        .filter(r => r.total > 0);
+    } catch (e) {
+      Logger.warning('Snapshot.totalSeries', '讀取總資產序列失敗', e.message);
+      return [];
+    }
+  };
+
+  /**
+   * 股利的年度與月份分佈（@股利）
+   * @param {object} [ss]
+   * @returns {{byYear: Array<{year, total, count}>, currentYear: number, byMonth: Array<number>}}
+   *          byMonth 為當年 1~12 月合計，固定長度 12
+   */
+  snap.dividendSeries = (ss) => {
+    var empty = { byYear: [], currentYear: new Date().getFullYear(), byMonth: [] };
+    try {
+      ss = ss || SpreadsheetApp.openById(Config.SHEET_ID);
+      var sheet = ss.getSheetByName('@股利');
+      if (!sheet) return empty;
+
+      var lastRow = sheet.getLastRow();
+      if (lastRow < 2) return empty;
+
+      var rows = sheet.getRange(2, 1, lastRow - 1, 3).getValues()
+        .filter(r => r[0] && r[1] && r[2] !== '' && r[2] !== null)
+        .map(r => ({
+          date:   r[0] instanceof Date ? r[0] : new Date(r[0]),
+          amount: _num(r[2])
+        }))
+        .filter(r => !isNaN(r.date.getTime()) && r.amount > 0);
+
+      if (rows.length === 0) return empty;
+
+      var yearMap = {};
+      rows.forEach(r => {
+        var y = r.date.getFullYear();
+        if (!yearMap[y]) yearMap[y] = { year: y, total: 0, count: 0 };
+        yearMap[y].total += r.amount;
+        yearMap[y].count++;
+      });
+
+      var currentYear = new Date().getFullYear();
+      var byMonth = new Array(12).fill(0);
+      rows.forEach(r => {
+        if (r.date.getFullYear() === currentYear) byMonth[r.date.getMonth()] += r.amount;
+      });
+
+      return {
+        byYear: Object.keys(yearMap)
+          .map(y => ({
+            year:  yearMap[y].year,
+            total: _round(yearMap[y].total),
+            count: yearMap[y].count
+          }))
+          .sort((a, b) => a.year - b.year),
+        currentYear: currentYear,
+        byMonth: byMonth.map(v => _round(v))
+      };
+    } catch (e) {
+      Logger.warning('Snapshot.dividendSeries', '讀取股利序列失敗', e.message);
+      return empty;
+    }
+  };
+
   // ─── 對外主入口 ────────────────────────────────────────────
 
   /**

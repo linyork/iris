@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <!-- doGet 也會用 addMetaTag 注入 viewport；這裡再寫一次，
+       少了它手機會用桌機寬度縮放，RWD 斷點就不會觸發 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    /* 紅漲綠跌：台股慣例，與多數西方 dashboard 相反 */
+    :root {
+      --bg:        #f5f6f8;
+      --surface:   #ffffff;
+      --border:    #e3e6ea;
+      --text:      #1a1d21;
+      --text-dim:  #6b7280;
+      --up:        #d92b2b;
+      --down:      #17914d;
+      --accent:    #3b6ef0;
+      --grid:      rgba(0,0,0,.07);
+      --shadow:    0 1px 2px rgba(0,0,0,.04), 0 4px 12px rgba(0,0,0,.04);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg:       #0f1216;
+        --surface:  #171b21;
+        --border:   #262c34;
+        --text:     #e8eaed;
+        --text-dim: #8b95a3;
+        --up:       #ff5c5c;
+        --down:     #35c47a;
+        --accent:   #6d92ff;
+        --grid:     rgba(255,255,255,.07);
+        --shadow:   none;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC",
+                   "PingFang TC", "Microsoft JhengHei", sans-serif;
+      font-size: 15px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      padding: 16px 16px calc(32px + env(safe-area-inset-bottom));
+    }
+    .wrap { max-width: 1180px; margin: 0 auto; }
+
+    /* ── Header ─────────────────────────────────────── */
+    header { display: flex; align-items: baseline; justify-content: space-between;
+             flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+    h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: .02em; }
+    .stamp { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+    .stamp button {
+      background: none; border: none; color: var(--accent); cursor: pointer;
+      font: inherit; padding: 0 0 0 8px; text-decoration: underline;
+    }
+
+    /* ── Cards ──────────────────────────────────────── */
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 18px; box-shadow: var(--shadow);
+      margin-bottom: 16px;
+    }
+    .card h2 {
+      font-size: 12px; font-weight: 600; color: var(--text-dim);
+      letter-spacing: .08em; text-transform: uppercase;
+      margin: 0 0 14px;
+    }
+    .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+    .grid2 > .card { margin-bottom: 0; }
+
+    /* ── Hero ───────────────────────────────────────── */
+    .hero-value {
+      font-size: clamp(32px, 9vw, 46px); font-weight: 650;
+      letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.1;
+    }
+    .hero-date { font-size: 12px; color: var(--text-dim); margin-top: 6px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+    .chip {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 9px;
+      padding: 8px 12px; min-width: 96px;
+    }
+    .chip .k { font-size: 11px; color: var(--text-dim); }
+    .chip .v { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .up   { color: var(--up); }
+    .down { color: var(--down); }
+    .flat { color: var(--text-dim); }
+
+    /* ── Range toggle ───────────────────────────────── */
+    .ranges { display: flex; gap: 6px; }
+    .ranges button {
+      background: var(--bg); border: 1px solid var(--border); color: var(--text-dim);
+      border-radius: 8px; padding: 5px 12px; font: inherit; font-size: 13px;
+      cursor: pointer;
+    }
+    .ranges button[aria-pressed="true"] {
+      background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
+    }
+    .card-head { display: flex; align-items: center; justify-content: space-between;
+                 gap: 10px; margin-bottom: 14px; }
+    .card-head h2 { margin: 0; }
+
+    .chart-box { position: relative; height: 260px; }
+    .chart-box.short { height: 220px; }
+
+    /* ── Cash list ──────────────────────────────────── */
+    .rows { display: flex; flex-direction: column; gap: 2px; }
+    .row {
+      display: flex; justify-content: space-between; gap: 12px;
+      padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 14px;
+    }
+    .row:last-child { border-bottom: none; }
+    .row .amt { font-variant-numeric: tabular-nums; font-weight: 500; }
+    .row.total { border-top: 1px solid var(--border); margin-top: 4px;
+                 padding-top: 10px; font-weight: 650; border-bottom: none; }
+
+    /* ── Holdings table ─────────────────────────────── */
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th {
+      text-align: right; font-size: 11px; font-weight: 600; color: var(--text-dim);
+      letter-spacing: .04em; padding: 0 0 10px; border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    th:first-child, td:first-child { text-align: left; }
+    td { text-align: right; padding: 11px 0; border-bottom: 1px solid var(--border);
+         font-variant-numeric: tabular-nums; white-space: nowrap; }
+    tr:last-child td { border-bottom: none; }
+    .sym { font-weight: 600; }
+    .sym small { display: block; font-weight: 400; color: var(--text-dim); font-size: 12px; }
+    .warn { color: var(--text-dim); font-size: 11px; }
+
+    /* 手機：表格塌成卡片 */
+    @media (max-width: 720px) {
+      thead { display: none; }
+      table, tbody, tr, td { display: block; width: 100%; }
+      tr { padding: 12px 0; border-bottom: 1px solid var(--border); }
+      tr:last-child { border-bottom: none; }
+      td { border: none; padding: 3px 0; text-align: right;
+           display: flex; justify-content: space-between; align-items: baseline; }
+      td:first-child { margin-bottom: 6px; }
+      td::before {
+        content: attr(data-label); font-size: 12px; color: var(--text-dim);
+        font-weight: 400; letter-spacing: .02em;
+      }
+      td:first-child::before { content: none; }
+    }
+
+    .state { text-align: center; color: var(--text-dim); padding: 48px 16px; font-size: 14px; }
+    .state.err { color: var(--up); }
+    .muted { color: var(--text-dim); font-size: 13px; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Iris 資產儀表板</h1>
+    <div class="stamp">
+      <span id="stamp">載入中…</span>
+      <button id="refresh" type="button">重新整理</button>
+    </div>
+  </header>
+
+  <div id="state" class="state">讀取資料中…</div>
+  <div id="content" hidden>
+
+    <div class="card">
+      <div class="hero-value" id="netTotal">—</div>
+      <div class="hero-date" id="netDate"></div>
+      <div class="chips" id="chips"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>總資產走勢</h2>
+        <div class="ranges" id="ranges">
+          <button type="button" data-days="30">30 天</button>
+          <button type="button" data-days="90" aria-pressed="true">90 天</button>
+          <button type="button" data-days="365">1 年</button>
+        </div>
+      </div>
+      <div class="chart-box"><canvas id="trendChart"></canvas></div>
+    </div>
+
+    <div class="grid2" style="margin-bottom:16px">
+      <div class="card">
+        <h2>資產配置</h2>
+        <div class="chart-box short"><canvas id="allocChart"></canvas></div>
+      </div>
+      <div class="card">
+        <h2>現金與其他部位</h2>
+        <div class="rows" id="cashRows"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>持倉明細</h2>
+      <div id="holdingsBox"></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h2>股利 — 年度</h2>
+        <div class="chart-box short"><canvas id="divYearChart"></canvas></div>
+      </div>
+      <div class="card">
+        <h2>股利 — <span id="divYearLabel"></span> 月分佈</h2>
+        <div class="chart-box short"><canvas id="divMonthChart"></canvas></div>
+        <div class="muted" id="divSummary" style="margin-top:10px"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ── 格式化 ─────────────────────────────────────────────
+var fmtMoney = function (n) {
+  if (n === null || n === undefined || isNaN(n)) return '—';
+  return Math.round(n).toLocaleString('zh-TW');
+};
+var fmtPct = function (p) {
+  if (p === null || p === undefined || isNaN(p)) return '—';
+  return (p >= 0 ? '+' : '') + (p * 100).toFixed(2) + '%';
+};
+var fmtSigned = function (n) {
+  if (n === null || n === undefined || isNaN(n)) return '—';
+  return (n >= 0 ? '+' : '−') + Math.abs(Math.round(n)).toLocaleString('zh-TW');
+};
+// 紅漲綠跌
+var dirClass = function (n) {
+  if (n === null || n === undefined || isNaN(n) || n === 0) return 'flat';
+  return n > 0 ? 'up' : 'down';
+};
+var cssVar = function (name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+};
+
+var DATA = null;
+var charts = {};
+
+// ── 圖表共用設定 ───────────────────────────────────────
+var baseOpts = function () {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { intersect: false, mode: 'index' },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: cssVar('--surface'),
+        titleColor: cssVar('--text'),
+        bodyColor: cssVar('--text'),
+        borderColor: cssVar('--border'),
+        borderWidth: 1,
+        padding: 10,
+        displayColors: false
+      }
+    },
+    scales: {
+      x: { grid: { display: false }, ticks: { color: cssVar('--text-dim'), maxRotation: 0, autoSkipPadding: 24 } },
+      y: {
+        grid: { color: cssVar('--grid'), drawBorder: false },
+        ticks: {
+          color: cssVar('--text-dim'),
+          // 直接 toFixed(0) 會讓 15000 與 20000 都變成「2萬」，
+          // 非整數萬時保留一位小數才不會出現重複刻度
+          callback: function (v) {
+            if (Math.abs(v) < 10000) return v.toLocaleString('zh-TW');
+            var w = v / 10000;
+            return (Number.isInteger(w) ? w : w.toFixed(1)) + '萬';
+          }
+        }
+      }
+    }
+  };
+};
+
+// ── Hero ───────────────────────────────────────────────
+function renderHero(d) {
+  var t = d.totals;
+  if (!t) {
+    document.getElementById('netTotal').textContent = '尚無快照資料';
+    return;
+  }
+  document.getElementById('netTotal').textContent = 'NT$ ' + fmtMoney(t.today);
+  document.getElementById('netDate').textContent =
+    '快照日期 ' + t.todayDate + '（每日 18:00 更新）';
+
+  var chips = [
+    { k: '單日',   v: t.dayChange,      pct: t.dayChangePct },
+    { k: '近一週', v: null,             pct: t.weekChangePct },
+    { k: '近一月', v: null,             pct: t.monthChangePct }
+  ];
+  document.getElementById('chips').innerHTML = chips.map(function (c) {
+    var cls = dirClass(c.pct);
+    var main = (c.v !== null && c.v !== undefined)
+      ? fmtSigned(c.v) + '　' + fmtPct(c.pct)
+      : fmtPct(c.pct);
+    return '<div class="chip"><div class="k">' + c.k + '</div>' +
+           '<div class="v ' + cls + '">' + main + '</div></div>';
+  }).join('');
+}
+
+// ── 走勢圖 ─────────────────────────────────────────────
+function renderTrend(days) {
+  var series = (DATA.series || []).slice(-days);
+  if (charts.trend) charts.trend.destroy();
+  if (!series.length) return;
+
+  var first = series[0].total;
+  var last  = series[series.length - 1].total;
+  var color = last >= first ? cssVar('--up') : cssVar('--down');
+
+  var ctx = document.getElementById('trendChart').getContext('2d');
+  var grad = ctx.createLinearGradient(0, 0, 0, 260);
+  grad.addColorStop(0, color + '38');
+  grad.addColorStop(1, color + '00');
+
+  var opts = baseOpts();
+  opts.plugins.tooltip.callbacks = {
+    label: function (c) { return 'NT$ ' + fmtMoney(c.parsed.y); }
+  };
+
+  charts.trend = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: series.map(function (r) { return r.date.slice(5); }),
+      datasets: [{
+        data: series.map(function (r) { return r.total; }),
+        borderColor: color,
+        backgroundColor: grad,
+        borderWidth: 2,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        pointHoverBackgroundColor: color,
+        tension: .25,
+        fill: true
+      }]
+    },
+    options: opts
+  });
+}
+
+// ── 配置圓環：由持倉市值 + 現金總額推導 ──────────────────
+// 刻意不讀「配置」sheet——那張表的欄位結構會變，
+// 從 holdings/cash 這兩份已結構化的資料算，比較不會壞。
+function renderAlloc(d) {
+  var palette = ['#3b6ef0', '#e8843c', '#35a97a', '#9b5de5', '#e05c8a',
+                 '#3aa8c1', '#c9a227', '#7a8794', '#5f7adb', '#c1663a'];
+  var items = (d.holdings || [])
+    .filter(function (h) { return h.marketValue > 0; })
+    .map(function (h) { return { label: h.code + ' ' + h.name, value: h.marketValue }; })
+    .sort(function (a, b) { return b.value - a.value; });
+
+  var cashTotal = d.cash ? d.cash.total : 0;
+  if (cashTotal > 0) items.push({ label: '現金與其他', value: cashTotal });
+
+  if (charts.alloc) charts.alloc.destroy();
+  if (!items.length) return;
+
+  var sum = items.reduce(function (s, i) { return s + i.value; }, 0);
+
+  charts.alloc = new Chart(document.getElementById('allocChart'), {
+    type: 'doughnut',
+    data: {
+      labels: items.map(function (i) { return i.label; }),
+      datasets: [{
+        data: items.map(function (i) { return i.value; }),
+        backgroundColor: items.map(function (_, i) { return palette[i % palette.length]; }),
+        borderWidth: 0
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '58%',
+      plugins: {
+        legend: {
+          position: 'right',
+          labels: { color: cssVar('--text-dim'), boxWidth: 10, boxHeight: 10,
+                    padding: 8, font: { size: 11 } }
+        },
+        tooltip: {
+          backgroundColor: cssVar('--surface'),
+          titleColor: cssVar('--text'),
+          bodyColor: cssVar('--text'),
+          borderColor: cssVar('--border'),
+          borderWidth: 1,
+          padding: 10,
+          displayColors: false,
+          callbacks: {
+            label: function (c) {
+              return 'NT$ ' + fmtMoney(c.parsed) +
+                     '（' + (c.parsed / sum * 100).toFixed(1) + '%）';
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+// ── 現金 ───────────────────────────────────────────────
+function renderCash(d) {
+  var box = document.getElementById('cashRows');
+  if (!d.cash || !d.cash.accounts || !d.cash.accounts.length) {
+    box.innerHTML = '<div class="muted">尚無現金資料</div>';
+    return;
+  }
+  var html = d.cash.accounts.map(function (a) {
+    return '<div class="row"><span>' + a.account + '</span>' +
+           '<span class="amt">' + fmtMoney(a.amount) + '</span></div>';
+  }).join('');
+  html += '<div class="row total"><span>合計</span>' +
+          '<span class="amt">' + fmtMoney(d.cash.total) + '</span></div>';
+  box.innerHTML = html;
+}
+
+// ── 持倉 ───────────────────────────────────────────────
+function renderHoldings(d) {
+  var box = document.getElementById('holdingsBox');
+  var hs = d.holdings || [];
+  if (!hs.length) {
+    box.innerHTML = '<div class="muted">尚無持倉資料</div>';
+    return;
+  }
+  hs = hs.slice().sort(function (a, b) { return b.marketValue - a.marketValue; });
+
+  var head = '<thead><tr>' +
+    '<th>標的</th><th>股數</th><th>市價</th><th>當日</th>' +
+    '<th>市值</th><th>損益</th><th>報酬率</th><th>佔比</th>' +
+    '</tr></thead>';
+
+  var body = hs.map(function (h) {
+    return '<tr>' +
+      '<td class="sym">' + h.code + '<small>' + (h.name || '') +
+        (h.priceMissing ? ' <span class="warn">（市價回補）</span>' : '') + '</small></td>' +
+      '<td data-label="股數">' + fmtMoney(h.shares) + '</td>' +
+      '<td data-label="市價">' + (h.price ? h.price.toFixed(2) : '—') + '</td>' +
+      '<td data-label="當日" class="' + dirClass(h.dayChangePct) + '">' + fmtPct(h.dayChangePct) + '</td>' +
+      '<td data-label="市值">' + fmtMoney(h.marketValue) + '</td>' +
+      '<td data-label="損益" class="' + dirClass(h.pnl) + '">' + fmtSigned(h.pnl) + '</td>' +
+      '<td data-label="報酬率" class="' + dirClass(h.pnlPct) + '">' + fmtPct(h.pnlPct) + '</td>' +
+      '<td data-label="佔比">' + (h.ratioOfPortfolio * 100).toFixed(1) + '%</td>' +
+    '</tr>';
+  }).join('');
+
+  box.innerHTML = '<table>' + head + '<tbody>' + body + '</tbody></table>';
+}
+
+// ── 股利 ───────────────────────────────────────────────
+function renderDividends(d) {
+  var ds = d.dividendSeries || { byYear: [], byMonth: [] };
+  document.getElementById('divYearLabel').textContent = ds.currentYear || '';
+
+  if (charts.divYear) charts.divYear.destroy();
+  if (ds.byYear && ds.byYear.length) {
+    var o1 = baseOpts();
+    o1.plugins.tooltip.callbacks = { label: function (c) { return 'NT$ ' + fmtMoney(c.parsed.y); } };
+    charts.divYear = new Chart(document.getElementById('divYearChart'), {
+      type: 'bar',
+      data: {
+        labels: ds.byYear.map(function (y) { return y.year; }),
+        datasets: [{
+          data: ds.byYear.map(function (y) { return y.total; }),
+          backgroundColor: cssVar('--accent'),
+          borderRadius: 5,
+          maxBarThickness: 44
+        }]
+      },
+      options: o1
+    });
+  }
+
+  if (charts.divMonth) charts.divMonth.destroy();
+  if (ds.byMonth && ds.byMonth.length) {
+    var o2 = baseOpts();
+    o2.plugins.tooltip.callbacks = { label: function (c) { return 'NT$ ' + fmtMoney(c.parsed.y); } };
+    charts.divMonth = new Chart(document.getElementById('divMonthChart'), {
+      type: 'bar',
+      data: {
+        labels: ['1','2','3','4','5','6','7','8','9','10','11','12'],
+        datasets: [{
+          data: ds.byMonth,
+          backgroundColor: cssVar('--down'),
+          borderRadius: 5,
+          maxBarThickness: 28
+        }]
+      },
+      options: o2
+    });
+  }
+
+  var dv = d.dividends;
+  if (dv) {
+    var parts = [
+      '今年累計 NT$ ' + fmtMoney(dv.thisYear.total) + '（' + dv.thisYear.count + ' 筆）',
+      '本月 NT$ ' + fmtMoney(dv.thisMonth.total)
+    ];
+    if (dv.yoyChangePct !== null && dv.yoyChangePct !== undefined) {
+      parts.push('年增 ' + fmtPct(dv.yoyChangePct));
+    }
+    document.getElementById('divSummary').textContent = parts.join('　·　');
+  }
+}
+
+// ── 載入 ───────────────────────────────────────────────
+function render(d) {
+  DATA = d;
+  document.getElementById('state').hidden = true;
+  document.getElementById('content').hidden = false;
+  document.getElementById('stamp').textContent =
+    d.generatedAt + (d.fromCache ? '（快取）' : '');
+
+  renderHero(d);
+  renderAlloc(d);
+  renderCash(d);
+  renderHoldings(d);
+  renderDividends(d);
+
+  var pressed = document.querySelector('#ranges button[aria-pressed="true"]');
+  renderTrend(parseInt(pressed.dataset.days, 10));
+}
+
+function load(noCache) {
+  var state = document.getElementById('state');
+  state.hidden = false;
+  state.className = 'state';
+  state.textContent = noCache ? '重新讀取中…' : '讀取資料中…';
+  document.getElementById('content').hidden = true;
+
+  google.script.run
+    .withSuccessHandler(render)
+    .withFailureHandler(function (err) {
+      state.className = 'state err';
+      state.textContent = '載入失敗：' + (err && err.message ? err.message : err);
+    })
+    .dashboardData(noCache === true);
+}
+
+document.getElementById('ranges').addEventListener('click', function (e) {
+  var btn = e.target.closest('button');
+  if (!btn) return;
+  this.querySelectorAll('button').forEach(function (b) { b.removeAttribute('aria-pressed'); });
+  btn.setAttribute('aria-pressed', 'true');
+  renderTrend(parseInt(btn.dataset.days, 10));
+});
+
+document.getElementById('refresh').addEventListener('click', function () { load(true); });
+
+load(false);
+</script>
+</body>
+</html>

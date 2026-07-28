@@ -10,6 +10,9 @@ Iris is a personal asset management LINE bot built on Google Apps Script (GAS). 
 
 Outbound messages go the other way through `MessagingServiceFactory`, which dispatches to `Line.gs` or `Telegram.gs`.
 
+There is a second, read-only face on the same script: a web dashboard served by `doGet()`.
+See [Web Dashboard](#web-dashboard).
+
 All persistence is in a single Google Sheet (`Config.SHEET_ID`).
 
 ## Development Workflow
@@ -55,6 +58,43 @@ Switch provider by setting `env!B3` in the Google Sheet to `GEMINI` or `NVIDIA`.
 Control goes out as `chat_template_kwargs: {thinking, reasoning_effort}` from the `deepseek-ai/deepseek-v4` branch in `NvidiaService.gs`. ⚠️ **That field must always be sent for V4 models — omitting it makes NIM hang rather than error.** Reasoning text comes back in `reasoning_content` (separated by `AIAdapter.fromOpenAIResponse`) and consumes the `max_tokens` budget, which is why `SMART` gets a much larger budget than `FAST`.
 
 **Resilience.** deepseek-v4-flash is popular on NIM and overloads often (503 `ResourceExhausted`, 504, and dropped connections). Two layers cover this: `NvidiaService.callAPI` retries 3× with 2s→4s backoff, counting **both** bad status codes and thrown connection exceptions as retryable; if it still returns null, `AIServiceFactory` falls back once to `Config.NVIDIA_FALLBACK_MODEL` (`mistralai/ministral-14b-instruct-2512`, non-thinking, native function calling). When changing the primary model, verify the fallback is still alive too.
+
+### Web Dashboard
+
+Read-only asset dashboard on the **same** script project, served by `doGet()` in `Main.gs`.
+
+| File | Role |
+|---|---|
+| `Dashboard.gs` | Payload assembly, 15-min `CacheService` cache, auth gate, `dashboardData()` entry point for `google.script.run` |
+| `DashboardPage.html` | Single page — Chart.js 4 via CDN, RWD, light/dark, red-up/green-down (TW convention) |
+
+Data is **reused from `Snapshot.gs`**, not re-read: `_holdings` / `_cash` / `_totals` / `_dividends`
+already return structured JSON for `AdvisorCheck`. The dashboard added only `Snapshot.totalSeries()`
+and `Snapshot.dividendSeries()` for the charts. ⚠️ **Keep those two out of `Snapshot.collectAll()`** —
+that payload is serialized into the LLM prompt, and a year of daily points would just burn context.
+
+The allocation donut is derived from `holdings` + `cash`, **not** from the `配置` sheet, because that
+sheet's columns are read dynamically by header name and have changed before.
+
+**Access control.** The webhook deployment is `ANYONE_ANONYMOUS`, so `doGet` is publicly reachable and
+must gate itself: `Dashboard.isAuthorized()` compares `Session.getActiveUser()` against
+`getEffectiveUser()` — anonymous visitors get an empty string and are rejected. This needs the
+`userinfo.email` scope in `appsscript.json`; without it the gate silently fails.
+Run `checkDashboardAuth()` in the GAS editor to see what the gate actually sees.
+
+**Open the dashboard at the `/dev` URL**, which forces Google login and always serves HEAD:
+
+```
+https://script.google.com/macros/s/AKfycbwIzgwVKM9nhhlE6kVInaIdu4JUjS7pGczmJaF-kHs/dev
+```
+
+The `/exec` URL is the anonymous webhook deployment and deliberately returns `Not Found` for GET.
+
+**Two GAS constraints that already cost one failed push each:**
+- File names ignore extensions — `Dashboard.gs` and `Dashboard.html` collide. Hence `DashboardPage.html`.
+- `addMetaTag()` accepts only `viewport`, `apple-mobile-web-app-capable`, `mobile-web-app-capable`,
+  and `google-site-verification`. Anything else (e.g. `theme-color`) throws. Meta tags written inside
+  the HTML file are ignored entirely, so `addMetaTag` is the only route.
 
 ### Memory System
 - **Short-term** (`short_term_memory` sheet): keyed entries with expiry timestamps, injected into every prompt, cleaned by daily trigger
