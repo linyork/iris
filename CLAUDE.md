@@ -41,7 +41,7 @@ The **pre-push git hook** (`.git/hooks/pre-push`) automatically runs `clasp push
 1. `Main.gs` — `doPost()` receives the LINE **or** Telegram webhook, normalizes it into a single LINE-shaped event object, deduplicates via `CacheService` (6h TTL), silently drops non-master events, calls `ChatBot.reply()`
 2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 3 turns). Injects short-term memory + relevant knowledge into system context before each call. Caches tool results within a single turn to prevent duplicate calls.
 3. `AIServiceFactory.gs` — Routes to `GeminiService` or `NvidiaService` based on `env!B3`. NVIDIA path goes through `AIAdapter` (Gemini ↔ OpenAI format conversion) so the rest of the codebase always speaks Gemini format.
-4. `Tools.gs` — Defines and executes 6 tools: `getHoldings`, `getDashboard`, `getHistory`, `rememberShortTerm`, `saveKnowledge`, `searchKnowledge`
+4. `Tools.gs` — Defines and executes **12** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. Asset reads (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`), one write (`recordDividend`), memory (`rememberShortTerm`, `saveKnowledge`, `searchKnowledge`, `listMemories`, `deleteMemory`), external (`searchWeb`).
 5. `GoogleSheet.gs` — All data access. Single spreadsheet instance cached per execution.
 
 ### AI Provider Switching
@@ -58,6 +58,28 @@ Switch provider by setting `env!B3` in the Google Sheet to `GEMINI` or `NVIDIA`.
 Control goes out as `chat_template_kwargs: {thinking, reasoning_effort}` from the `deepseek-ai/deepseek-v4` branch in `NvidiaService.gs`. ⚠️ **That field must always be sent for V4 models — omitting it makes NIM hang rather than error.** Reasoning text comes back in `reasoning_content` (separated by `AIAdapter.fromOpenAIResponse`) and consumes the `max_tokens` budget, which is why `SMART` gets a much larger budget than `FAST`.
 
 **Resilience.** deepseek-v4-flash is popular on NIM and overloads often (503 `ResourceExhausted`, 504, and dropped connections). Two layers cover this: `NvidiaService.callAPI` retries 3× with 2s→4s backoff, counting **both** bad status codes and thrown connection exceptions as retryable; if it still returns null, `AIServiceFactory` falls back once to `Config.NVIDIA_FALLBACK_MODEL` (`mistralai/ministral-14b-instruct-2512`, non-thinking, native function calling). When changing the primary model, verify the fallback is still alive too.
+
+### Slash Commands
+
+`Commands.gs` intercepts `/`-prefixed messages in `doPost` **before** `ChatBot.reply()`. Telegram's
+command menu is only a UI hint — tapping an entry still sends a plain text message — so commands whose
+answer is fixed skip the whole ReAct loop and one LLM call.
+
+`Commands.tryHandle(event)` returns `null` for anything that isn't a command, which is what tells
+`doPost` to fall through to ChatBot. ⚠️ **Returning an empty string instead of `null` would make
+`doPost` treat it as handled and the message would vanish.**
+
+| Command | Behaviour |
+|---|---|
+| `/dashboard` | Returns `Config.DASHBOARD_URL` (Script Property — the dashboard is on the HEAD deployment's `/dev`, whose deployment id differs from the webhook's `/exec`, so it cannot be derived) |
+| `/report` | Runs `buildDailyReport()` — the same generator the 09:00 trigger uses, minus the weekend guard, replying only to the caller |
+
+The command list is shared between dispatch and `Telegram.setupCommands()` (`setMyCommands`) so the
+menu cannot drift from what is implemented. **After adding or renaming a command, run
+`setupTelegramCommands()` once in the GAS editor.**
+
+Any handler that calls an LLM must send a real interim message first — `/report` runs SMART with
+thinking plus a `searchWeb`, far longer than the 5-second typing indicator.
 
 ### Web Dashboard
 
