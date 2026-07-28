@@ -40,9 +40,17 @@
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
       overscroll-behavior: contain;
-      /* 底部留白：面板底緣是 Telegram 的手勢區，貼太近會很難點到 */
-      padding: 12px 12px calc(72px + env(safe-area-inset-bottom));
+      padding: 12px 12px 0;
     }
+
+    /* ⚠️ 底部墊片，不是留白美感問題，是必要的。
+       Telegram 沒有 expand 時，webview 的高度仍是整個螢幕高，但只有上面一段
+       露在面板裡 —— 於是 height:100% 拿到的是「整個 webview」而不是「看得到的區域」，
+       最後一段內容落在螢幕外，拉得到卻碰不到。
+       正解是讀 viewportStableHeight，但那個值要靠 Telegram 的事件送進來，
+       在 GAS 的巢狀 iframe 裡收不到。改用墊片把真正的內容頂上來：
+       多捲一段空白沒有代價，內容碰不到才有。 */
+    .bottom-spacer { height: 55vh; }
     .card { background: var(--card); border-radius: 14px; padding: 16px; margin-bottom: 12px; }
     h2 { font-size: 11px; font-weight: 600; color: var(--hint);
          letter-spacing: .08em; text-transform: uppercase; margin: 0 0 12px; }
@@ -162,6 +170,8 @@
       <button type="button" data-q="今年的股利收入狀況如何">股利狀況</button>
     </div>
   </div>
+
+  <div class="bottom-spacer"></div>
 </div>
 
 </div><!-- /#scroll -->

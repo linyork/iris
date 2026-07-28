@@ -61,8 +61,14 @@ Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），
 - [ ] **`tg.initData` 在 GAS 裡永遠是空的**：HtmlService 一定把頁面包進跨 origin 的 iframe，
       而 Telegram 把資料放在最上層 URL 的 hash。必須用 `google.script.url.getLocation()`
       取父層 hash，再從 `tgWebAppData` 取出 initData、`tgWebAppThemeParams` 取出主題色
-- [ ] 同理，**任何依賴 `postEvent` 的 Telegram API（`showConfirm` / `showAlert` / `close`）
-      在 iframe 內都不保證有效**。確認、提示一律自己在頁面內畫；關閉面板要有「可手動關閉」的文案墊底
+- [ ] 同理，**任何依賴 `postEvent` 的 Telegram API（`showConfirm` / `showAlert` / `close` /
+      `expand`）在 iframe 內都不保證有效**。確認、提示一律自己在頁面內畫；
+      關閉面板要有「可手動關閉」的文案墊底
+- [ ] **底部墊片（`.bottom-spacer`）不可以拿掉**。沒 expand 時 Telegram 的 webview 仍是整個
+      螢幕高，但只有上面一段露在面板裡，`height:100%` 拿到的是整個 webview 而非可見區，
+      最後一段內容會落在螢幕外——症狀是「拉得動但一放開就彈回去、底部永遠碰不到」。
+      正解是 `viewportStableHeight`，但那個值靠 Telegram 事件送達，在 iframe 裡收不到。
+      改動版面時記得墊片要留在捲動容器的最後面
 - [ ] 前端配色用 `--tg-theme-*`，但漲跌色維持紅漲綠跌（語意，不隨主題）
 
 ### 如果 `appsscript.json` 有變動
