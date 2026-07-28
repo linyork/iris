@@ -86,11 +86,37 @@
 
     .state { text-align: center; color: var(--hint); padding: 60px 16px; font-size: 14px; }
     .state.err { color: var(--up); }
+
+    /* 確認條：固定在底部，不依賴 Telegram 的 showConfirm */
+    .confirm {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+      background: var(--card); border-top: 1px solid var(--line);
+      padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+      box-shadow: 0 -8px 24px rgba(0,0,0,.3);
+    }
+    .confirm .q { font-size: 14px; margin-bottom: 14px; }
+    .confirm .q b { display: block; font-size: 11px; color: var(--hint);
+                    letter-spacing: .08em; margin-bottom: 6px; font-weight: 600; }
+    .confirm .btns { display: flex; gap: 10px; }
+    .confirm button {
+      flex: 1; border: none; border-radius: 10px; padding: 13px;
+      font: inherit; font-size: 15px; font-weight: 600;
+    }
+    .confirm .no { background: transparent; border: 1px solid var(--line); color: var(--hint); }
+    .confirm .ok { background: var(--accent); color: var(--onAccent); }
   </style>
 </head>
 <body>
 
 <div id="state" class="state">讀取中…</div>
+
+<div class="confirm" id="confirm" hidden>
+  <div class="q"><b>要問 IRIS</b><span id="confirmText"></span></div>
+  <div class="btns">
+    <button type="button" class="no" id="confirmNo">取消</button>
+    <button type="button" class="ok" id="confirmOk">送出</button>
+  </div>
+</div>
 
 <div id="app" hidden>
   <div class="card">
@@ -136,8 +162,36 @@
 var tg = window.Telegram && window.Telegram.WebApp;
 var DATA = null;
 var chart = null;
+var INIT_DATA = '';   // 驗簽用，開機時從父層 hash 取得
 
-if (tg) { tg.ready(); tg.expand(); }
+// ⚠️ GAS 的 HtmlService 一定會把頁面包進一層 iframe（不同 origin），
+// 而 Telegram 是把 initData 放在**最上層網址的 hash**（#tgWebAppData=...）。
+// iframe 內的 telegram-web-app.js 因此永遠讀到空字串，跨 origin 也拿不到 parent.location。
+// google.script.url.getLocation() 是 GAS 專為這個沙箱提供的出口，能取到父層的 hash。
+var parseHash = function (hash) {
+  var out = {};
+  String(hash || '').replace(/^#/, '').split('&').forEach(function (pair) {
+    if (!pair) return;
+    var i = pair.indexOf('=');
+    if (i < 0) return;
+    out[decodeURIComponent(pair.slice(0, i))] = decodeURIComponent(pair.slice(i + 1));
+  });
+  return out;
+};
+
+// 同樣因為 iframe，telegram-web-app.js 也沒能套上主題色，這裡自己套。
+// key 形如 bg_color → CSS 變數 --tg-theme-bg-color
+var applyTheme = function (json) {
+  try {
+    var t = JSON.parse(json);
+    var root = document.documentElement;
+    Object.keys(t).forEach(function (k) {
+      if (typeof t[k] === 'string') {
+        root.style.setProperty('--tg-theme-' + k.replace(/_/g, '-'), t[k]);
+      }
+    });
+  } catch (e) { /* 主題套不上不影響功能，用 fallback 配色 */ }
+};
 
 var fmt = function (n) {
   if (n === null || n === undefined || isNaN(n)) return '—';
@@ -162,28 +216,33 @@ var cssVar = function (n) {
 // ── 送問題給 Iris ────────────────────────────────────────
 // 答案會 push 進對話，不在面板裡顯示 —— 面板是入口，對話才是 Iris 的主場。
 function ask(question) {
-  var go = function () {
-    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+  // 用自製的確認條而不是 tg.showConfirm：後者要靠 postEvent 跟 Telegram 客戶端溝通，
+  // 而我們被包在 GAS 的 iframe 裡，那條路不一定通——不通時 callback 永遠不會回來，
+  // 使用者會覺得點了沒反應。頁面內自己畫最可靠。
+  var box = document.getElementById('confirm');
+  document.getElementById('confirmText').textContent = question;
+  box.hidden = false;
+
+  document.getElementById('confirmOk').onclick = function () {
+    box.hidden = true;
     google.script.run
       .withFailureHandler(function (err) {
-        if (tg) tg.showAlert('送出失敗：' + (err && err.message ? err.message : err));
+        var s = document.getElementById('state');
+        s.hidden = false; s.className = 'state err';
+        s.textContent = '送出失敗：' + (err && err.message ? err.message : err);
       })
-      .miniAppAsk(tg ? tg.initData : '', question);
+      .miniAppAsk(INIT_DATA, question);
 
     // 不等回呼：ReAct 迴圈要數十秒，讓使用者卡在面板上盯著轉圈沒有意義。
-    // 稍微延遲再關，確保請求已經送出。
-    document.getElementById('state').hidden = false;
-    document.getElementById('state').className = 'state';
-    document.getElementById('state').textContent = '已送出，Iris 正在回覆…';
+    var s = document.getElementById('state');
+    s.hidden = false; s.className = 'state';
+    s.innerHTML = '已送出，Iris 正在回覆…<br><br>' +
+                  '<span style="font-size:13px">回到對話即可看到答案，可關閉此面板。</span>';
     document.getElementById('app').hidden = true;
-    setTimeout(function () { if (tg) tg.close(); }, 1200);
+    // tg.close() 在 iframe 內不一定有效，所以上面那句話一定要先講清楚。
+    setTimeout(function () { try { if (tg) tg.close(); } catch (e) {} }, 1500);
   };
-
-  if (tg && tg.showConfirm) {
-    tg.showConfirm('要問 Iris：\n\n' + question, function (ok) { if (ok) go(); });
-  } else {
-    go();
-  }
+  document.getElementById('confirmNo').onclick = function () { box.hidden = true; };
 }
 
 // ── 渲染 ────────────────────────────────────────────────
@@ -307,21 +366,33 @@ document.getElementById('chips').addEventListener('click', function (e) {
   if (b) ask(b.dataset.q);
 });
 
-// ── 載入 ────────────────────────────────────────────────
-(function load() {
+// ── 開機 ────────────────────────────────────────────────
+(function boot() {
   var state = document.getElementById('state');
-  if (!tg || !tg.initData) {
-    state.className = 'state err';
-    state.textContent = '請從 Telegram 內開啟此頁面。';
-    return;
-  }
-  google.script.run
-    .withSuccessHandler(render)
-    .withFailureHandler(function (err) {
+  if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
+
+  google.script.url.getLocation(function (loc) {
+    var h = parseHash(loc && loc.hash);
+
+    if (h.tgWebAppThemeParams) applyTheme(h.tgWebAppThemeParams);
+
+    // 父層 hash 為主，tg.initData 為輔（不同平台行為可能有差異）
+    INIT_DATA = h.tgWebAppData || (tg && tg.initData) || '';
+
+    if (!INIT_DATA) {
       state.className = 'state err';
-      state.textContent = '載入失敗：' + (err && err.message ? err.message : err);
-    })
-    .miniAppData(tg.initData);
+      state.textContent = '請從 Telegram 內開啟此頁面。';
+      return;
+    }
+
+    google.script.run
+      .withSuccessHandler(render)
+      .withFailureHandler(function (err) {
+        state.className = 'state err';
+        state.textContent = '載入失敗：' + (err && err.message ? err.message : err);
+      })
+      .miniAppData(INIT_DATA);
+  });
 })();
 </script>
 </body>

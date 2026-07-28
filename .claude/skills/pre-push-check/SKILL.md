@@ -58,6 +58,11 @@ Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），
 - [ ] **重放保護**：`auth_date` 逾時檢查不能拿掉，`initData` 本身永不過期
 - [ ] `Telegram.WebApp.sendData()` **不能用**——它只對 reply keyboard 按鈕開啟的 Mini App 有效，
       inline 按鈕與選單按鈕都不行。要回傳資料一律走 `google.script.run`
+- [ ] **`tg.initData` 在 GAS 裡永遠是空的**：HtmlService 一定把頁面包進跨 origin 的 iframe，
+      而 Telegram 把資料放在最上層 URL 的 hash。必須用 `google.script.url.getLocation()`
+      取父層 hash，再從 `tgWebAppData` 取出 initData、`tgWebAppThemeParams` 取出主題色
+- [ ] 同理，**任何依賴 `postEvent` 的 Telegram API（`showConfirm` / `showAlert` / `close`）
+      在 iframe 內都不保證有效**。確認、提示一律自己在頁面內畫；關閉面板要有「可手動關閉」的文案墊底
 - [ ] 前端配色用 `--tg-theme-*`，但漲跌色維持紅漲綠跌（語意，不隨主題）
 
 ### 如果 `appsscript.json` 有變動
