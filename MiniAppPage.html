@@ -22,14 +22,26 @@
       --line:    rgba(127,127,127,.22);
     }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-    html, body { margin: 0; padding: 0; }
+
+    /* ⚠️ 頁面必須固定滿版、自己不長高，捲動交給 #scroll。
+       GAS 會把內層 iframe 撐成內容高度，若讓 body 隨內容變高，內層就不再捲動，
+       需要捲的變成外層文件 —— 而外層被 Telegram 的面板限制住，
+       症狀是「拉得動但一放開就彈回去」，最底下的內容永遠碰不到。 */
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
     body {
       background: var(--bg); color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC",
                    "PingFang TC", sans-serif;
       font-size: 15px; line-height: 1.5;
-      padding: 12px 12px calc(24px + env(safe-area-inset-bottom));
       -webkit-font-smoothing: antialiased;
+    }
+    #scroll {
+      height: 100%;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+      /* 底部留白：面板底緣是 Telegram 的手勢區，貼太近會很難點到 */
+      padding: 12px 12px calc(72px + env(safe-area-inset-bottom));
     }
     .card { background: var(--card); border-radius: 14px; padding: 16px; margin-bottom: 12px; }
     h2 { font-size: 11px; font-weight: 600; color: var(--hint);
@@ -108,15 +120,9 @@
 </head>
 <body>
 
-<div id="state" class="state">讀取中…</div>
+<div id="scroll">
 
-<div class="confirm" id="confirm" hidden>
-  <div class="q"><b>要問 IRIS</b><span id="confirmText"></span></div>
-  <div class="btns">
-    <button type="button" class="no" id="confirmNo">取消</button>
-    <button type="button" class="ok" id="confirmOk">送出</button>
-  </div>
-</div>
+<div id="state" class="state">讀取中…</div>
 
 <div id="app" hidden>
   <div class="card">
@@ -155,6 +161,16 @@
       <button type="button" data-q="以目前的持倉，接下來有什麼風險需要留意">風險提醒</button>
       <button type="button" data-q="今年的股利收入狀況如何">股利狀況</button>
     </div>
+  </div>
+</div>
+
+</div><!-- /#scroll -->
+
+<div class="confirm" id="confirm" hidden>
+  <div class="q"><b>要問 IRIS</b><span id="confirmText"></span></div>
+  <div class="btns">
+    <button type="button" class="no" id="confirmNo">取消</button>
+    <button type="button" class="ok" id="confirmOk">送出</button>
   </div>
 </div>
 
@@ -389,7 +405,22 @@ document.getElementById('chips').addEventListener('click', function (e) {
 // ── 開機 ────────────────────────────────────────────────
 (function boot() {
   var state = document.getElementById('state');
-  if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
+
+  // 把面板撐到滿版。tg.expand() 是由 telegram-web-app.js 從「它所在的 frame」
+  // 往上 postEvent，而我們在 GAS 的巢狀 iframe 裡，那條路不保證通，所以三種傳輸都試。
+  // 通不通都不影響功能 —— 版面已經改成不依賴面板被撐開。
+  try { if (tg) tg.ready(); } catch (e) {}
+  try { if (tg && tg.expand) tg.expand(); } catch (e) {}
+  try {
+    if (window.TelegramWebviewProxy && window.TelegramWebviewProxy.postEvent) {
+      window.TelegramWebviewProxy.postEvent('web_app_expand', '{}');
+    }
+  } catch (e) {}
+  try {
+    if (window.top && window.top !== window) {
+      window.top.postMessage(JSON.stringify({ eventType: 'web_app_expand', eventData: {} }), '*');
+    }
+  } catch (e) {}
 
   google.script.url.getLocation(function (loc) {
     var rawHash = (loc && loc.hash) || '';
