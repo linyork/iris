@@ -59,7 +59,15 @@ var MiniApp = (() => {
 
       var data = parseInitData(initData);
       var hash = data.hash;
-      if (!hash) return fail('缺少 hash');
+      if (!hash) {
+        // 這個分支幾乎都是前端把 hash 片段拆錯造成的，把實際收到的欄位名記下來才查得動
+        Logger.warning('MiniApp.verifyInitData', '收到的 initData 沒有 hash 欄位', {
+          keys:   Object.keys(data).join(','),
+          length: String(initData || '').length,
+          head:   String(initData || '').slice(0, 120)
+        });
+        return fail('缺少 hash');
+      }
 
       var checkString = Object.keys(data)
         .filter(k => k !== 'hash')

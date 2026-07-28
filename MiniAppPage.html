@@ -168,29 +168,49 @@ var INIT_DATA = '';   // 驗簽用，開機時從父層 hash 取得
 // 而 Telegram 是把 initData 放在**最上層網址的 hash**（#tgWebAppData=...）。
 // iframe 內的 telegram-web-app.js 因此永遠讀到空字串，跨 origin 也拿不到 parent.location。
 // google.script.url.getLocation() 是 GAS 專為這個沙箱提供的出口，能取到父層的 hash。
-var parseHash = function (hash) {
-  var out = {};
-  String(hash || '').replace(/^#/, '').split('&').forEach(function (pair) {
-    if (!pair) return;
-    var i = pair.indexOf('=');
-    if (i < 0) return;
-    out[decodeURIComponent(pair.slice(0, i))] = decodeURIComponent(pair.slice(i + 1));
-  });
-  return out;
+// ⚠️ 不能用 split('&') 拆這個 hash：tgWebAppData 的值**自己就含有 &**（initData 的欄位分隔），
+// 正常情況下被編碼成 %26，但若 GAS 已經先解碼過一次，那些 & 就是真的分隔字元，
+// split 會把 initData 從中間切斷、hash 欄位掉到外層 —— 症狀就是伺服器回「缺少 hash」。
+// 改成抓 tgWebAppData= 到下一個 &tgWebApp 之間的整段（Telegram 其餘參數都以 tgWebApp 開頭，
+// 而 initData 的欄位名絕不會）。
+var extractHashParam = function (hash, name) {
+  var h = String(hash || '').replace(/^#/, '');
+  var key = name + '=';
+  var start = h.indexOf(key);
+  if (start < 0) return '';
+  start += key.length;
+  var rest = h.slice(start);
+  var end = rest.search(/&tgWebApp/);
+  return end < 0 ? rest : rest.slice(0, end);
+};
+
+// 已編碼（含 %3D / %26）就解一次；已經是明文就原樣拿。
+// 目標是讓每個欄位值最後**剛好被解碼一次**，因為 Telegram 是用解碼後的值算簽章的。
+var decodeOnce = function (blob) {
+  if (!blob) return '';
+  return (blob.indexOf('%3D') >= 0 || blob.indexOf('%26') >= 0)
+    ? decodeURIComponent(blob)
+    : blob;
 };
 
 // 同樣因為 iframe，telegram-web-app.js 也沒能套上主題色，這裡自己套。
 // key 形如 bg_color → CSS 變數 --tg-theme-bg-color
-var applyTheme = function (json) {
-  try {
-    var t = JSON.parse(json);
-    var root = document.documentElement;
-    Object.keys(t).forEach(function (k) {
-      if (typeof t[k] === 'string') {
-        root.style.setProperty('--tg-theme-' + k.replace(/_/g, '-'), t[k]);
-      }
-    });
-  } catch (e) { /* 主題套不上不影響功能，用 fallback 配色 */ }
+// 這串是 JSON，裡面沒有 = 或 &，所以 decodeOnce 的判斷條件對它不適用；
+// 直接兩種都試：先當明文解析，失敗再解碼一次。
+var applyTheme = function (blob) {
+  if (!blob) return;
+  var t = null;
+  try { t = JSON.parse(blob); }
+  catch (e) {
+    try { t = JSON.parse(decodeURIComponent(blob)); }
+    catch (e2) { return; }  // 主題套不上不影響功能，用 fallback 配色
+  }
+  var root = document.documentElement;
+  Object.keys(t).forEach(function (k) {
+    if (typeof t[k] === 'string') {
+      root.style.setProperty('--tg-theme-' + k.replace(/_/g, '-'), t[k]);
+    }
+  });
 };
 
 var fmt = function (n) {
@@ -372,12 +392,13 @@ document.getElementById('chips').addEventListener('click', function (e) {
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
   google.script.url.getLocation(function (loc) {
-    var h = parseHash(loc && loc.hash);
+    var rawHash = (loc && loc.hash) || '';
 
-    if (h.tgWebAppThemeParams) applyTheme(h.tgWebAppThemeParams);
+    applyTheme(extractHashParam(rawHash, 'tgWebAppThemeParams'));
 
     // 父層 hash 為主，tg.initData 為輔（不同平台行為可能有差異）
-    INIT_DATA = h.tgWebAppData || (tg && tg.initData) || '';
+    INIT_DATA = decodeOnce(extractHashParam(rawHash, 'tgWebAppData')) ||
+                (tg && tg.initData) || '';
 
     if (!INIT_DATA) {
       state.className = 'state err';
