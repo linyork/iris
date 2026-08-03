@@ -436,17 +436,3 @@ var Position = (() => {
 })();
 
 // ─── GAS 編輯器進入點 ─────────────────────────────────────────────
-
-/** 步驟 3：從「交易」重算持倉、已實現損益、現金、配置、面板 */
-function rebuildPositions() {
-  var r = Position.rebuild();
-  console.log(JSON.stringify(r, null, 2));
-  return r;
-}
-
-/** 只算不寫：確認加權平均成本算出來的數字對不對 */
-function dryRunPositions() {
-  var r = Position.rebuild({ dryRun: true });
-  console.log(JSON.stringify(r, null, 2));
-  return r;
-}

@@ -404,17 +404,3 @@ function setData() {
     Logger.error('setData', '每日快照失敗', ex && ex.message ? ex.message : String(ex));
   }
 }
-
-/** 在 GAS 編輯器手動執行：檢查欄位對齊狀況，不寫入任何資料 */
-function verifyRecordSheet() {
-  var report = DataSync.verify();
-  console.log(report);
-  return report;
-}
-
-/** 在 GAS 編輯器手動執行：模擬今天要寫的那一列，不寫入 */
-function dryRunSetData() {
-  var result = DataSync.run({ dryRun: true });
-  console.log(JSON.stringify(result, null, 2));
-  return result;
-}

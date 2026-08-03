@@ -389,10 +389,3 @@ var AssetSchema = (() => {
 })();
 
 // ─── GAS 編輯器進入點 ─────────────────────────────────────────────
-
-/** 步驟 1：在「資產管理」試算表建立全部分頁與公式（可重複執行） */
-function setupAssetSheet() {
-  var r = AssetSchema.build();
-  console.log(JSON.stringify(r, null, 2));
-  return r;
-}

@@ -497,24 +497,3 @@ var AssetMigrate = (() => {
 })();
 
 // ─── GAS 編輯器進入點 ─────────────────────────────────────────────
-
-/** 步驟 2：從舊試算表搬資料（可重複執行，不會疊加） */
-function migrateLegacyData() {
-  var r = AssetMigrate.run();
-  console.log(JSON.stringify(r, null, 2));
-  return r;
-}
-
-/** 步驟 2b：只搬主檔與交易，跳過 950 天快照（想先確認結構時用） */
-function migrateLegacyDataQuick() {
-  var r = AssetMigrate.run({ skipSnapshot: true });
-  console.log(JSON.stringify(r, null, 2));
-  return r;
-}
-
-/** 步驟 4：新舊對帳 */
-function verifyAssetSheet() {
-  var report = AssetMigrate.verify();
-  console.log(report);
-  return report;
-}

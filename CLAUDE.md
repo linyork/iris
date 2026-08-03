@@ -35,6 +35,22 @@ clasp open
 
 The **pre-push git hook** (`.git/hooks/pre-push`) automatically runs `clasp push` + `clasp deploy` whenever you push to `main`. Manual clasp commands are only needed outside of git pushes.
 
+### Manual entry points live in `DevTools.gs`
+
+The GAS editor's function dropdown is flat — it does not show which file a function came from.
+So **every function whose only purpose is to be run by hand from that dropdown goes in
+`DevTools.gs`**: setup, migration, reconciliation, dry runs, diagnostics. They stay thin and
+call the modules (`AssetSchema.build()`, `Position.rebuild()`, …); the logic stays where it
+belongs.
+
+⚠️ **Two kinds of top-level function must NOT move there**, because they are bound by name and
+renaming or relocating them fails silently:
+
+- Trigger handlers — `setData`, `dailyReport`, `weeklyReport`, `monthlyReport`, `marketAlert`,
+  `dailyCleanUp`, `advisorCheckEvening`
+- Web / `google.script.run` entry points — `doPost`, `doGet`, `dashboardData`, `miniAppData`,
+  `miniAppAsk`
+
 ## Architecture
 
 ### Request Flow

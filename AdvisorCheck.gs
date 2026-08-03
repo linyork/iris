@@ -203,44 +203,6 @@ var AdvisorCheck = (() => {
 
 // ─── Trigger 入口：必須是頂層函式，GAS Time-based Trigger 才抓得到 ──
 
-function advisorCheckMorning()   { AdvisorCheck.runMorning(); }
-function advisorCheckAfternoon() { AdvisorCheck.runAfternoon(); }
-function advisorCheckEvening()   { AdvisorCheck.runEvening(); }
-
-/**
- * 手動測試入口（忽略週末跳過、忽略短路檢查、強制跑完整流程）
- * 在 GAS 編輯器選此函式執行，可直接看到 LLM 判斷結果
- */
-function testAdvisorCheck() {
-  try {
-    Logger.info('testAdvisorCheck', '─── 手動測試開始 ───');
-
-    var snapshot = Snapshot.collectAll();
-    console.log('【Snapshot】');
-    console.log(JSON.stringify(snapshot, null, 2));
-
-    var quiet = Snapshot.isQuiet(snapshot);
-    console.log('\n【短路檢查】isQuiet = ' + quiet);
-
-    var decisions = AdvisorCheck._loadDecisions();
-    console.log('\n【決策清單】共 ' + decisions.length + ' 條');
-    decisions.forEach((d, i) => console.log((i + 1) + '. [' + d.tags + '] ' + d.content));
-
-    var recentAlerts = AlertLog.formatForPrompt(7);
-    console.log('\n【最近通知】\n' + recentAlerts);
-
-    var llmResult = AdvisorCheck._askLLM(snapshot, decisions, recentAlerts, 'manual-test');
-    console.log('\n【LLM 判斷】');
-    console.log(JSON.stringify(llmResult, null, 2));
-
-    if (llmResult && llmResult.shouldAlert) {
-      console.log('\n→ 如果是正式執行，會推送下列訊息：\n' + llmResult.message);
-      console.log('\n（測試模式不實際推送，如需推送請呼叫 advisorCheckEvening()）');
-    }
-
-    Logger.info('testAdvisorCheck', '─── 手動測試結束 ───');
-  } catch (ex) {
-    Logger.error('testAdvisorCheck', '測試失敗', ex);
-    console.log('❌ 失敗：' + ex.message);
-  }
-}
+// 只有 19:00 這班有註冊 trigger。早/午盤兩班在縮成單一時段時就沒有呼叫者了，
+// 已於此處移除；要恢復的話 AdvisorCheck.runMorning / runAfternoon 仍然在。
+function advisorCheckEvening() { AdvisorCheck.runEvening(); }

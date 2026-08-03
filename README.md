@@ -149,6 +149,7 @@ Telegram Bot API ───┤        │
 | `WebSearch.gs` | Google Custom Search 包裝 |
 | `Utils.gs` | 文字格式化、`stripToolCallXml`、`formatForLine` |
 | `Logger.gs` | 寫入 `consolelog` 工作表 |
+| `DevTools.gs` | **所有在 GAS 編輯器手動執行的進入點**：建表、遷移、對帳、dry run、診斷。編輯器的函式下拉選單不顯示檔案來源，所以集中在這裡；trigger 與 web 進入點因為綁定名稱，仍留在各自的檔案 |
 | `Config.gs` | 集中讀取 Script Properties 與 `env!B2/B3`，含 cache |
 
 ---

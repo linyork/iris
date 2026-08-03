@@ -96,24 +96,6 @@ var Dashboard = (() => {
 })();
 
 /**
- * 診斷用：在 GAS 編輯器直接執行，確認認證閘門看到的身分
- *
- * 若儀表板顯示 Not Found，先跑這支看 activeUser 是不是空的。
- * 空字串代表 Google 沒把使用者身分交給這次執行——通常是因為開的是
- * /exec（匿名部署）而不是 /dev，或是新增 scope 後尚未重新授權。
- */
-function checkDashboardAuth() {
-  var active    = '';
-  var effective = '';
-  try { active    = Session.getActiveUser().getEmail(); }    catch (e) { active    = '（拋錯：' + e.message + '）'; }
-  try { effective = Session.getEffectiveUser().getEmail(); } catch (e) { effective = '（拋錯：' + e.message + '）'; }
-
-  console.log('activeUser（存取者）  : ' + (active    || '（空字串）'));
-  console.log('effectiveUser（執行者）: ' + (effective || '（空字串）'));
-  console.log('isAuthorized          : ' + Dashboard.isAuthorized());
-}
-
-/**
  * 供前端 google.script.run 呼叫的頂層進入點
  *
  * 頁面本身已由 doGet 擋過一次，這裡再擋一次是縱深防禦：
