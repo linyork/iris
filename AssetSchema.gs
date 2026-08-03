@@ -1,0 +1,381 @@
+/**
+ * AssetSchema
+ * @description 「資產管理」試算表的結構定義與建表程式
+ *
+ * 設計原則：**一切從交易明細推導。**
+ *
+ *   輸入層（人或 Iris 會寫）  標的 / 帳戶 / 實體資產 / 交易
+ *   計算層（程式或公式產生）  持倉 / 已實現損益 / 現金 / 配置 / 面板
+ *   歷史層                   每日快照（長表）
+ *   系統層                   env / consolelog / chat / …（與 iris 舊表同構）
+ *
+ * 計算層的分頁**不要手改** —— `Position.rebuild()` 會整段覆寫。
+ * 要修正數字，去改 `交易` 那一列。
+ *
+ * 兩個刻意的取捨：
+ *
+ * 1. 成本用**加權平均法**（與台灣券商對帳單一致），不是先進先出。
+ *    賣出時按當下均價沖銷，剩餘成本才對得起來。這沒辦法用試算表公式算 ——
+ *    需要逐筆遞推 —— 所以 `持倉` / `已實現損益` 由 Apps Script 重算後寫入。
+ *
+ * 2. 欄位一律以**標題文字**定位（`_headerMap`），不用固定索引。
+ *    這是舊 sheet 上踩過的坑，見 CLAUDE.md「Daily Snapshot Column Contract」。
+ */
+var AssetSchema = (() => {
+  var s = {};
+
+  /** 「資產管理」試算表 */
+  s.SHEET_ID = '1FyzX14qmo6glUwGpwYAoSN4UvUGm4n2kURcxSAOQtys';
+
+  /** 舊的「股票」試算表，只讀，供遷移用 */
+  s.LEGACY_SHEET_ID = '1wKRC30tcoC6FOOW6dKBGFeexqkVUtR3b28NY92tGiWs';
+
+  // ─── 列舉值（Prompt 與工具驗證都引用這裡）────────────────────
+
+  // 「期初」是建倉用的特殊動作：它會建立持倉與成本，但**不產生現金流**
+  // （帳戶期初餘額已經是遷移當下的實際餘額，再扣一次就重複了）。
+  // 同理，遷移進來的歷史交易一律把「帳戶」欄留空 —— 現金表是
+  // SUMIF(帳戶) 出來的，空帳戶自然不會影響任何餘額。
+  s.ACTIONS = ['買進', '賣出', '股利', '存入', '提出', '費用', '利息', '轉出', '轉入', '期初'];
+  s.ACCOUNT_TYPES = ['證券', '現金', '外幣'];
+  s.REGIONS = ['台', '美', '歐', '日', '全球', '新興'];
+  s.KINDS = ['息', '指', '個股', '債', '其他'];
+  s.CATEGORIES = ['投資', '薪資', '生活', '保險', '稅務', '其他'];
+
+  // ─── 分頁定義 ──────────────────────────────────────────────────
+  //
+  // generated: true 代表整張表由 Position.rebuild() 覆寫，人不要手改。
+  // 每個分頁都凍結第一列。
+
+  s.TABS = [
+    {
+      name: '標的',
+      note: '投資標的主檔。新增持股前先在這裡登記一列。',
+      headers: ['代號', '名稱', '市場', '幣別', '報價來源', '區域', '類型', '目標配置%', '狀態', '備註']
+    },
+    {
+      name: '帳戶',
+      note: '帳戶主檔。期初餘額只填一次，之後餘額由交易推導。',
+      headers: ['帳戶', '類型', '幣別', '機構', '期初餘額', '期初日期', '狀態', '備註']
+    },
+    {
+      name: '實體資產',
+      note: '黃金這類非證券資產。數量與單位成本手動維護，現價用公式。',
+      headers: ['名稱', '類別', '數量', '單位', '單位成本', '取得日', '報價來源',
+                '現價', '市值', '成本', '損益', '備註']
+    },
+    {
+      name: '交易',
+      note: '唯一的事實來源。每一筆買賣、股利、存提都在這裡。永遠只新增，不修改歷史列。',
+      headers: ['日期', '動作', '代號', '名稱', '股數', '單價', '手續費', '交易稅',
+                '金額', '現金流', '幣別', '帳戶', '分類', '備註', '來源', '建立時間']
+    },
+    {
+      name: '持倉',
+      generated: true,
+      note: '⚠️ 由 Position.rebuild() 覆寫，請勿手改。要修正請改「交易」。',
+      headers: ['代號', '名稱', '股數', '總成本', '平均成本', '累計股利', '已實現損益',
+                '市價', '市值', '未實現損益', '報酬率', '淨成本', '淨報酬率',
+                '佔股票%', '區域', '類型', '目標配置%', '佔總資產%', '偏離']
+    },
+    {
+      name: '已實現損益',
+      generated: true,
+      note: '⚠️ 由 Position.rebuild() 覆寫。每一筆賣出的沖銷結果。',
+      headers: ['賣出日', '代號', '名稱', '股數', '賣出單價', '賣出淨額',
+                '沖銷成本', '已實現損益', '報酬率', '賣出前均價']
+    },
+    {
+      name: '現金',
+      generated: true,
+      note: '⚠️ 由 Position.rebuild() 覆寫。餘額 = 帳戶期初 + 交易現金流。',
+      headers: ['帳戶', '類型', '幣別', '期初', '交易淨流', '餘額', '匯率', '台幣值']
+    },
+    {
+      name: '配置',
+      generated: true,
+      note: '⚠️ 由 Position.rebuild() 覆寫。三個維度：大類 / 區域 / 類型。',
+      headers: ['維度', '分組', '成本', '市值', '實際%', '目標%', '偏離%', '偏離金額']
+    },
+    {
+      name: '面板',
+      generated: true,
+      note: '⚠️ 由 Position.rebuild() 覆寫。直式 key-value，新增指標不會動到既有位置。',
+      headers: ['指標', '數值', '說明']
+    },
+    {
+      name: '每日快照',
+      note: '每日 18:00 寫入的長表。一列一個項目，加減標的不用改結構。',
+      headers: ['日期', '類型', '鍵', '名稱', '數量', '單價', '市值', '幣別', '狀態']
+    },
+    { name: 'env',               headers: ['name', 'value'] },
+    { name: 'consolelog',        headers: ['timestamp', 'level', 'tag', 'message', 'details'] },
+    { name: 'chat',              headers: ['userId', 'role', 'message', 'timestamp'] },
+    { name: 'short_term_memory', headers: ['key', 'content', 'expire_at', 'category'] },
+    { name: 'knowledge',         headers: ['tags', 'content', 'timestamp'] },
+    { name: 'alert_log',         headers: ['timestamp', 'trigger_source', 'decision_ref', 'message', 'snapshot_summary'] }
+  ];
+
+  // ─── 交易表的公式（第 2 列起整欄填滿）─────────────────────────
+  //
+  // 現金流是整套帳的樞紐：不管什麼動作，最後都要換算成「這個帳戶增減多少錢」。
+  //   買進  −(股數×單價 + 手續費)
+  //   賣出  +(股數×單價 − 手續費 − 交易稅)
+  //   其餘  ±金額欄
+  // 轉帳寫成兩列（轉出 / 轉入），不設「對方帳戶」欄 —— 兩列版本讓每個帳戶的
+  // 餘額都只是一次 SUMIF，不必處理雙向扣抵。
+
+  s.TRADE_FORMULAS = {
+    '名稱': '=IF($C{r}="","",IFERROR(VLOOKUP($C{r},標的!$A:$B,2,FALSE),""))',
+    '現金流':
+      '=IF($B{r}="","",' +
+      'IFS(' +
+      '$B{r}="買進",-(N($E{r})*N($F{r})+N($G{r})),' +
+      '$B{r}="賣出",N($E{r})*N($F{r})-N($G{r})-N($H{r}),' +
+      'OR($B{r}="股利",$B{r}="存入",$B{r}="利息",$B{r}="轉入"),N($I{r}),' +
+      'OR($B{r}="提出",$B{r}="費用",$B{r}="轉出"),-N($I{r}),' +
+      'TRUE,0))'
+  };
+
+  // ⚠️ 公式**只填到有資料的最後一列**，絕對不要預先灌滿幾千列。
+  //    預灌的話 getLastRow() 會回到公式底部，appendRow() 與所有
+  //    「接在最後一列後面」的邏輯都會跳到公式範圍之外，新交易的現金流
+  //    永遠是空的 —— 帳戶餘額就再也不會動。用 s.appendTrade() 新增交易。
+
+  // ─── 工具 ──────────────────────────────────────────────────────
+
+  s.open = () => SpreadsheetApp.openById(s.SHEET_ID);
+
+  /** 標題文字 → 0-based 索引。找不到的欄位回 -1。 */
+  s.headerMap = (sheet) => {
+    var lastCol = Math.max(sheet.getLastColumn(), 1);
+    var raw = sheet.getRange(1, 1, 1, lastCol).getValues()[0]
+      .map(v => String(v === null || v === undefined ? '' : v).trim());
+    var map = {};
+    raw.forEach((h, i) => { if (h && !(h in map)) map[h] = i; });
+    map.__header = raw;
+    return map;
+  };
+
+  s.colLetter = (col) => {
+    var letter = '';
+    while (col > 0) {
+      var mod = (col - 1) % 26;
+      letter = String.fromCharCode(65 + mod) + letter;
+      col = Math.floor((col - 1) / 26);
+    }
+    return letter;
+  };
+
+  /** 讀整張表成物件陣列（以標題為鍵），空列自動略過 */
+  s.readObjects = (sheet) => {
+    var lastRow = sheet.getLastRow();
+    var lastCol = Math.max(sheet.getLastColumn(), 1);
+    if (lastRow < 2) return [];
+    var header = sheet.getRange(1, 1, 1, lastCol).getValues()[0]
+      .map(v => String(v === null || v === undefined ? '' : v).trim());
+    return sheet.getRange(2, 1, lastRow - 1, lastCol).getValues()
+      .filter(r => r.some(v => v !== '' && v !== null && v !== undefined))
+      .map(r => {
+        var o = {};
+        header.forEach((h, i) => { if (h) o[h] = r[i]; });
+        return o;
+      });
+  };
+
+  /** TABS 裡某分頁的預期標題列（找不到回 null） */
+  s.expected = (name) => {
+    var tab = s.TABS.filter(t => t.name === name)[0];
+    return tab ? tab.headers.slice() : null;
+  };
+
+  /**
+   * 檢查標題列是否與 TABS 定義**逐格對齊**。
+   *
+   * ⚠️ 這件事必須嚴格：`_headerMap` 只用在**讀**，寫入一律是位置對應
+   * （`writeBlock` 按索引塞值，產生的公式還把欄位字母寫死成 $A/$C/$H…）。
+   * 順序一旦不合又繼續寫，值就會靜默地跑到隔壁欄 —— 正是舊 sheet 上
+   * 「Daily Snapshot Column Contract」記錄的那個坑。
+   *
+   * @returns {{ok:boolean, at?:number, found?:string, want?:string}} at 為 1-based 欄號
+   */
+  s.checkHeader = (sheet, expected) => {
+    var raw = s.headerMap(sheet).__header;
+    for (var i = 0; i < expected.length; i++) {
+      var actual = String(raw[i] === undefined || raw[i] === null ? '' : raw[i]).trim();
+      if (actual !== expected[i]) {
+        return { ok: false, at: i + 1, found: actual, want: expected[i] };
+      }
+    }
+    return { ok: true };
+  };
+
+  /** 寫入前的守門：欄位對不上就丟例外，不要寫到隔壁欄去 */
+  s.assertHeader = (sheet, width) => {
+    var expected = s.expected(sheet.getName());
+    if (!expected) return;
+    var chk = s.checkHeader(sheet, expected.slice(0, width || expected.length));
+    if (chk.ok) return;
+    throw new Error(
+      '「' + sheet.getName() + '」第 ' + chk.at + ' 欄應該是「' + chk.want + '」，' +
+      '實際是「' + (chk.found || '(空白)') + '」。寫入是位置對應的，欄位錯位會靜默寫錯，' +
+      '請先執行 setupAssetSheet() 修正標題列。'
+    );
+  };
+
+  /**
+   * 覆寫一張 generated 分頁的資料區（保留標題列）。
+   * 先清到最後一列再寫，避免上一次比較長時留下殘影。
+   */
+  s.writeBlock = (sheet, rows, width) => {
+    s.assertHeader(sheet, width);
+    var lastRow = sheet.getLastRow();
+    if (lastRow >= 2) sheet.getRange(2, 1, lastRow - 1, Math.max(sheet.getLastColumn(), width)).clearContent();
+    if (rows.length === 0) return;
+    sheet.getRange(2, 1, rows.length, width).setValues(rows);
+  };
+
+  // ─── 建表 ──────────────────────────────────────────────────────
+
+  /**
+   * 冪等建立或補齊所有分頁。
+   *   - 分頁不存在 → 新增
+   *   - 標題列缺欄 → 補在最後（既有資料不動）
+   *   - 交易表的公式欄 → 重新填滿到 TRADE_FORMULA_ROWS
+   * 不會刪除任何既有分頁、欄位或資料。
+   */
+  s.build = () => {
+    var ss = s.open();
+    var created = [], patched = [];
+
+    s.TABS.forEach(tab => {
+      var sheet = ss.getSheetByName(tab.name);
+      if (!sheet) {
+        sheet = ss.insertSheet(tab.name);
+        created.push(tab.name);
+      }
+
+      // 標題列必須與 TABS 逐格對齊 —— 補欄一律補在「它該在的位置」，
+      // 不是補在最後面。補在最後面而寫入又照 TABS 順序，兩者就會錯開。
+      var chk = s.checkHeader(sheet, tab.headers);
+      if (!chk.ok) {
+        if (chk.found === '') {
+          // 尾端缺欄（含全新空表）：直接補上，既有資料的欄位位置不受影響
+          var tail = tab.headers.slice(chk.at - 1);
+          sheet.getRange(1, chk.at, 1, tail.length).setValues([tail]);
+          patched.push(tab.name + '：+' + tail.join('、'));
+        } else if (tab.generated) {
+          // 計算層本來就整段覆寫，標題列重寫最安全
+          sheet.getRange(1, 1, 1, tab.headers.length).setValues([tab.headers]);
+          patched.push(tab.name + '：標題列重寫（原第 ' + chk.at + ' 欄為「' + chk.found + '」）');
+        } else {
+          // 輸入層有人工資料，不能自作主張搬欄位
+          throw new Error(
+            '「' + tab.name + '」第 ' + chk.at + ' 欄應該是「' + chk.want + '」，' +
+            '實際是「' + chk.found + '」。這張是輸入層分頁，程式不會自動搬動既有資料的欄位，' +
+            '請手動把標題列調整成：' + tab.headers.join(' | ')
+          );
+        }
+      }
+
+      try {
+        sheet.setFrozenRows(1);
+        sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).setFontWeight('bold');
+      } catch (e) { /* 格式失敗不影響資料 */ }
+    });
+
+    s.applyTradeFormulas(ss);
+    _removeDefaultSheet(ss);
+
+    var result = { created: created, patched: patched, tabs: s.TABS.length };
+    Logger.info('AssetSchema.build', '建表完成', result);
+    return result;
+  };
+
+  /**
+   * 重填交易表的公式欄，範圍是第 2 列到**最後一列有日期的資料**。
+   * 大量寫入交易之後呼叫一次即可。
+   */
+  s.applyTradeFormulas = (ss) => {
+    ss = ss || s.open();
+    var sheet = ss.getSheetByName('交易');
+    if (!sheet) return 0;
+    var map = s.headerMap(sheet);
+    var dateIdx = map['日期'];
+    if (dateIdx === undefined) return 0;
+
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return 0;
+    var dates = sheet.getRange(2, dateIdx + 1, lastRow - 1, 1).getValues();
+    var lastData = 0;
+    dates.forEach((d, i) => {
+      if (d[0] !== '' && d[0] !== null && d[0] !== undefined) lastData = i + 2;
+    });
+    if (lastData < 2) return 0;
+    var n = lastData - 1;
+
+    Object.keys(s.TRADE_FORMULAS).forEach(colName => {
+      var idx = map[colName];
+      if (idx === undefined || idx < 0) return;
+      var tpl = s.TRADE_FORMULAS[colName];
+      var values = [];
+      for (var r = 2; r <= lastData; r++) values.push([tpl.replace(/\{r\}/g, r)]);
+      sheet.getRange(2, idx + 1, n, 1).setFormulas(values);
+    });
+    return n;
+  };
+
+  /**
+   * 新增一筆交易，並補上該列的公式欄。
+   * 這是新增交易的**唯一正確途徑** —— 直接 appendRow 會少掉現金流公式，
+   * 那筆錢就不會進帳戶餘額。
+   * @param {object} fields 以標題文字為鍵，例如 {日期:'2026-08-03', 動作:'賣出', …}
+   * @returns {number} 寫入的列號
+   */
+  s.appendTrade = (fields, ss) => {
+    ss = ss || s.open();
+    var sheet = ss.getSheetByName('交易');
+    if (!sheet) throw new Error('找不到「交易」分頁，請先執行 setupAssetSheet()');
+
+    var map = s.headerMap(sheet);
+    var header = map.__header.filter(h => h !== '');
+    var row = new Array(header.length).fill('');
+    Object.keys(fields).forEach(k => {
+      if (map[k] !== undefined) row[map[k]] = fields[k];
+    });
+
+    var r = sheet.getLastRow() + 1;
+    sheet.getRange(r, 1, 1, row.length).setValues([row]);
+
+    Object.keys(s.TRADE_FORMULAS).forEach(colName => {
+      var idx = map[colName];
+      if (idx === undefined) return;
+      sheet.getRange(r, idx + 1).setFormula(s.TRADE_FORMULAS[colName].replace(/\{r\}/g, r));
+    });
+    return r;
+  };
+
+  /** 新試算表預設會有一張空的「工作表1」，建完就移除 */
+  var _removeDefaultSheet = (ss) => {
+    try {
+      var known = s.TABS.map(t => t.name);
+      ss.getSheets().forEach(sh => {
+        if (known.indexOf(sh.getName()) >= 0) return;
+        if (sh.getLastRow() > 0 || sh.getLastColumn() > 1) return;   // 有東西就不碰
+        if (ss.getSheets().length <= 1) return;
+        ss.deleteSheet(sh);
+      });
+    } catch (e) { /* 刪不掉就算了 */ }
+  };
+
+  return s;
+})();
+
+// ─── GAS 編輯器進入點 ─────────────────────────────────────────────
+
+/** 步驟 1：在「資產管理」試算表建立全部分頁與公式（可重複執行） */
+function setupAssetSheet() {
+  var r = AssetSchema.build();
+  console.log(JSON.stringify(r, null, 2));
+  return r;
+}

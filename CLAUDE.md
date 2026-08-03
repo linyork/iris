@@ -224,6 +224,89 @@ not authoritative. Filter on it before computing volatility or day-change statis
 reports which columns would be inserted and where, without writing anything. `dryRunSetData()`
 previews the entire row today's run would write.
 
+## 資產管理 Spreadsheet (v2, not yet wired in)
+
+A second, transaction-sourced spreadsheet — `AssetSchema.SHEET_ID` — built by
+`AssetSchema.gs` / `Position.gs` / `AssetMigrate.gs`. **Iris still reads the legacy sheet
+(`Config.SHEET_ID`); nothing here is live yet.** These three files are additive and are not
+called by any trigger.
+
+Why it exists: in the legacy sheet, holdings and cost basis are *state* — hand-typed final
+values. Nothing can be derived from them, so there is no annualised return, no realised P&L,
+no way to answer "how much did I put in this year". Here everything is a projection of one
+`交易` table, which also makes "I sold 3000 shares of 0056 at 49.5, fee 21" a single appended
+row rather than a multi-cell edit.
+
+| Layer | Tabs | Who writes |
+|---|---|---|
+| Input | `標的` `帳戶` `實體資產` `交易` | human / Iris tools |
+| Derived | `持倉` `已實現損益` `現金` `配置` `面板` | `Position.rebuild()` — **overwritten wholesale, never hand-edit** |
+| History | `每日快照` (long format) | daily job |
+| System | `env` `consolelog` `chat` `short_term_memory` `knowledge` `alert_log` | same as legacy |
+
+Entry points, in order: `setupAssetSheet()` → `migrateLegacyData()` → `rebuildPositions()` →
+`verifyAssetSheet()`. All are idempotent; migration re-runs replace their own
+`來源 = migration` rows instead of stacking.
+
+Six things worth knowing before touching this:
+
+- **The generated tabs are written by position, not by header lookup.** `writeBlock()` fills
+  columns by index and the formulas it emits hardcode column letters (`$A`, `$H`, `$I`…), so
+  the header row of every tab must match its `TABS` entry cell for cell. `AssetSchema.build()`
+  enforces that: a missing *trailing* column is appended, a generated tab whose order is wrong
+  has its header row rewritten, and an **input** tab whose order is wrong makes `build()`
+  throw rather than shuffle human data. `writeBlock()` re-checks before every write.
+  ⚠️ **Adding a column to the middle of a `TABS` headers array is therefore a schema
+  migration, not an edit** — the older sheet would otherwise take it at the end and every
+  later column would be written one place off, silently. Same failure mode as
+  [Daily Snapshot Column Contract](#daily-snapshot-column-contract); the note at the top of
+  `AssetSchema.gs` claiming header-text addressing describes reads only.
+- **Cost basis is weighted-average**, matching TW broker statements. It is path-dependent —
+  the third sale's basis depends on the order of the first two trades — so it cannot be a
+  spreadsheet formula. `Position.replay()` walks the trades in date order (input order breaks
+  ties within a day) and writes the result. That is also where realised P&L comes from.
+- **`期初` is a special action**: it creates a position and cost basis but produces **no cash
+  flow**. Account opening balances are already today's real balances; charging the seed
+  purchase against them would double-count. For the same reason every migrated row leaves
+  `帳戶` blank — the cash tab is a `SUMIF` over `帳戶`, so a blank one touches nothing.
+- **Never `appendRow` into `交易`.** Use `AssetSchema.appendTrade()`, which writes the row
+  *and* its formula columns. A row without the `現金流` formula silently never reaches any
+  account balance. Relatedly, `applyTradeFormulas()` fills only down to the last row that has
+  a date — pre-filling thousands of blank rows would push `getLastRow()` past the data and
+  break every append.
+- **XIRR starts at the migration date, not at first purchase.** There are no original trade
+  records, so each holding gets one `期初` row dated the migration day. Migrated historical
+  dividends are excluded from the XIRR cash flows — leaving them in would create positive
+  flows with no matching investment and blow the number up. Replace the `期初` rows with real
+  broker history and the figure becomes real.
+  **That date is sticky**: re-running the migration reuses the existing `期初` date instead of
+  moving it to today. Moving it forward could place the seed rows *after* trades you have
+  already recorded, and `replay()` would drop those sales as "sold with no position". If a
+  real trade predates the epoch, `AssetMigrate.run()` refuses outright — pass `{force: true}`
+  only when you have decided what happens to those rows.
+- **A sale larger than the position is clamped, and the clamp is not silent.** `replay()`
+  caps the quantity at what is held, but the trade row's `現金流` formula still credits the
+  full typed quantity — so 持倉 would be right while 現金 is wrong. The mismatch is returned
+  in `rebuild()`'s `warnings` *and* written as `⚠️ 待修正` rows at the top of `面板`
+  (key-value + `VLOOKUP`, so inserting rows there breaks no references). Fix the trade row;
+  don't just re-run.
+
+`test_asset.cjs` mocks the Apps Script API (including a small formula evaluator) and runs
+build → migrate → rebuild → reconcile against the real legacy data, asserting that every
+derived total (總資產, 股票市值, 未實現損益, per-account cash) equals what the legacy sheet
+already shows. 84 assertions, `node test_asset.cjs`. The last three groups cover the traps
+above: header misalignment is refused, an oversold row reaches `面板`, and a re-run does not
+move `期初`.
+
+⚠️ **Expected values are derived from the fixture at runtime, never written into the test
+file** — see [No real figures in git](#no-real-figures-in-git). Hardcoding them would also
+decouple the assertions from the data they are supposed to check.
+
+One figure deliberately does **not** match: 累計股利 comes out higher than the legacy sheet's
+`總股利`. That was a `SUMIF` against the current holdings table, so dividends from positions
+since sold (2412, 2881, 00687B) were never counted. The migration registers those as
+`狀態 = 已出清` instruments, so the difference is a correction, not a regression.
+
 ### Scheduled Triggers (set via `setupAllTriggers()` in `Main.gs`)
 - `04:00` — `dailyCleanUp()`: purge expired STM + chat rows older than 30 days
 - `18:00` — `setData()` in `DataSync.gs`: write daily asset snapshot to `@所有股票紀錄`
