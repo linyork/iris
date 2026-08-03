@@ -2,8 +2,8 @@
  * AssetTools
  * @description 「資產管理」新表的用例層 —— Iris 的工具會呼叫這裡
  *
- * 目前只有寫入面接上新表。**讀取面（getHoldings / getDashboard / …）仍然讀舊表**，
- * 所以每次寫入都會在回覆裡講清楚舊表沒有跟著動 —— 不然主人會拿舊數字做決定。
+ * 讀寫兩面都在新表了：寫入走這裡，讀取走 Snapshot（getHoldings / getDashboard / …）。
+ * 舊表只剩系統類分頁（chat / 記憶 / 知識）與股利鏡像還在用。
  *
  * 設計上刻意讓「說一句話」對應「append 一列」：
  *   「今天賣掉 3000 股 0056，49.5，手續費 21」→ 交易表加一列 → Position.rebuild()
@@ -175,7 +175,7 @@ var AssetTools = (() => {
       var rebuilt = Position.rebuild();
 
       // ── 股利同步回舊表 ──
-      // 讀取面還在舊表，這裡不同步的話「今年股利多少」會少算這一筆。
+      // 舊表留著當備援，順手保持它的股利流水帳是完整的。
       var mirrored = '';
       if (action === '股利') {
         try {
@@ -224,8 +224,7 @@ var AssetTools = (() => {
 
       // 讀取面還沒切換，這句一定要留著
       if (action !== '股利') {
-        lines.push('※ 這筆只進了新的「資產管理」表。你查持倉／總資產時我讀的還是舊表，' +
-                   '所以舊表的股數與成本需要另外更新，或等切換完成。');
+        lines.push('※ 舊表沒有跟著動，但查詢已經改讀新表，所以我回答你的數字會是對的。');
       }
 
       Logger.info('AssetTools.recordTrade', '記錄交易', {

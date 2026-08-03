@@ -8,10 +8,9 @@
  *   chat             — [userId, role, message, timestamp]
  *   short_term_memory— [key, content, expire_at, category]
  *   knowledge        — [tags, content, timestamp]
- *   所有股票          — row1: header, row2: 0000 合計列, row3+: 個別持股
- *   面板              — B1:B8 摘要, C1:D4 淨值, E1:F8 各帳戶現金
- *   配置              — row2-10: 各 ETF, row11-21: 配置比例
- *   @所有股票紀錄      — A:日期, B:總價值, C-J:各 ETF 股價, K+:現金
+ *
+ * ⚠️ 資產類的讀取（持倉/總覽/歷史/股利）已改走 Snapshot，讀新的「資產管理」表；
+ *    這裡只剩系統類分頁（chat / 記憶 / 知識）與舊表的股利鏡像仍在 SHEET_ID。
  */
 var GoogleSheet = (() => {
   var gs = {};
@@ -271,59 +270,55 @@ var GoogleSheet = (() => {
    */
   gs.getDividendHistory = (year) => {
     try {
-      var sheet = getSheet().getSheetByName('@股利');
-      if (!sheet) return '找不到「@股利」工作表';
-      var lastRow = sheet.getLastRow();
-      if (lastRow < 2) return '（尚無股利紀錄）';
+      var ss = Snapshot._open();
+      var rows = AssetSchema.readObjects(ss.getSheetByName('交易'))
+        .filter(r => String(r['動作'] || '').trim() === '股利')
+        .map(r => ({
+          date: r['日期'] instanceof Date ? r['日期'] : new Date(String(r['日期'])),
+          code: String(r['代號'] || '').trim(),
+          amount: Number(String(r['金額']).replace(/[,$]/g, '')) || 0
+        }))
+        .filter(r => r.date && !isNaN(r.date.getTime()) && r.amount > 0);
 
-      var data = sheet.getRange(2, 1, lastRow - 1, 3).getValues()
-        .filter(r => r[0] && r[1] && r[2]);
+      if (rows.length === 0) return '（尚無股利紀錄）';
+      if (year) rows = rows.filter(r => r.date.getFullYear() === Number(year));
+      if (rows.length === 0) return '（' + year + ' 年沒有股利紀錄）';
 
-      if (year) {
-        data = data.filter(r => String(r[0]).startsWith(String(year)));
-      }
-
-      if (data.length === 0) return (year ? year + ' 年' : '') + '無股利紀錄';
-
-      var bySymbol = {};
-      var total    = 0;
-      data.forEach(r => {
-        var sym = String(r[1]);
-        var amt = parseFloat(r[2]) || 0;
-        bySymbol[sym] = (bySymbol[sym] || 0) + amt;
-        total += amt;
+      var byYear = {}, byCode = {};
+      rows.forEach(r => {
+        var y = r.date.getFullYear();
+        byYear[y] = (byYear[y] || 0) + r.amount;
+        byCode[r.code] = (byCode[r.code] || 0) + r.amount;
       });
 
-      var label = year ? year + ' 年' : '累計';
-      var lines = [
-        label + '股利統計（共 ' + data.length + ' 筆）',
-        '合計：' + Math.round(total) + ' 元',
-        '月均：' + Math.round(total / 12) + ' 元',
-        '',
-        '各檔明細：'
-      ];
-      Object.keys(bySymbol).sort().forEach(sym => {
-        lines.push('▸ ' + sym + '：' + Math.round(bySymbol[sym]) + ' 元');
-      });
-      lines.push('');
-      lines.push('最近 5 筆：');
-      data.slice(-5).reverse().forEach(r => {
-        lines.push(r[0] + '  ' + r[1] + '  ' + parseFloat(r[2]).toLocaleString() + ' 元');
+      var out = [];
+      var total = rows.reduce((s, r) => s + r.amount, 0);
+      out.push('股利合計 ' + Math.round(total).toLocaleString() + '（' + rows.length + ' 筆）');
+
+      out.push('【依年度】');
+      Object.keys(byYear).sort().forEach(y => {
+        out.push('  ' + y + ': ' + Math.round(byYear[y]).toLocaleString());
       });
 
-      return lines.join('\n');
+      out.push('【依標的】');
+      Object.keys(byCode)
+        .sort((a, b) => byCode[b] - byCode[a])
+        .forEach(c => out.push('  ' + c + ': ' + Math.round(byCode[c]).toLocaleString()));
+
+      out.push('【最近 5 筆】');
+      rows.sort((a, b) => a.date - b.date).slice(-5).reverse().forEach(r => {
+        out.push('  ' + Utilities.formatDate(r.date, 'GMT+8', 'yyyy-MM-dd') +
+          ' ' + r.code + ' ' + Math.round(r.amount).toLocaleString());
+      });
+
+      return out.join('\n');
     } catch (ex) {
-      Logger.error('GoogleSheet.getDividendHistory', '讀取失敗', ex);
+      Logger.error('GoogleSheet.getDividendHistory', '讀取股利紀錄失敗', ex);
       return '讀取股利紀錄時發生錯誤：' + ex.message;
     }
   };
 
-  // ─── Memory Management ───────────────────────────────────────
 
-  /**
-   * 列出所有有效的短期記憶與長期知識
-   * @returns {string} 格式化文字
-   */
   gs.listMemories = () => {
     try {
       var lines = [];
@@ -395,35 +390,52 @@ var GoogleSheet = (() => {
   // ─── Portfolio Tools ──────────────────────────────────────────
 
   /**
-   * 取得完整持倉明細（所有股票 tab）
+   * 取得完整持倉明細（走 Snapshot，讀新表的「持倉」）
    * row2 = 0000 合計列，row3+ = 個別 ETF
    * @returns {string} 格式化文字
    */
+  /**
+   * 持倉明細（給 LLM 讀的文字）
+   *
+   * 走 Snapshot._holdings，不自己讀表 —— 儀表板與聊天回答同一份數字，
+   * 才不會出現「網頁說 A、Iris 說 B」。它也一併帶回當日漲跌與佔比。
+   */
   gs.getHoldings = () => {
     try {
-      var sheet = getSheet().getSheetByName('所有股票');
-      if (!sheet) return '（找不到「所有股票」工作表）';
-      var lastRow = sheet.getLastRow();
-      var lastCol = sheet.getLastColumn();
-      if (lastRow < 2) return '（尚無持倉資料）';
+      var ss = Snapshot._open();
+      var rows = Snapshot._holdings(ss);
+      if (!rows || rows.length === 0) return '（尚無持倉資料）';
 
-      var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-      var data    = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+      var fmt = (n) => (n === null || n === undefined) ? '—' : Math.round(n).toLocaleString();
+      var pct = (n) => (n === null || n === undefined) ? '—' : (n * 100).toFixed(2) + '%';
 
-      var lines = data
-        .filter(row => row[0] !== '' && row[0] !== null)
-        .map(row => {
-          var label = row[0] === '0000' ? '【合計】' : row[0] + ' ' + (row[1] || '');
-          var pairs = headers
-            .map((h, i) => {
-              var v = row[i];
-              if (h === '' || v === '' || v === null || v === '#' || (typeof v === 'string' && v.startsWith('#'))) return null;
-              return h + ': ' + v;
-            })
-            .filter(p => p !== null)
-            .join(' | ');
-          return label + '\n  ' + pairs;
-        });
+      var totalValue = rows.reduce((s, r) => s + (r.marketValue || 0), 0);
+      var totalCost  = rows.reduce((s, r) => s + (r.costBasis || 0), 0);
+      var totalDiv   = rows.reduce((s, r) => s + (r.totalDividendReceived || 0), 0);
+
+      var lines = rows.map(r => {
+        var parts = [
+          '股數: ' + fmt(r.shares),
+          '市價: ' + r.price,
+          '市值: ' + fmt(r.marketValue),
+          '成本: ' + fmt(r.costBasis),
+          '損益: ' + fmt(r.pnl) + '（' + pct(r.pnlPct) + '）',
+          '累計股利: ' + fmt(r.totalDividendReceived),
+          '佔比: ' + pct(r.ratioOfPortfolio)
+        ];
+        if (r.dayChangePct !== null && r.dayChangePct !== undefined) {
+          parts.push('今日: ' + pct(r.dayChangePct));
+        }
+        if (r.realizedPnl) parts.push('已實現損益: ' + fmt(r.realizedPnl));
+        if (r.priceMissing) parts.push('⚠️ 市價抓不到，市值不可信');
+        return r.code + ' ' + r.name + '\n  ' + parts.join(' | ');
+      });
+
+      lines.push('【合計】\n  市值: ' + fmt(totalValue) +
+        ' | 成本: ' + fmt(totalCost) +
+        ' | 未實現損益: ' + fmt(totalValue - totalCost) +
+        '（' + (totalCost > 0 ? pct((totalValue - totalCost) / totalCost) : '—') + '）' +
+        ' | 累計股利: ' + fmt(totalDiv));
 
       return lines.join('\n\n');
     } catch (ex) {
@@ -433,64 +445,48 @@ var GoogleSheet = (() => {
   };
 
   /**
-   * 取得總覽儀表板（面板 + 配置 tab）
-   * @returns {string} 格式化文字
+   * 總覽儀表板：面板（直式 key-value）＋ 各帳戶現金 ＋ 配置三個維度
    */
   gs.getDashboard = () => {
     try {
-      var ss = getSheet();
-      var lines = [];
+      var ss = Snapshot._open();
+      var out = [];
 
-      // ── 面板：摘要數字 ──────────────────────────────────────
-      var panel = ss.getSheetByName('面板');
-      if (panel) {
-        // 左側摘要 A1:B8
-        var leftLabels = panel.getRange('A1:A8').getValues();
-        var leftVals   = panel.getRange('B1:B8').getValues();
-        // 右側淨值 C1:D4
-        var rightLabels = panel.getRange('C1:C4').getValues();
-        var rightVals   = panel.getRange('D1:D4').getValues();
-        // 現金帳戶 E1:F8
-        var cashLabels  = panel.getRange('E1:E8').getValues();
-        var cashVals    = panel.getRange('F1:F8').getValues();
-
-        lines.push('【投資組合摘要】');
-        for (var i = 0; i < 8; i++) {
-          if (leftLabels[i][0]) lines.push('  ' + leftLabels[i][0] + ': ' + leftVals[i][0]);
-        }
-        lines.push('【淨值（扣除現金）】');
-        for (var i = 0; i < 4; i++) {
-          if (rightLabels[i][0]) lines.push('  ' + rightLabels[i][0] + ': ' + rightVals[i][0]);
-        }
-        lines.push('【各帳戶現金】');
-        for (var i = 0; i < 8; i++) {
-          if (cashLabels[i][0]) lines.push('  ' + cashLabels[i][0] + ': ' + cashVals[i][0]);
-        }
-      }
-
-      // ── 配置：ETF 列表與比例 ────────────────────────────────
-      var alloc = ss.getSheetByName('配置');
-      if (alloc) {
-        var lastRow = alloc.getLastRow();
-        var lastCol = alloc.getLastColumn();
-        var headers = alloc.getRange(1, 1, 1, lastCol).getValues()[0];
-        var data    = alloc.getRange(2, 1, lastRow - 1, lastCol).getValues();
-
-        lines.push('【資產配置】');
-        data.forEach(row => {
-          if (!row[0] && !row[1]) return; // 空列跳過
-          var pairs = headers
-            .map((h, i) => {
-              if (!h || row[i] === '' || row[i] === null) return null;
-              return h + ': ' + row[i];
-            })
-            .filter(p => p !== null)
-            .join(' | ');
-          if (pairs) lines.push('  ' + pairs);
+      var panel = AssetSchema.readObjects(ss.getSheetByName('面板'));
+      if (panel.length) {
+        out.push('【資產總覽】');
+        panel.forEach(r => {
+          var k = String(r['指標'] || '').trim();
+          if (!k) return;
+          // 面板用「—— 標題 ——」當分隔列，值是空的
+          if (/^——/.test(k)) { out.push(k); return; }
+          var v = r['數值'];
+          if (v === '' || v === null || v === undefined) return;
+          var note = String(r['說明'] || '').trim();
+          out.push('  ' + k + ': ' + v + (note ? '（' + note + '）' : ''));
         });
       }
 
-      return lines.join('\n') || '（無資料）';
+      var cash = Snapshot._cash(ss);
+      if (cash) {
+        out.push('【各帳戶現金（已換算台幣）】');
+        cash.accounts.forEach(a => out.push('  ' + a.account + ': ' + a.amount.toLocaleString()));
+        out.push('  合計: ' + cash.total.toLocaleString());
+      }
+
+      var alloc = AssetSchema.readObjects(ss.getSheetByName('配置'));
+      if (alloc.length) {
+        out.push('【資產配置】');
+        alloc.forEach(r => {
+          var pairs = Object.keys(r)
+            .filter(k => r[k] !== '' && r[k] !== null && r[k] !== undefined)
+            .map(k => k + ': ' + r[k])
+            .join(' | ');
+          if (pairs) out.push('  ' + pairs);
+        });
+      }
+
+      return out.join('\n') || '（無資料）';
     } catch (ex) {
       Logger.error('GoogleSheet.getDashboard', '讀取儀表板失敗', ex);
       return '讀取儀表板時發生錯誤：' + ex.message;
@@ -498,45 +494,38 @@ var GoogleSheet = (() => {
   };
 
   /**
-   * 取得最近 N 天的每日資產快照（@所有股票紀錄 tab）
-   * @param {number} days - 最近幾天（預設 30，最多 365）
-   * @returns {string} 格式化文字
+   * 最近 N 天的總資產走勢（每日快照的合計列）
+   *
+   * 舊版把每一檔的當日股價都塞進回覆，動輒上百行；這裡只給總資產與股票市值，
+   * 單一標的的歷史價格不是 LLM 回答「最近漲跌」需要的東西。
    */
   gs.getHistory = (days) => {
     try {
       days = Math.min(days || 30, 365);
-      var sheet = getSheet().getSheetByName('@所有股票紀錄');
-      if (!sheet) return '（找不到「@所有股票紀錄」工作表）';
-      var lastRow = sheet.getLastRow();
-      if (lastRow < 2) return '（尚無歷史紀錄）';
+      var ss = Snapshot._open();
+      var series = Snapshot.totalSeries(days, ss);
+      if (!series.length) return '（尚無歷史紀錄）';
 
-      var lastCol  = sheet.getLastColumn();
-      var headers  = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-      var startRow = Math.max(2, lastRow - days + 1);
-      var data     = sheet.getRange(startRow, 1, lastRow - startRow + 1, lastCol).getValues();
+      var first = series[0], last = series[series.length - 1];
+      var head = '最近 ' + series.length + ' 筆總資產紀錄（' +
+        first.date + ' → ' + last.date + '）：';
 
-      var lines = data.map(row => {
-        return headers
-          .map((h, i) => {
-            if (!h || row[i] === '' || row[i] === null) return null;
-            return h + ': ' + row[i];
-          })
-          .filter(p => p !== null)
-          .join(' | ');
-      }).filter(l => l);
-
-      var result = '最近 ' + lines.length + ' 筆紀錄：\n' + lines.join('\n');
-      if (result.length > 4000) {
-        var half = Math.floor(lines.length / 2);
-        var trimmed = lines.slice(0, 5).concat(['... (中間省略) ...']).concat(lines.slice(-5));
-        result = '最近 ' + lines.length + ' 筆紀錄（已截斷，顯示首尾各 5 筆）：\n' + trimmed.join('\n');
+      var body = series.map(r => r.date + ': ' + Math.round(r.total).toLocaleString());
+      if (body.length > 40) {
+        body = body.slice(0, 10).concat(['... 中間省略 ' + (body.length - 20) + ' 筆 ...'])
+                   .concat(body.slice(-10));
       }
-      return result;
+
+      var change = last.total - first.total;
+      var pct = first.total > 0 ? (change / first.total * 100).toFixed(2) + '%' : '—';
+      return head + '\n' + body.join('\n') +
+        '\n區間變化: ' + Math.round(change).toLocaleString() + '（' + pct + '）';
     } catch (ex) {
       Logger.error('GoogleSheet.getHistory', '讀取歷史紀錄失敗', ex);
       return '讀取歷史紀錄時發生錯誤：' + ex.message;
     }
   };
+
 
   return gs;
 })();

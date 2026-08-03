@@ -14,17 +14,15 @@ function marketAlert() {
     var dateStr = Utilities.formatDate(today, 'GMT+8', 'yyyyMMdd');
     var timeStr = Utilities.formatDate(today, 'GMT+8', 'HH:mm');
 
-    // 讀取持倉 ETF 代號（所有股票 row3+，跳過 0000 合計列）
-    var ss    = SpreadsheetApp.openById(Config.SHEET_ID);
-    var sheet = ss.getSheetByName('所有股票');
+    // 讀取目前仍持有的標的（新表「持倉」，股數 0 的已出清標的不必警報）
+    var ss    = Snapshot._open();
+    var sheet = ss.getSheetByName('持倉');
     if (!sheet) return;
 
-    var lastRow = sheet.getLastRow();
-    if (lastRow < 3) return;
-
-    var codes = sheet.getRange(3, 1, lastRow - 2, 1).getValues()
-      .map(function(r) { return String(r[0]).trim(); })
-      .filter(function(c) { return c && c !== '' && c !== '0000'; });
+    var codes = AssetSchema.readObjects(sheet)
+      .filter(function(r) { return Number(String(r['股數']).replace(/,/g, '')) > 0; })
+      .map(function(r) { return String(r['代號']).trim(); })
+      .filter(function(c) { return c !== ''; });
 
     if (codes.length === 0) return;
 

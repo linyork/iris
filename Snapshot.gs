@@ -6,9 +6,25 @@
  * 產出一份結構化 JSON 給 AdvisorCheck 餵給 LLM 判斷。
  *
  * 不做判斷、不做通知、只做資料整理。
+ *
+ * ⚠️ **資料來源已改為新的「資產管理」表**（`AssetSchema.SHEET_ID`）。
+ * 對外的輸出形狀刻意一個欄位都沒動 —— Dashboard、MiniApp、AdvisorCheck
+ * 全都吃這裡的結果，形狀不變它們就不用改。要改欄位的話那三個要一起看。
+ *
+ * 舊表 → 新表的對應：
+ *   所有股票（寬表）      → 持倉
+ *   面板 E1:F8（固定格）  → 現金
+ *   @所有股票紀錄（寬表） → 每日快照（長表，類型=合計 且 鍵=總資產）
+ *   @股利                 → 交易（動作=股利）
+ *   @固定                 → 實體資產
  */
 var Snapshot = (() => {
   var snap = {};
+
+  /** 資料一律讀新的「資產管理」表 */
+  snap._open = () => SpreadsheetApp.openById(AssetSchema.SHEET_ID);
+
+  var _str = (v) => String(v === null || v === undefined ? '' : v).trim();
 
   // ─── 工具函式 ──────────────────────────────────────────────
 
@@ -36,23 +52,53 @@ var Snapshot = (() => {
   // ─── 子模組 ────────────────────────────────────────────────
 
   /**
+   * 每日快照裡的「總資產」逐日序列（由舊到新）
+   * 長表結構：日期 | 類型 | 鍵 | 名稱 | 數量 | 單價 | 市值 | 幣別 | 狀態
+   */
+  var _totalHistory = (ss, limit) => {
+    var sheet = ss.getSheetByName('每日快照');
+    if (!sheet) return [];
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return [];
+
+    // 一天 18 列左右，往回抓足夠的量就好，不要整張讀
+    var span = Math.min(lastRow - 1, (limit || 40) * 40);
+    var startRow = Math.max(2, lastRow - span + 1);
+    var data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 7).getValues();
+
+    return data
+      .filter(r => r[0] && _str(r[1]) === '合計' && _str(r[2]) === '總資產')
+      .map(r => ({
+        date:  r[0] instanceof Date ? _ymd(r[0]) : _str(r[0]),
+        total: _num(r[6])
+      }))
+      .filter(r => r.total > 0)
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  };
+
+  /**
    * 總資產指標：今日 vs 昨日 vs 上週 vs 上月
-   * 資料來源：@所有股票紀錄 B 欄（總價值，setData 寫入）
+   *
+   * 「今天」取的是`面板`的即時總資產，不是快照的最後一列 —— 快照一天只寫一次，
+   * 盤中拿它當今天會落後一整天；歷史比較才用快照。
    */
   snap._totals = (ss) => {
-    var sheet = ss.getSheetByName('@所有股票紀錄');
-    if (!sheet) return null;
+    var rows = _totalHistory(ss, 40);
 
-    var lastRow = sheet.getLastRow();
-    if (lastRow < 2) return null;
+    // 面板的總資產是即時算出來的（持倉市值 + 現金 + 實體資產）
+    var live = null;
+    try {
+      var panel = AssetSchema.readObjects(ss.getSheetByName('面板'));
+      var hit = panel.filter(x => _str(x['指標']) === '總資產')[0];
+      if (hit) live = _num(hit['數值']);
+    } catch (e) { /* 面板讀不到就退回快照 */ }
 
-    var startRow = Math.max(2, lastRow - 40); // 取最近 ~40 筆夠涵蓋一個月
-    var data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 2).getValues();
-
-    var rows = data
-      .filter(r => r[0] && r[1] !== '' && r[1] !== null)
-      .map(r => ({ date: r[0] instanceof Date ? _ymd(r[0]) : String(r[0]), total: _num(r[1]) }))
-      .filter(r => r.total > 0);
+    var todayStr = _ymd(new Date());
+    if (live > 0) {
+      // 同一天的快照列換成即時值，避免今天被算兩次
+      if (rows.length && rows[rows.length - 1].date === todayStr) rows.pop();
+      rows.push({ date: todayStr, total: live });
+    }
 
     if (rows.length === 0) return null;
 
@@ -74,91 +120,48 @@ var Snapshot = (() => {
 
   /**
    * 持倉明細：每檔當日漲跌、市值、佔比、累計股利
-   * 資料源：
-   *   主：所有股票 sheet → 代號/名稱/股數/總成本/當前市價/總股利
-   *        marketValue = 股數 × 當前市價
-   *   備援：配置 sheet → 當前價值（用代號 join，當 GOOGLEFINANCE 出錯時補）
+   *
+   * 來源改成「持倉」—— 那張表本身就是 Position.rebuild() 從交易推導出來的，
+   * 股數、成本、累計股利、已實現損益都是算好的，不必再自己拼。
+   * 市價與市值是表上的 GOOGLEFINANCE 公式；抓不到時市值會是 0，標記 priceMissing
+   * 讓 LLM 知道這檔的數字不可信，而不是默默當成歸零。
+   *
+   * 當日漲跌幅仍然走 StockPrice（TWSE 即時報價），試算表公式沒有這個欄位。
    */
   snap._holdings = (ss) => {
-    var stockSheet = ss.getSheetByName('所有股票');
-    var allocSheet = ss.getSheetByName('配置');
-    if (!stockSheet) return [];
-    var lastRow = stockSheet.getLastRow();
-    var lastCol = stockSheet.getLastColumn();
-    if (lastRow < 3) return [];
+    var sheet = ss.getSheetByName('持倉');
+    if (!sheet) return [];
 
-    // ── 「配置」sheet 的當前價值 fallback ──
-    var fallbackValue = {};
-    if (allocSheet) {
-      try {
-        var aLastRow = allocSheet.getLastRow();
-        var aLastCol = allocSheet.getLastColumn();
-        var aHeaders = allocSheet.getRange(1, 1, 1, aLastCol).getValues()[0]
-          .map(h => String(h || '').trim());
-        var aIdx = (n) => aHeaders.findIndex(h => h === n);
-        var iaCode    = aIdx('代號');
-        var iaCurrent = aIdx('當前價值');
-        if (iaCode >= 0 && iaCurrent >= 0 && aLastRow >= 2) {
-          var aData = allocSheet.getRange(2, 1, aLastRow - 1, aLastCol).getValues();
-          aData.forEach(r => {
-            var code = String(r[iaCode] || '').trim();
-            if (!code || code === '0000') return;
-            fallbackValue[code] = _num(r[iaCurrent]);
-          });
-        }
-      } catch (e) {
-        Logger.warning('Snapshot._holdings', '讀取配置 fallback 失敗', e.message);
-      }
-    }
-
-    // ── 從「所有股票」讀本表 ──
-    var headers = stockSheet.getRange(1, 1, 1, lastCol).getValues()[0]
-      .map(h => String(h || '').trim());
-    var data = stockSheet.getRange(3, 1, lastRow - 2, lastCol).getValues();
-    var idx = (name) => headers.findIndex(h => h === name);
-    var iCode     = idx('代號')   >= 0 ? idx('代號')   : 0;
-    var iName     = idx('名稱')   >= 0 ? idx('名稱')   : 1;
-    var iShares   = idx('股數')   >= 0 ? idx('股數')   : 4;  // E 欄
-    var iCost     = idx('總成本') >= 0 ? idx('總成本') : 5;  // F 欄
-    var iPrice    = idx('當前市價') >= 0 ? idx('當前市價') : 6; // G 欄
-    var iDividend = idx('總股利') >= 0 ? idx('總股利') : 10; // K 欄
-
-    var rawRows = data
-      .filter(r => r[iCode] && String(r[iCode]).trim() !== '')
+    var rows = AssetSchema.readObjects(sheet)
+      .filter(r => _num(r['股數']) > 0)
       .map(r => {
-        var code   = String(r[iCode]).trim();
-        var shares = _num(r[iShares]);
-        var price  = _num(r[iPrice]);
-        var costBasis = _num(r[iCost]);
-        var marketValue = shares > 0 && price > 0 ? shares * price : 0;
-        // 若 GOOGLEFINANCE 故障，用配置 sheet 當 fallback
-        var priceMissing = !price && (fallbackValue[code] || 0) > 0;
-        if (!marketValue && fallbackValue[code]) marketValue = fallbackValue[code];
+        var marketValue = _num(r['市值']);
         return {
-          code: code,
-          name: String(r[iName] || '').trim(),
-          price: price,
-          shares: shares,
+          code: _str(r['代號']),
+          name: _str(r['名稱']),
+          shares: _num(r['股數']),
+          price: _num(r['市價']),
           marketValue: marketValue,
-          costBasis: costBasis,
-          totalDividend: _num(r[iDividend]),
-          priceMissing: priceMissing
+          costBasis: _num(r['總成本']),
+          totalDividend: _num(r['累計股利']),
+          realized: _num(r['已實現損益']),
+          priceMissing: marketValue <= 0
         };
       });
 
-    var totalMarketValue = rawRows.reduce((s, h) => s + h.marketValue, 0);
+    if (rows.length === 0) return [];
+
+    var totalMarketValue = rows.reduce((s, h) => s + h.marketValue, 0);
 
     // ── 抓即時漲跌幅 ──
-    var codes = rawRows.map(h => h.code);
     var livePrices = {};
     try {
-      var raw = StockPrice.getRawPrices(codes);
-      raw.forEach(p => { livePrices[p.code] = p; });
+      StockPrice.getRawPrices(rows.map(h => h.code)).forEach(p => { livePrices[p.code] = p; });
     } catch (e) {
       Logger.warning('Snapshot._holdings', '即時股價抓取失敗，僅使用 Sheet 資料', e.message);
     }
 
-    return rawRows.map(h => {
+    return rows.map(h => {
       var live = livePrices[h.code];
       var pnl = h.marketValue && h.costBasis ? h.marketValue - h.costBasis : null;
       var pnlPct = h.costBasis > 0 ? (h.marketValue - h.costBasis) / h.costBasis : null;
@@ -177,29 +180,30 @@ var Snapshot = (() => {
         ratioOfPortfolio: totalMarketValue > 0 ? _round(h.marketValue / totalMarketValue, 4) : 0,
         isClosed: live ? !!live.isClosed : null
       };
-      if (h.priceMissing) result.priceMissing = true;  // 提示 LLM 此檔當前市價是用配置 sheet 補的
+      // 新表獨有：已實現損益（舊表推導不出來，所以舊版沒有這個欄位）
+      if (h.realized) result.realizedPnl = _round(h.realized);
+      if (h.priceMissing) result.priceMissing = true;
       return result;
     });
   };
 
   /**
-   * 現金：各帳戶水位（面板 E1:F8）
+   * 現金：各帳戶水位（現金表，外幣已換算台幣）
    */
   snap._cash = (ss) => {
-    var sheet = ss.getSheetByName('面板');
+    var sheet = ss.getSheetByName('現金');
     if (!sheet) return null;
     try {
-      var labels = sheet.getRange('E1:E8').getValues();
-      var vals   = sheet.getRange('F1:F8').getValues();
-      var accounts = [];
-      var total = 0;
-      for (var i = 0; i < 8; i++) {
-        var label = String(labels[i][0] || '').trim();
-        if (!label) continue;
-        var v = _num(vals[i][0]);
+      var accounts = [], total = 0;
+      AssetSchema.readObjects(sheet).forEach(r => {
+        var label = _str(r['帳戶']);
+        if (!label) return;
+        // 台幣值 = 餘額 × 匯率，外幣帳戶才不會被當成台幣直接加總
+        var v = _num(r['台幣值']);
         accounts.push({ account: label, amount: _round(v) });
         total += v;
-      }
+      });
+      if (accounts.length === 0) return null;
       return { accounts: accounts, total: _round(total) };
     } catch (e) {
       Logger.warning('Snapshot._cash', '讀取現金失敗', e.message);
@@ -240,23 +244,22 @@ var Snapshot = (() => {
   };
 
   /**
-   * 股利聚合（@股利）
+   * 股利聚合（交易表裡動作＝股利的列）
    *   本月、今年、去年同期、最近 3 筆
    */
   snap._dividends = (ss) => {
-    var sheet = ss.getSheetByName('@股利');
+    var sheet = ss.getSheetByName('交易');
     if (!sheet) return null;
-    var lastRow = sheet.getLastRow();
-    if (lastRow < 2) return null;
 
-    var data = sheet.getRange(2, 1, lastRow - 1, 3).getValues()
-      .filter(r => r[0] && r[1] && r[2] !== '' && r[2] !== null)
+    var data = AssetSchema.readObjects(sheet)
+      .filter(r => _str(r['動作']) === '股利')
       .map(r => ({
-        date: r[0] instanceof Date ? r[0] : new Date(r[0]),
-        code: String(r[1]).trim(),
-        amount: _num(r[2])
+        date: r['日期'] instanceof Date ? r['日期'] : new Date(_str(r['日期'])),
+        code: _str(r['代號']),
+        amount: _num(r['金額'])
       }))
-      .filter(r => !isNaN(r.date.getTime()) && r.amount > 0);
+      .filter(r => r.date && !isNaN(r.date.getTime()) && r.amount > 0)
+      .sort((a, b) => a.date - b.date);
 
     if (data.length === 0) return null;
 
@@ -296,33 +299,25 @@ var Snapshot = (() => {
   };
 
   /**
-   * 黃金（@固定 + 面板總值）
-   * 細節不展開，只給總重量與總市值
+   * 實體資產（黃金）：總重量、件數、市值
    */
   snap._gold = (ss) => {
-    var sheet = ss.getSheetByName('@固定');
+    var sheet = ss.getSheetByName('實體資產');
     if (!sheet) return null;
     try {
-      var lastRow = sheet.getLastRow();
-      if (lastRow < 1) return null;
-      var data = sheet.getRange(1, 1, lastRow, 3).getValues();
-      var totalWeight = 0;
-      var pieces = 0;
-      data.forEach(r => {
-        if (String(r[0]).trim() === '黃金' && r[1]) {
-          totalWeight += _num(r[1]);
-          pieces++;
-        }
-      });
+      var rows = AssetSchema.readObjects(sheet).filter(r => _str(r['類別']) === '黃金');
+      if (rows.length === 0) return null;
       return {
-        totalWeight: _round(totalWeight, 2),
-        pieces: pieces,
-        unit: '錢/兩混合（依 @固定 原始登錄）'
+        totalWeight: _round(rows.reduce((s, r) => s + _num(r['數量']), 0), 2),
+        pieces: rows.length,
+        unit: _str(rows[0]['單位']) || '公克',
+        marketValue: _round(rows.reduce((s, r) => s + _num(r['市值']), 0))
       };
     } catch (e) {
       return null;
     }
   };
+
 
   // ─── Dashboard 專用（不進 collectAll）────────────────────────
   //
@@ -331,31 +326,17 @@ var Snapshot = (() => {
   // 只會吃掉 context 又對判斷沒幫助。
 
   /**
-   * 總資產逐日序列（@所有股票紀錄 A:日期 B:總價值）
+   * 總資產逐日序列（每日快照：類型=合計、鍵=總資產）
    * @param {number} [days]  最近幾天（預設 365）
    * @param {object} [ss]    可傳入已開啟的試算表以省一次 open
    * @returns {Array<{date: string, total: number}>} 由舊到新
    */
   snap.totalSeries = (days, ss) => {
     try {
-      ss = ss || SpreadsheetApp.openById(Config.SHEET_ID);
-      var sheet = ss.getSheetByName('@所有股票紀錄');
-      if (!sheet) return [];
-
-      var lastRow = sheet.getLastRow();
-      if (lastRow < 2) return [];
-
+      ss = ss || snap._open();
       days = Math.min(days || 365, 3650);
-      var startRow = Math.max(2, lastRow - days + 1);
-      var data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 2).getValues();
-
-      return data
-        .filter(r => r[0] && r[1] !== '' && r[1] !== null)
-        .map(r => ({
-          date:  r[0] instanceof Date ? _ymd(r[0]) : String(r[0]),
-          total: _num(r[1])
-        }))
-        .filter(r => r.total > 0);
+      var rows = _totalHistory(ss, days);
+      return rows.slice(Math.max(0, rows.length - days));
     } catch (e) {
       Logger.warning('Snapshot.totalSeries', '讀取總資產序列失敗', e.message);
       return [];
@@ -363,7 +344,7 @@ var Snapshot = (() => {
   };
 
   /**
-   * 股利的年度與月份分佈（@股利）
+   * 股利的年度與月份分佈（交易表裡動作=股利的列）
    * @param {object} [ss]
    * @returns {{byYear: Array<{year, total, count}>, currentYear: number, byMonth: Array<number>}}
    *          byMonth 為當年 1~12 月合計，固定長度 12
@@ -371,20 +352,17 @@ var Snapshot = (() => {
   snap.dividendSeries = (ss) => {
     var empty = { byYear: [], currentYear: new Date().getFullYear(), byMonth: [] };
     try {
-      ss = ss || SpreadsheetApp.openById(Config.SHEET_ID);
-      var sheet = ss.getSheetByName('@股利');
+      ss = ss || snap._open();
+      var sheet = ss.getSheetByName('交易');
       if (!sheet) return empty;
 
-      var lastRow = sheet.getLastRow();
-      if (lastRow < 2) return empty;
-
-      var rows = sheet.getRange(2, 1, lastRow - 1, 3).getValues()
-        .filter(r => r[0] && r[1] && r[2] !== '' && r[2] !== null)
+      var rows = AssetSchema.readObjects(sheet)
+        .filter(r => String(r['動作'] || '').trim() === '股利')
         .map(r => ({
-          date:   r[0] instanceof Date ? r[0] : new Date(r[0]),
-          amount: _num(r[2])
+          date:   r['日期'] instanceof Date ? r['日期'] : new Date(String(r['日期'])),
+          amount: _num(r['金額'])
         }))
-        .filter(r => !isNaN(r.date.getTime()) && r.amount > 0);
+        .filter(r => r.date && !isNaN(r.date.getTime()) && r.amount > 0);
 
       if (rows.length === 0) return empty;
 
@@ -429,7 +407,7 @@ var Snapshot = (() => {
    */
   snap.collectAll = (options) => {
     options = options || {};
-    var ss = SpreadsheetApp.openById(Config.SHEET_ID);
+    var ss = snap._open();
     var now = new Date();
 
     var result = {

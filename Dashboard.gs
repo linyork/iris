@@ -60,7 +60,8 @@ var Dashboard = (() => {
       }
     }
 
-    var ss = SpreadsheetApp.openById(Config.SHEET_ID);
+    // 儀表板的數字全部來自 Snapshot，跟著它一起讀新的「資產管理」表
+    var ss = Snapshot._open();
 
     var holdings = Snapshot._holdings(ss);
     var cash     = Snapshot._cash(ss);

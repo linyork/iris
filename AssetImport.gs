@@ -260,7 +260,7 @@ var AssetImport = (() => {
         lines.push('');
         lines.push('※ 已實現損益與券商數字不同是正常的：券商逐筆配對，本表用加權平均。' +
                    '券商自己的數字已寫進每列備註。');
-        lines.push('※ 這些只進了新的「資產管理」表，舊表沒有跟著動。');
+        lines.push('※ 舊表沒有跟著動；查詢已改讀新表，所以之後問我持倉會是更新後的數字。');
         if (rebuilt.warnings && rebuilt.warnings.length) {
           lines.push('⚠️ ' + rebuilt.warnings.join('；'));
         }

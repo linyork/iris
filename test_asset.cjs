@@ -314,6 +314,9 @@ load('Position.gs');
 load('AssetMigrate.gs');
 load('AssetTools.gs');
 load('AssetImport.gs');
+// Snapshot 需要 StockPrice（TWSE 即時報價），本機測試不打外網
+global.StockPrice = { getRawPrices: () => [] };
+load('Snapshot.gs');
 
 // 用真實資料建好舊試算表
 const legacySS = SpreadsheetApp.openById(AssetSchema.LEGACY_SHEET_ID);
@@ -822,6 +825,51 @@ console.log('\nT12  券商 CSV 匯入');
   const up = upload('證券已實現20260804.csv');
   check('正常上傳會匯入', countTrades() === n1 + 1, countTrades() + ' vs ' + (n1 + 1));
   check('重傳同一份不會重複記', (upload('證券已實現20260804.csv'), countTrades() === n1 + 1), countTrades());
+}
+
+// ─── T13  Snapshot 讀新表 ─────────────────────────────────────────
+// Snapshot 是 Dashboard / MiniApp / AdvisorCheck 共用的接縫，
+// 輸出形狀不能變，只換資料來源。
+console.log('\nT13  Snapshot 改讀新表');
+{
+  const ss = Snapshot._open();
+  check('_open 指向資產管理表', ss === target, String(ss && ss.id));
+
+  const h = Snapshot._holdings(ss);
+  check('_holdings 只回在持部位', h.length > 0 && h.every(x => x.shares > 0), h.length);
+  check('_holdings 欄位形狀不變',
+    h[0] && ['code', 'name', 'shares', 'price', 'marketValue', 'costBasis',
+             'totalDividendReceived', 'pnl', 'pnlPct', 'ratioOfPortfolio']
+      .every(k => k in h[0]), JSON.stringify(Object.keys(h[0] || {})));
+  check('佔比加總約等於 1',
+    Math.abs(h.reduce((s, x) => s + x.ratioOfPortfolio, 0) - 1) < 0.01,
+    h.reduce((s, x) => s + x.ratioOfPortfolio, 0));
+
+  const c = Snapshot._cash(ss);
+  check('_cash 帳戶數與現金表一致',
+    c && c.accounts.length === AssetSchema.readObjects(target.getSheetByName('現金')).length,
+    c && c.accounts.length);
+  check('_cash 合計 = 各帳戶台幣值加總',
+    near(c.total, c.accounts.reduce((s, a) => s + a.amount, 0), 2), c.total);
+
+  const t = Snapshot._totals(ss);
+  const panelTotal = num((AssetSchema.readObjects(target.getSheetByName('面板'))
+    .find(x => x['指標'] === '總資產') || {})['數值']);
+  check('_totals 的今天取面板的即時總資產', near(t.today, panelTotal, 2),
+    t.today + ' vs ' + panelTotal);
+  check('_totals 有歷史比較欄位', 'dayChangePct' in t && 'monthChangePct' in t, JSON.stringify(t));
+
+  const d = Snapshot._dividends(ss);
+  check('_dividends 讀得到交易表裡的股利', d && d.thisYear.count > 0, d && d.thisYear.count);
+
+  const g = Snapshot._gold(ss);
+  check('_gold 讀實體資產', g && g.totalWeight > 0 && g.pieces > 0, JSON.stringify(g));
+
+  const series = Snapshot.totalSeries(365, ss);
+  check('totalSeries 讀每日快照的合計列', series.length > 0 && series[0].date < series[series.length - 1].date,
+    series.length);
+  const ds = Snapshot.dividendSeries(ss);
+  check('dividendSeries 有年度分佈', ds.byYear.length > 0, JSON.stringify(ds.byYear.map(x => x.year)));
 }
 
 // 選用：拿真實的券商匯出檔跑一次解析，只印不斷言（檔案不進版控）
