@@ -219,7 +219,8 @@ Telegram Bot API ───┤        │
 | `getHistory(days)` | 每日資產快照歷史（預設 30 天，最多 365） |
 | `getPrice(symbols)` | 即時台股股價（一次最多 10 檔） |
 | `getDividendHistory(year)` | 股利收入統計 |
-| `recordDividend(symbol, amount, date)` | 登記股利入帳 |
+| `recordDividend(symbol, amount, date)` | 登記股利入帳（內部走 `recordTrade`，新舊兩表都記） |
+| `recordTrade(action, symbol, shares, price, fee, tax, amount, account, date, note)` | **寫進新的「資產管理」表**：買進／賣出／股利／存入／提出／費用／利息／轉出／轉入，記完自動 `Position.rebuild()` 重算持倉與餘額 |
 | `rememberShortTerm(key, content, hours)` | 寫入短期記憶（預設 24h，最長 168h） |
 | `saveKnowledge(tags, content)` | 寫入長期知識（含結構化 tag） |
 | `searchKnowledge(query)` | 關鍵字搜尋長期知識 |

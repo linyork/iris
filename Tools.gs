@@ -84,7 +84,7 @@ var Tools = (() => {
     },
     {
       name: 'recordDividend',
-      description: '在股利紀錄表登記一筆收到的股利。當使用者說「收到 XXX 股利」或「股利入帳」時使用。',
+      description: '登記一筆收到的股利。當使用者說「收到 XXX 股利」或「股利入帳」時使用。內部走 recordTrade，新舊兩張表都會記到。',
       parameters: {
         type: 'object',
         properties: {
@@ -93,6 +93,26 @@ var Tools = (() => {
           date:   { type: 'string', description: '入帳日期，格式 yyyy/MM/dd（可選，預設今日）' }
         },
         required: ['symbol', 'amount']
+      }
+    },
+    {
+      name: 'recordTrade',
+      description: '把一筆交易記進「資產管理」表：買進、賣出、股利、現金存提、費用、利息、帳戶間轉帳。當主人說「今天買了/賣了什麼」「收到股利」「從某個帳戶提了多少」時使用。記完會自動重算持倉、成本、已實現損益與帳戶餘額並回報。資訊不齊（例如只說賣了但沒說幾股或價位）時不要猜，先問。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action:  { type: 'string', description: '動作，擇一：買進 / 賣出 / 股利 / 存入 / 提出 / 費用 / 利息 / 轉出 / 轉入' },
+          symbol:  { type: 'string', description: '股票代號，買進、賣出、股利必填。⚠️ 台股代號要保留前導零，寫 "0056" 不是 "56"' },
+          shares:  { type: 'number', description: '股數（買進、賣出必填）' },
+          price:   { type: 'number', description: '成交單價（買進、賣出必填）' },
+          fee:     { type: 'number', description: '手續費（可選）' },
+          tax:     { type: 'number', description: '交易稅（可選，通常只有賣出才有）' },
+          amount:  { type: 'number', description: '金額（股利與現金類動作必填）' },
+          account: { type: 'string', description: '帳戶名稱，需與「帳戶」表完全一致。買賣與股利若省略、且只有一個證券戶，會自動採用該戶' },
+          date:    { type: 'string', description: '日期，格式 yyyy-MM-dd（可選，預設今天）' },
+          note:    { type: 'string', description: '備註（可選）' }
+        },
+        required: ['action']
       }
     },
     {
@@ -176,7 +196,15 @@ var Tools = (() => {
 
         case 'recordDividend':
           if (!args.symbol || !args.amount) return '缺少必要參數：symbol 與 amount 皆為必填。';
-          return GoogleSheet.recordDividend(args.symbol, args.amount, args.date);
+          // 統一走 recordTrade —— 它會同時寫新表的「交易」與舊表的 @股利。
+          // 只寫其中一邊會讓兩張表從此漂移，而讀取面現在還在舊表。
+          return AssetTools.recordTrade({
+            action: '股利', symbol: args.symbol, amount: args.amount, date: args.date
+          });
+
+        case 'recordTrade':
+          if (!args.action) return '缺少必要參數：action。';
+          return AssetTools.recordTrade(args);
 
         case 'getPrice':
           if (!args.symbols) return '缺少必要參數：symbols。';

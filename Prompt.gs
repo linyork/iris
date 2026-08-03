@@ -44,6 +44,11 @@ var Prompt = (() => {
 ▸ 分析持倉風險涉及外部因素 → searchWeb + getHoldings
 ▸ 問股利收入、年度股利統計 → getDividendHistory
 ▸ 說「收到股利」→ recordDividend（日期預設今日）
+▸ 說「買了 / 賣了 / 提了錢 / 匯了錢 / 付了費用」→ recordTrade
+   動作只能是：買進 / 賣出 / 股利 / 存入 / 提出 / 費用 / 利息 / 轉出 / 轉入
+   買賣必須有 代號＋股數＋單價，缺一律先問，不要自己補
+   代號保留前導零：0056 不是 56
+   記完之後照工具回傳的數字轉述，不要自己重算
 ▸ 問「你記住什麼」→ listMemories
 ▸ 刪記憶 → listMemories 確認名稱 → deleteMemory
 ▸ 給個人化建議前 → 先 searchKnowledge 確認主人偏好

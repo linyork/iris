@@ -300,9 +300,19 @@ global.Date.now = RealDate.now;
 
 // 用間接 eval 讓 .gs 的 var 宣告落在全域，跟 Apps Script 的平坦命名空間一致
 const load = f => (0, eval)(fs.readFileSync(path.join(__dirname, f), 'utf8'));
+// 舊表的股利同步：AssetTools 會呼叫它，這裡記下來供斷言
+const DIVIDEND_MIRROR = [];
+global.GoogleSheet = {
+  recordDividend: (symbol, amount, date) => {
+    DIVIDEND_MIRROR.push({ symbol: String(symbol), amount: Number(amount), date: String(date) });
+    return 'ok';
+  }
+};
+
 load('AssetSchema.gs');
 load('Position.gs');
 load('AssetMigrate.gs');
+load('AssetTools.gs');
 
 // 用真實資料建好舊試算表
 const legacySS = SpreadsheetApp.openById(AssetSchema.LEGACY_SHEET_ID);
@@ -684,6 +694,62 @@ console.log('\nT10  期初日不能因為重跑遷移而移動');
   let forced = false;
   try { AssetMigrate.run({ skipSnapshot: true, force: true }); forced = true; } catch (e) { forced = false; }
   check('force:true 可以覆蓋這個保護', forced);
+}
+
+// ─── T11  recordTrade（Telegram 講一句話就記一筆）──────────────────
+console.log('\nT11  recordTrade 的驗證與寫入');
+{
+  const tradeSheet = target.getSheetByName('交易');
+  const instSheet  = target.getSheetByName('標的');
+  const countTrades = () => AssetSchema.readObjects(tradeSheet).length;
+  const sharesOf = (code) => {
+    const p = AssetSchema.readObjects(target.getSheetByName('持倉'))
+      .find(x => String(x['代號']) === code);
+    return p ? num(p['股數']) : 0;
+  };
+
+  // 拒絕的情況都不可以寫進表裡
+  const n0 = countTrades();
+  check('不認識的動作被擋下',
+    /不認識的動作/.test(AssetTools.recordTrade({ action: '亂寫一通' })), '');
+  check('買賣缺股數會說缺什麼',
+    /股數/.test(AssetTools.recordTrade({ action: '賣出', symbol: H0.code, price: 50 })), '');
+  check('未知帳戶會列出可用的帳戶',
+    /沒有這個帳戶/.test(AssetTools.recordTrade({
+      action: '買進', symbol: H0.code, shares: 1000, price: 50, account: '火星銀行' })), '');
+  check('賣出未登記的標的被擋下',
+    /標的/.test(AssetTools.recordTrade({ action: '賣出', symbol: '9999', shares: 1, price: 1 })), '');
+  check('被擋下的四筆都沒有寫進交易表', countTrades() === n0, countTrades() + ' vs ' + n0);
+
+  // 正常買進
+  const before = sharesOf(H0.code);
+  const r1 = AssetTools.recordTrade({
+    action: '買進', symbol: H0.code, shares: 1000, price: 50, fee: 20, note: '測試買進'
+  });
+  check('買進有記錄成功', /已記錄第 \d+ 列/.test(r1), r1.split('\n')[0]);
+  check('交易表多一列', countTrades() === n0 + 1, countTrades() + ' vs ' + (n0 + 1));
+  check('持倉股數增加 1000', sharesOf(H0.code) === before + 1000, sharesOf(H0.code) + ' vs ' + (before + 1000));
+  check('只有一個證券戶時自動帶入帳戶', /國泰證券戶/.test(r1), r1);
+  check('提醒舊表沒有跟著更新', /舊表/.test(r1), '');
+
+  // 新標的自動登記，且代號必須是文字
+  const instBefore = AssetSchema.readObjects(instSheet).length;
+  const r2 = AssetTools.recordTrade({ action: '買進', symbol: '00929', shares: 500, price: 20 });
+  const inst = AssetSchema.readObjects(instSheet);
+  check('新標的自動加進標的表', inst.length === instBefore + 1, inst.length + ' vs ' + (instBefore + 1));
+  check('新標的的代號保留前導零',
+    inst.some(x => x['代號'] === '00929'), JSON.stringify(inst.map(x => x['代號']).slice(-2)));
+  check('回覆有說明是自動建立的', /自動/.test(r2), r2);
+
+  // 股利要同步回舊表
+  const mirrorBefore = DIVIDEND_MIRROR.length;
+  const r3 = AssetTools.recordTrade({ action: '股利', symbol: H0.code, amount: 12345, date: '2026-09-01' });
+  check('股利有同步寫回舊表 @股利', DIVIDEND_MIRROR.length === mirrorBefore + 1,
+    JSON.stringify(DIVIDEND_MIRROR.slice(-1)));
+  check('同步的日期用舊表的斜線格式',
+    /^2026\/09\/01$/.test((DIVIDEND_MIRROR[DIVIDEND_MIRROR.length - 1] || {}).date || ''),
+    (DIVIDEND_MIRROR[DIVIDEND_MIRROR.length - 1] || {}).date);
+  check('股利不會出現「舊表沒更新」的提醒', !/舊表的股數/.test(r3), r3);
 }
 
 console.log('\n' + (fail === 0 ? '全部通過' : fail + ' 項失敗') + '（' + pass + '/' + (pass + fail) + '）');
