@@ -49,11 +49,14 @@ function doPost(e) {
         if (event.type !== 'message') continue;
       }
 
-      if (!event.message || event.message.type !== 'text') continue;
+      // document 是上傳的檔案（目前只有 Telegram 會送），下面會分流給 AssetImport
+      if (!event.message || (event.message.type !== 'text' && event.message.type !== 'document')) continue;
 
       Logger.info('doPost', '收到訊息', {
         userId: event.source.userId,
-        msg:    event.message.text.slice(0, 80)
+        msg:    event.message.type === 'document'
+                  ? '[檔案] ' + (event.message.document || {}).fileName
+                  : event.message.text.slice(0, 80)
       });
 
       // 非主人事件靜默忽略：Telegram bot 公開可搜尋，任何人都能 DM。
@@ -65,6 +68,14 @@ function doPost(e) {
 
       // 開始處理就先送「正在輸入…」，讓使用者馬上看到反應
       MessagingServiceFactory.indicateTyping(event);
+
+      // 上傳檔案走自己的路：不進 ChatBot，也不花 LLM 配額。
+      // 券商匯出的 CSV 是結構化資料，交給模型改寫只會多一層出錯的機會。
+      if (event.message.type === 'document') {
+        var fileReply = AssetImport.fromUpload(event);
+        if (fileReply) MessagingServiceFactory.push(event.source.userId, fileReply);
+        continue;
+      }
 
       // 斜線指令先攔截：答案固定的指令不必跑完整個 ReAct 迴圈。
       // 回傳 null 才代表不是指令，交給 ChatBot 當自然語言處理。

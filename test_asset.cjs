@@ -313,6 +313,7 @@ load('AssetSchema.gs');
 load('Position.gs');
 load('AssetMigrate.gs');
 load('AssetTools.gs');
+load('AssetImport.gs');
 
 // 用真實資料建好舊試算表
 const legacySS = SpreadsheetApp.openById(AssetSchema.LEGACY_SHEET_ID);
@@ -750,6 +751,95 @@ console.log('\nT11  recordTrade 的驗證與寫入');
     /^2026\/09\/01$/.test((DIVIDEND_MIRROR[DIVIDEND_MIRROR.length - 1] || {}).date || ''),
     (DIVIDEND_MIRROR[DIVIDEND_MIRROR.length - 1] || {}).date);
   check('股利不會出現「舊表沒更新」的提醒', !/舊表的股數/.test(r3), r3);
+}
+
+// ─── T12  券商已實現損益 CSV 匯入 ─────────────────────────────────
+// 用合成的數字，不放真實成交（見 .gitignore 的說明）。
+console.log('\nT12  券商 CSV 匯入');
+{
+  const H1 = HOLD[1];
+  const CSV = '﻿股票名稱,日期,股數,損益,交易別,買進日期,賣出日期,買進單價,賣出單價,手續費,交易稅,買進價金,賣出價金,報酬率,幣別\n' +
+    H1.name + ',2026/08/03,"2,000","3,000",現股,2025/07/08,2026/08/03,20,31.5,40,63,"40,000","62,897",7.5%,台幣\n' +
+    H1.name + ',2026/08/03,500,"1,000",現股,2025/08/06,2026/08/03,21,31.5,12,15,"10,500","15,723",9.5%,台幣\n' +
+    '不存在的標的,2026/08/03,100,"50",現股,2025/08/06,2026/08/03,10,11,1,1,"1,000","1,098",9.8%,台幣\n';
+
+  const tradeSheet = target.getSheetByName('交易');
+  const countTrades = () => AssetSchema.readObjects(tradeSheet).length;
+
+  // 解析
+  const parsed = AssetImport.parseRealized(CSV);
+  check('解析出 2 列（第 3 列的標的不存在）', parsed.rows.length === 2, parsed.rows.length);
+  check('名稱有對應回代號', parsed.rows.every(r => r.code === H1.code),
+    parsed.rows.map(r => r.code).join(','));
+  check('找不到的標的有列進 errors', parsed.errors.some(e => /不存在的標的/.test(e)),
+    JSON.stringify(parsed.errors));
+  // 單價要能還原券商的入帳金額：(賣出價金 + 手續費 + 交易稅) / 股數
+  check('單價是反推的，不是報表上顯示的',
+    Math.abs(parsed.rows[0].price - (62897 + 40 + 63) / 2000) < 1e-6, parsed.rows[0].price);
+
+  // 預覽不可寫入
+  const n0 = countTrades();
+  const preview = AssetImport.importRealized(CSV, { dryRun: true });
+  check('預覽不寫入任何一列', countTrades() === n0, countTrades() + ' vs ' + n0);
+  check('預覽有列出彙總', /賣出 2,500 股/.test(preview), preview.split('\n').find(l => /賣出/.test(l)));
+
+  // 正式匯入
+  const sharesBefore = num((AssetSchema.readObjects(target.getSheetByName('持倉'))
+    .find(x => String(x['代號']) === H1.code) || {})['股數']);
+  const out = AssetImport.importRealized(CSV);
+  check('匯入 2 列', countTrades() === n0 + 2, countTrades() + ' vs ' + (n0 + 2));
+  const sharesAfter = num((AssetSchema.readObjects(target.getSheetByName('持倉'))
+    .find(x => String(x['代號']) === H1.code) || {})['股數']);
+  check('持股減少 2,500', sharesBefore - sharesAfter === 2500, sharesBefore + ' → ' + sharesAfter);
+  check('有說明損益算法與券商不同', /加權平均/.test(out), '');
+
+  // 同一份檔案重匯不可以重複記帳
+  const again = AssetImport.importRealized(CSV);
+  check('重複匯入被去重擋下', countTrades() === n0 + 2, countTrades() + ' vs ' + (n0 + 2));
+  check('回覆有說略過幾列', /略過 2 列/.test(again), again.split('\n')[1]);
+
+  // 券商自己的損益要留在備註裡，之後才對得回去
+  const last = AssetSchema.readObjects(tradeSheet).slice(-1)[0];
+  check('備註保留券商損益與去重鍵',
+    /券商損益/.test(String(last['備註'])) && /imp:/.test(String(last['備註'])),
+    String(last['備註']).slice(0, 60));
+
+  // ── 從 Telegram 收檔案 ──
+  const CSV2 = '﻿股票名稱,日期,股數,損益,交易別,買進日期,賣出日期,買進單價,賣出單價,手續費,交易稅,買進價金,賣出價金,報酬率,幣別\n' +
+    H1.name + ',2026/08/04,100,"120",現股,2025/07/08,2026/08/04,20,31.5,3,4,"2,000","3,143",6%,台幣\n';
+  global.Telegram = { fetchFileText: () => CSV2 };
+  const upload = (fileName, size, caption) => AssetImport.fromUpload({
+    platform: 'TELEGRAM',
+    message: { type: 'document', text: caption || '', document: { fileId: 'f1', fileName: fileName, fileSize: size || 500 } }
+  });
+
+  check('非 csv 檔名被拒絕', /只看得懂 \.csv/.test(upload('報表.pdf')), '');
+  check('過大的檔案被拒絕', /檔案太大/.test(upload('a.csv', 5 * 1024 * 1024)), '');
+
+  const n1 = countTrades();
+  check('附註寫「預覽」時不寫入',
+    /預覽/.test(upload('a.csv', 500, '先預覽一下')) && countTrades() === n1, countTrades());
+  const up = upload('證券已實現20260804.csv');
+  check('正常上傳會匯入', countTrades() === n1 + 1, countTrades() + ' vs ' + (n1 + 1));
+  check('重傳同一份不會重複記', (upload('證券已實現20260804.csv'), countTrades() === n1 + 1), countTrades());
+}
+
+// 選用：拿真實的券商匯出檔跑一次解析，只印不斷言（檔案不進版控）
+//   REALIZED_CSV=path/to.csv node test_asset.cjs
+if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
+  console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);
+  const real = AssetImport.parseRealized(fs.readFileSync(process.env.REALIZED_CSV, 'utf8'));
+  const g = {};
+  real.rows.forEach(r => {
+    if (!g[r.code]) g[r.code] = { name: r.name, shares: 0, net: 0, pnl: 0, n: 0 };
+    g[r.code].shares += r.shares; g[r.code].net += r.net;
+    g[r.code].pnl += r.brokerPnl; g[r.code].n++;
+  });
+  console.log('  解析 ' + real.rows.length + ' 列，錯誤 ' + real.errors.length + ' 項');
+  Object.keys(g).sort().forEach(c => console.log('  ' + c + ' ' + g[c].name +
+    '：' + g[c].n + ' 筆，共 ' + g[c].shares.toLocaleString() + ' 股，入帳 ' +
+    Math.round(g[c].net).toLocaleString() + '，券商損益 ' + Math.round(g[c].pnl).toLocaleString()));
+  real.errors.forEach(e => console.log('  ⚠️ ' + e));
 }
 
 console.log('\n' + (fail === 0 ? '全部通過' : fail + ' 項失敗') + '（' + pass + '/' + (pass + fail) + '）');

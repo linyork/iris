@@ -60,11 +60,52 @@ var Telegram = (() => {
         userId: 'TELEGRAM:' + msg.from.id
       },
       message: {
-        type: 'text',
+        // 帶檔案的訊息型別是 document；doPost 會分流到 AssetImport，不進 ChatBot
+        type: msg.document ? 'document' : 'text',
         text: msg.text || msg.caption || '',
-        id:   String(msg.message_id)
+        id:   String(msg.message_id),
+        document: msg.document ? {
+          fileId:   msg.document.file_id,
+          fileName: msg.document.file_name || '',
+          mimeType: msg.document.mime_type || '',
+          fileSize: msg.document.file_size || 0
+        } : null
       }
     };
+  };
+
+  /**
+   * 下載使用者上傳的檔案並轉成文字。
+   *
+   * 兩段式：getFile 拿到 file_path，再打 /file/bot<token>/<path> 取內容。
+   * ⚠️ 那個下載網址帶著 bot token，**不可以外流或寫進紀錄**。
+   *
+   * 券商匯出的 CSV 可能是 UTF-8（含 BOM）也可能是 Big5，先試 UTF-8，
+   * 解不出中文欄名就改用 Big5 再解一次。
+   *
+   * @param {string} fileId
+   * @returns {string} 檔案文字內容
+   */
+  telegram.fetchFileText = (fileId) => {
+    var meta = JSON.parse(UrlFetchApp.fetch(
+      Config.TELEGRAM_API_BASE + '/getFile?file_id=' + encodeURIComponent(fileId)
+    ).getContentText());
+    if (!meta.ok || !meta.result || !meta.result.file_path) {
+      throw new Error('Telegram getFile 失敗：' + JSON.stringify(meta).slice(0, 200));
+    }
+
+    var blob = UrlFetchApp.fetch(
+      'https://api.telegram.org/file/bot' + Config.TELEGRAM_API_KEY + '/' + meta.result.file_path
+    ).getBlob();
+
+    var text = blob.getDataAsString('UTF-8');
+    if (text.indexOf('股票名稱') < 0 && text.indexOf('日期') < 0) {
+      try {
+        var big5 = blob.getDataAsString('Big5');
+        if (big5.indexOf('股票名稱') >= 0 || big5.indexOf('日期') >= 0) text = big5;
+      } catch (e) { /* 這台機器沒有 Big5 就算了，維持 UTF-8 的結果 */ }
+    }
+    return text;
   };
 
   /**

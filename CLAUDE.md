@@ -359,6 +359,34 @@ since sold (2412, 2881, 00687B) were never counted. The migration registers thos
 - `18:00` — `setData()` in `DataSync.gs`: write daily asset snapshot to `@所有股票紀錄`
   (header-reconciling and idempotent per date — see [Daily Snapshot Column Contract](#daily-snapshot-column-contract))
 
+## Broker CSV import
+
+Send the broker's 已實現損益 CSV export to the bot as a Telegram document and it lands in
+`交易`. `doPost` routes `message.type === 'document'` straight to `AssetImport.fromUpload()` —
+no ChatBot, no LLM. The file is already structured; handing it to a model only adds a place
+for it to go wrong.
+
+- **Only the sell side is imported.** Every row of a realised-P&L report is a matched pair, so
+  importing both sides looks right and is wrong: the buy cost is already inside the `期初` row
+  that migration seeded from the legacy sheet's total cost. Buys arrive through `recordTrade`
+  instead. The rule is simply *buys come from elsewhere; this reads sells*.
+- **Realised P&L will not match the broker, by design.** They match lot by lot; this sheet uses
+  weighted average. The broker's own figure for each row is written into 備註 so it stays
+  recoverable.
+- **Unit price is derived**, `(賣出價金 + 手續費 + 交易稅) ÷ 股數`, not the 賣出單價 column.
+  That column is rounded, and a few dollars of drift per row compounds into an account balance
+  that never reconciles. The displayed price also goes into 備註.
+- **Re-sending the same file is safe.** Each row gets a content key
+  (`imp:date:code:shares:net`) stored in 備註; rows whose key already exists are skipped and
+  counted. That is what makes importing on receipt acceptable without a confirmation step.
+- Add `預覽` to the message caption to parse and summarise without writing.
+- Instruments are matched by 名稱 against the `標的` tab — the report has no ticker column. An
+  unknown name is reported and skipped, never guessed.
+
+`Telegram.fetchFileText()` does the two-step download (`getFile` → `/file/bot<token>/<path>`)
+and falls back from UTF-8 to Big5 when the Chinese headers do not decode. ⚠️ That download URL
+contains the bot token; never log it.
+
 ## No real figures in git
 
 **The owner's actual asset figures must never reach GitHub.** Pushing them to Apps Script is
