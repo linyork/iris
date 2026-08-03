@@ -223,7 +223,15 @@ var AssetMigrate = (() => {
     counts['帳戶'] = acctRows.length;
 
     // ── 實體資產（黃金）──
-    var goldPriceFormula = '=IFERROR(GOOGLEFINANCE("CURRENCY:XAUTWD")/31.1035,"")';
+    // ⚠️ `CURRENCY:XAUTWD` 不存在 —— Google Finance 只認 XAUUSD，台幣得自己乘。
+    //    先前用 XAUTWD 的版本讓黃金現價整欄空白，實體資產因此變成 0。
+    //    抓不到時退回遷移當下的每公克單價：舊價會失真，但 0 會直接毀掉總資產。
+    var goldPerGram = legacy.gold && legacy.gold.totalWeight > 0
+      ? legacy.gold.twd / legacy.gold.totalWeight
+      : 0;
+    var goldPriceFormula =
+      '=IFERROR(GOOGLEFINANCE("CURRENCY:XAUUSD")*GOOGLEFINANCE("CURRENCY:USDTWD")/31.1035,' +
+      (goldPerGram > 0 ? goldPerGram.toFixed(4) : '""') + ')';
     var physRows = legacy.physical.map((x, n) => {
       var r = n + 2;
       return [
@@ -341,18 +349,45 @@ var AssetMigrate = (() => {
     var existing = lastRow >= 2
       ? sheet.getRange(2, 1, lastRow - 1, Math.max(sheet.getLastColumn(), width)).getValues()
       : [];
+    // 比對前先把前導零正規化。代號欄若曾經被 Sheets 轉成數字（'0056' → 56），
+    // 直接字串比對會對不上，重跑遷移就會在舊列旁邊再長一列出來。
+    // 正規化之後那一列會被**覆寫**成正確的文字代號，等於自我修復。
+    var norm = (v) => {
+      var t = _str(v);
+      return /^\d+$/.test(t) ? t.replace(/^0+/, '') : t;
+    };
+
     var keyed = {};
-    existing.forEach((r, i) => { if (_str(r[keyCol])) keyed[_str(r[keyCol])] = i + 2; });
+    existing.forEach((r, i) => { if (_str(r[keyCol])) keyed[norm(r[keyCol])] = i + 2; });
 
     var appended = [];
     rows.forEach(row => {
-      var k = _str(row[keyCol]);
+      var k = norm(row[keyCol]);
       if (keyed[k]) sheet.getRange(keyed[k], 1, 1, width).setValues([row]);
       else appended.push(row);
     });
     if (appended.length) {
       sheet.getRange(sheet.getLastRow() + 1, 1, appended.length, width).setValues(appended);
     }
+  };
+
+  /**
+   * 刪列，但避開 Sheets 的「不能刪掉所有非凍結列」限制。
+   *
+   * ⚠️ `deleteRows` 涵蓋到最後一列非凍結列時，Sheets 會丟
+   * 「很抱歉，你無法刪除所有非凍結的列」。遷移第二次跑就會踩到：第一次
+   * 快照表是空的沒東西刪，第二次要刪的正好是全部 17,118 列。
+   * 這種情況改成清內容 —— 反正接著就要整批重寫，留幾列空白無害。
+   */
+  var _deleteRows = (sheet, first, count) => {
+    if (count <= 0) return;
+    var frozen = sheet.getFrozenRows ? sheet.getFrozenRows() : 1;
+    var maxRows = sheet.getMaxRows();
+    if (first <= frozen + 1 && count >= maxRows - frozen) {
+      sheet.getRange(first, 1, count, sheet.getMaxColumns()).clearContent();
+      return;
+    }
+    sheet.deleteRows(first, count);
   };
 
   /** 刪掉所有 來源 = migration 的列，再整批寫入（重跑遷移不會疊加） */
@@ -362,8 +397,12 @@ var AssetMigrate = (() => {
     var lastRow = sheet.getLastRow();
     if (srcIdx !== undefined && lastRow >= 2) {
       var vals = sheet.getRange(2, srcIdx + 1, lastRow - 1, 1).getValues();
-      for (var i = vals.length - 1; i >= 0; i--) {
-        if (_str(vals[i][0]) === MIGRATION_SOURCE) sheet.deleteRow(i + 2);
+      var hits = [];
+      vals.forEach((v, i) => { if (_str(v[0]) === MIGRATION_SOURCE) hits.push(i + 2); });
+      if (hits.length === vals.length) {
+        _deleteRows(sheet, 2, hits.length);        // 整張表都是遷移列，走清內容那條
+      } else {
+        for (var i = hits.length - 1; i >= 0; i--) sheet.deleteRow(hits[i]);
       }
     }
     if (rows.length) {
@@ -384,7 +423,7 @@ var AssetMigrate = (() => {
         if (_str(vals[i][0]) === status) { if (first < 0) first = i + 2; count++; }
         else if (first >= 0) break;
       }
-      if (count > 0) sheet.deleteRows(first, count);
+      _deleteRows(sheet, first, count);
     }
     var start = sheet.getLastRow() + 1;
     var CHUNK = 5000;

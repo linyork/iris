@@ -43,7 +43,13 @@ const GOLD = EXP.cash[EXP.cash.length - 1];
 // 用舊表當天的收盤價，新表算出來的市值才對得起舊表
 const PRICES = {};
 HOLD.forEach(h => { PRICES[h.code] = h.price; });
-const FX = { USDTWD: +L_PANEL[2][7], JPYTWD: +L_PANEL[3][7], XAUTWD: +L_PANEL[7][7] * 31.1035 };
+// XAUTWD 不是 Google Finance 認得的貨幣對，只有 XAUUSD 是 —— 台幣要自己乘。
+// 這裡從舊表的每公克台幣價反推回每盎司美金價，讓假報價和真實 API 的形狀一致。
+const FX = {
+  USDTWD: +L_PANEL[2][7],
+  JPYTWD: +L_PANEL[3][7],
+  XAUUSD: (+L_PANEL[7][7] * 31.1035) / (+L_PANEL[2][7])
+};
 
 // ═══ Apps Script mock ════════════════════════════════════════════
 const A1 = (c) => { let n = 0; for (const ch of c) n = n * 26 + ch.charCodeAt(0) - 64; return n; };
@@ -57,6 +63,18 @@ class Sheet {
     this.width = Math.max(1, ...this.rows.map(r => r.length));
     this.rows = this.rows.map(r => padTo(r, this.width));
     this.frozen = 0;
+    this.formats = {};        // 1-based 欄號 → 數值格式
+  }
+  getMaxRows() { return Math.max(this.rows.length, 1000); }
+  getMaxColumns() { return this.width; }
+  getFrozenRows() { return this.frozen; }
+  /**
+   * 模擬 Sheets 寫入時的型別轉換：看起來像整數的字串會被存成數字，
+   * 除非該欄的格式是純文字 '@'。台股代號 '0056' 就是這樣變成 56 的。
+   */
+  _coerce(v, col) {
+    if (typeof v !== 'string' || this.formats[col] === '@') return v;
+    return /^\d+$/.test(v) ? Number(v) : v;
   }
   _grow(row, col) {
     this.width = Math.max(this.width, col);
@@ -96,8 +114,14 @@ class Sheet {
       getDisplayValues() { return api.getValues().map(r => r.map(v => String(v == null ? '' : v))); },
       setValues(vals) {
         self._grow(a + nr - 1, b + nc - 1);
-        for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) self.rows[a + i - 1][b + j - 1] = vals[i][j];
+        for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) {
+          self.rows[a + i - 1][b + j - 1] = self._coerce(vals[i][j], b + j);
+        }
         EVAL.reset();
+      },
+      setNumberFormat(fmt) {
+        for (let j = 0; j < nc; j++) self.formats[b + j] = fmt;
+        return api;
       },
       setFormulas(vals) { return api.setValues(vals); },
       setFormula(v) { return api.setValues([[v]]); },
@@ -385,12 +409,12 @@ check('每日快照 = 950 天 × 18 列', mig.counts['每日快照'] === 950 * 1
   check('證券戶類型判定為「證券」', twd['類型'] === '證券', twd['類型']);
 
   const inst = AssetSchema.readObjects(target.getSheetByName('標的'));
-  const i646 = inst.find(x => x['代號'] === '00646');
+  const i646 = inst.find(x => x['代號'] === '00646') || {};
   check('00646 分類帶入 區域=美 / 類型=指', i646['區域'] === '美' && i646['類型'] === '指', i646['區域'] + '/' + i646['類型']);
 
   const trades = AssetSchema.readObjects(target.getSheetByName('交易'));
   const seed = trades.filter(t => t['動作'] === '期初');
-  const s56 = seed.find(t => t['代號'] === '0056');
+  const s56 = seed.find(t => t['代號'] === H0.code) || {};
   check('期初股數與舊表一致', near(s56['股數'], H0.shares, 0), s56['股數']);
   check('期初單價 = 總成本/股數', near(s56['單價'] * H0.shares, H0.cost, 1), s56['單價'] * H0.shares);
   check('期初列的現金流 = 0（不動帳戶餘額）', near(num(s56['現金流']), 0, 1e-9), s56['現金流']);
@@ -435,7 +459,7 @@ check('已實現損益 0 筆（還沒賣過）', reb.realized === 0, reb.realize
   });
   check('8 檔的股數／成本／累計股利都與舊表一致', allOk, detail.join(','));
 
-  const p56 = pos.find(x => x['代號'] === H0.code);
+  const p56 = pos.find(x => x['代號'] === H0.code) || {};
   const netCost = H0.cost - H0.dividend;
   check('市值 = 股數 × 市價', near(num(p56['市值']), H0.shares * H0.price, 1), money(num(p56['市值'])));
   check('淨成本 = 總成本 − 累計股利', near(num(p56['淨成本']), netCost, 1), money(num(p56['淨成本'])));
@@ -535,6 +559,51 @@ console.log('\nT7  對帳報告（此時已多一筆賣出，應偵測到差異�
   check('報告偵測到 0056 與舊表不符', /✗ 0056 股數/.test(report), '');
   check('其他 7 檔仍相符', (report.match(/✓ \d+ 股數/g) || []).length === 7,
     (report.match(/✓ \d+ 股數/g) || []).length);
+}
+
+// ─── T7b  代號必須維持文字型別 ───────────────────────────────────
+// 台股代號有前導零。寫進「自動」格式的欄位會被 Sheets 轉成數字（0056 → 56），
+// GOOGLEFINANCE("TPE:"&代號) 就查無此股，市值整欄靜默變 0。
+console.log('\nT7b  代號的前導零不能被吃掉');
+{
+  // 先驗 mock 本身：它必須真的複製 Sheets 的型別轉換，
+  // 否則下面那些保護等於沒測到（這個 bug 就是這樣從 84 個測試底下溜過去的）。
+  const probe = new Sheet('probe');
+  probe.getRange(1, 1).setValue('0056');
+  check('mock 會把像數字的字串轉成數字（與 Sheets 相同）',
+    probe.raw(1, 1) === 56, JSON.stringify(probe.raw(1, 1)));
+  probe.getRange(1, 2).setNumberFormat('@');
+  probe.getRange(1, 2).setValue('0056');
+  check('設成純文字格式後就不再轉換',
+    probe.raw(1, 2) === '0056', JSON.stringify(probe.raw(1, 2)));
+
+  const inst = AssetSchema.readObjects(target.getSheetByName('標的'));
+  const codes = inst.map(x => String(x['代號']));
+  check('標的表的代號與舊表逐字相同',
+    HOLD.every(h => codes.includes(h.code)), codes.slice(0, 4).join(','));
+
+  const pos = AssetSchema.readObjects(target.getSheetByName('持倉'));
+  check('持倉表的代號也沒被轉成數字',
+    HOLD.every(h => pos.some(p => String(p['代號']) === h.code)),
+    pos.map(p => p['代號']).slice(0, 4).join(','));
+
+  const held = pos.filter(p => num(p['股數']) > 0);
+  check('每一檔在持部位都抓得到市價（代號正確才查得到）',
+    held.every(p => num(p['市價']) > 0), held.map(p => p['代號'] + '=' + p['市價']).join(' '));
+
+  // 修復情境：某一列的代號已經被轉成數字了，重跑遷移必須「覆寫那一列」，
+  // 而不是把正確的文字代號當成新標的再append一列。
+  const instSheet = target.getSheetByName('標的');
+  const rowOf = (code) => AssetSchema.readObjects(instSheet)
+    .findIndex(x => String(x['代號']) === code) + 2;
+  const before = AssetSchema.readObjects(instSheet).length;
+  instSheet.getRange(rowOf(H0.code), 1).setValue(Number(H0.code));   // 模擬被吃掉前導零
+  AssetMigrate.run({ skipSnapshot: true });
+  const after = AssetSchema.readObjects(instSheet);
+  check('重跑遷移會修好被轉成數字的代號，不是再長一列',
+    after.length === before, before + ' → ' + after.length);
+  check('該列的代號已修回文字',
+    after.some(x => String(x['代號']) === H0.code), after.map(x => x['代號']).slice(0, 3).join(','));
 }
 
 // ─── T8  標題列契約 ──────────────────────────────────────────────

@@ -50,6 +50,7 @@ var AssetSchema = (() => {
   s.TABS = [
     {
       name: '標的',
+      textColumns: ['代號'],
       note: '投資標的主檔。新增持股前先在這裡登記一列。',
       headers: ['代號', '名稱', '市場', '幣別', '報價來源', '區域', '類型', '目標配置%', '狀態', '備註']
     },
@@ -66,6 +67,7 @@ var AssetSchema = (() => {
     },
     {
       name: '交易',
+      textColumns: ['代號'],
       note: '唯一的事實來源。每一筆買賣、股利、存提都在這裡。永遠只新增，不修改歷史列。',
       headers: ['日期', '動作', '代號', '名稱', '股數', '單價', '手續費', '交易稅',
                 '金額', '現金流', '幣別', '帳戶', '分類', '備註', '來源', '建立時間']
@@ -73,6 +75,7 @@ var AssetSchema = (() => {
     {
       name: '持倉',
       generated: true,
+      textColumns: ['代號'],
       note: '⚠️ 由 Position.rebuild() 覆寫，請勿手改。要修正請改「交易」。',
       headers: ['代號', '名稱', '股數', '總成本', '平均成本', '累計股利', '已實現損益',
                 '市價', '市值', '未實現損益', '報酬率', '淨成本', '淨報酬率',
@@ -81,6 +84,7 @@ var AssetSchema = (() => {
     {
       name: '已實現損益',
       generated: true,
+      textColumns: ['代號'],
       note: '⚠️ 由 Position.rebuild() 覆寫。每一筆賣出的沖銷結果。',
       headers: ['賣出日', '代號', '名稱', '股數', '賣出單價', '賣出淨額',
                 '沖銷成本', '已實現損益', '報酬率', '賣出前均價']
@@ -105,6 +109,7 @@ var AssetSchema = (() => {
     },
     {
       name: '每日快照',
+      textColumns: ['鍵'],
       note: '每日 18:00 寫入的長表。一列一個項目，加減標的不用改結構。',
       headers: ['日期', '類型', '鍵', '名稱', '數量', '單價', '市值', '幣別', '狀態']
     },
@@ -277,6 +282,18 @@ var AssetSchema = (() => {
           );
         }
       }
+
+      // ⚠️ 代號欄一定要設成純文字。台股代號有前導零（0056、00878），
+      //    用 setValues 寫字串進「自動」格式的欄位，Sheets 會判定它像數字而
+      //    轉成 56、878 —— 於是 GOOGLEFINANCE("TPE:"&代號) 查無此股，
+      //    市值整欄變 0，而且完全不報錯。只有含字母的代號（00687B）會倖存。
+      (tab.textColumns || []).forEach(name => {
+        var at = tab.headers.indexOf(name);
+        if (at < 0) return;
+        try {
+          sheet.getRange(1, at + 1, sheet.getMaxRows(), 1).setNumberFormat('@');
+        } catch (e) { /* 舊版 API 沒有就算了，資料仍會寫進去 */ }
+      });
 
       try {
         sheet.setFrozenRows(1);

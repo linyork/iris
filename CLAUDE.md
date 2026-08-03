@@ -291,12 +291,43 @@ Six things worth knowing before touching this:
   (key-value + `VLOOKUP`, so inserting rows there breaks no references). Fix the trade row;
   don't just re-run.
 
+### Four things only the real spreadsheet showed
+
+All four passed 84 mocked assertions and still produced a wrong 面板 on the first real run.
+The mock now reproduces the first one, which is why the count is higher today.
+
+- **Ticker columns must be formatted `@` (plain text).** `setValues` with the string `'0056'`
+  into an auto-formatted column makes Sheets store the *number* 56. Every
+  `GOOGLEFINANCE("TPE:"&代號)` then resolves against a code that does not exist, `IFERROR`
+  swallows the `#N/A`, and 市值 is silently 0 for every holding — total assets came out as
+  cash-only. `build()` sets the format from each tab's `textColumns`. Only codes containing a
+  letter (00687B) survive without it, which makes the damage look partial and random.
+  `_replaceByKey` normalises leading zeros when matching, so re-running the migration repairs
+  rows already damaged instead of appending duplicates beside them.
+- **`CURRENCY:XAUTWD` does not exist.** Google Finance only knows `XAUUSD`; TWD has to be
+  multiplied in. The old formula returned `#N/A` for every gold row, so 實體資產 was 0. The
+  replacement falls back to the per-gram price captured at migration — a stale price is wrong
+  by a percent, a zero is wrong by the whole holding.
+- **Sheets refuses to delete every non-frozen row.** `deleteRows` covering the entire data
+  range throws 「無法刪除所有非凍結的列」. The first migration never hit it (nothing to
+  delete); the second one did, on all 17,118 snapshot rows. `_deleteRows()` clears the range
+  instead when the deletion would cover everything.
+- **`期初` must sort first within its date.** Re-running the migration deletes and re-appends
+  the seed rows, so by input order they land *after* a real trade recorded the same day, and
+  `replay()` drops that sale as "sold with no position". `期初` means "the position at the
+  start of that day", so it now outranks input order.
+
 `test_asset.cjs` mocks the Apps Script API (including a small formula evaluator) and runs
 build → migrate → rebuild → reconcile against the real legacy data, asserting that every
 derived total (總資產, 股票市值, 未實現損益, per-account cash) equals what the legacy sheet
-already shows. 84 assertions, `node test_asset.cjs`. The last three groups cover the traps
+already shows. 91 assertions, `node test_asset.cjs`. The last three groups cover the traps
 above: header misalignment is refused, an oversold row reaches `面板`, and a re-run does not
 move `期初`.
+
+The mock deliberately imitates two Sheets behaviours rather than being convenient: it coerces
+numeric-looking strings on write unless the column is formatted `@`, and it evaluates the
+formulas the code writes. T7b asserts the coercion itself — a mock that quietly stopped
+imitating it would make every guard above vacuous.
 
 ⚠️ **Expected values are derived from the fixture at runtime, never written into the test
 file** — see [No real figures in git](#no-real-figures-in-git). Hardcoding them would also
