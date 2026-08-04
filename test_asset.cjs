@@ -872,6 +872,71 @@ console.log('\nT13  Snapshot 改讀新表');
   check('dividendSeries 有年度分佈', ds.byYear.length > 0, JSON.stringify(ds.byYear.map(x => x.year)));
 }
 
+// ─── T14  每日快照改寫長表 ────────────────────────────────────────
+console.log('\nT14  DataSync 寫長表快照');
+load('DataSync.gs');
+{
+  const snapSheet = target.getSheetByName('每日快照');
+  const rowsOn = (date) => AssetSchema.readObjects(snapSheet)
+    .filter(r => String(r['日期']) === date);
+
+  NOW = new RealDate('2026-09-16T18:00:00+08:00');   // 週三
+  const today = '2026-09-16';
+
+  // dryRun 不可以寫入
+  const before = snapSheet.getLastRow();
+  const dry = DataSync.run({ dryRun: true });
+  check('dryRun 不寫入', snapSheet.getLastRow() === before, snapSheet.getLastRow());
+  check('dryRun 回報要寫幾列', dry.ok && dry.rows > 0, JSON.stringify({ ok: dry.ok, rows: dry.rows }));
+
+  const r = DataSync.run();
+  const written = rowsOn(today);
+  check('寫入當日的列', r.ok && written.length === r.rows, written.length + ' vs ' + r.rows);
+
+  const panelTotal = num((AssetSchema.readObjects(target.getSheetByName('面板'))
+    .find(x => x['指標'] === '總資產') || {})['數值']);
+  const snapTotal = written.find(x => x['類型'] === '合計' && x['鍵'] === '總資產');
+  check('合計/總資產 = 面板的總資產', near(num(snapTotal['市值']), panelTotal, 2),
+    snapTotal && snapTotal['市值']);
+
+  const heldCount = AssetSchema.readObjects(target.getSheetByName('持倉'))
+    .filter(x => num(x['股數']) > 0).length;
+  check('持股列只記在持部位',
+    written.filter(x => x['類型'] === '持股').length === heldCount,
+    written.filter(x => x['類型'] === '持股').length + ' vs ' + heldCount);
+  check('現金列涵蓋所有帳戶',
+    written.filter(x => x['類型'] === '現金').length ===
+      AssetSchema.readObjects(target.getSheetByName('現金')).length, '');
+  // 前面測試加過一檔沒有報價的合成標的，所以這裡本來就該是「報價異常」——
+  // 抓不到價的那檔要被點名，其餘照常寫入，而不是整天不寫。
+  check('有持股抓不到市價時標記報價異常',
+    r.status === '報價異常' && r.badPrices.length > 0, r.status + ' ' + r.badPrices.join(','));
+  check('抓不到價的那檔市值留空',
+    written.filter(x => x['類型'] === '持股' && r.badPrices.indexOf(String(x['鍵'])) >= 0)
+           .every(x => x['市值'] === ''), '');
+  check('其他檔照常有市值',
+    written.filter(x => x['類型'] === '持股' && r.badPrices.indexOf(String(x['鍵'])) < 0)
+           .every(x => num(x['市值']) > 0), '');
+  check('狀態整天一致', new Set(written.map(x => x['狀態'])).size === 1, '');
+
+  // 同日重跑要覆寫，不可以長出第二份
+  const total1 = snapSheet.getLastRow();
+  const r2 = DataSync.run();
+  check('同日重跑覆寫', snapSheet.getLastRow() === total1 && rowsOn(today).length === written.length,
+    snapSheet.getLastRow() + ' vs ' + total1);
+  check('回報有刪掉幾列', r2.replaced === written.length, r2.replaced);
+
+  // 週末標休市
+  NOW = new RealDate('2026-09-19T18:00:00+08:00');   // 週六
+  const r3 = DataSync.run();
+  check('週末狀態為休市', r3.status === '休市', r3.status);
+
+  // 代號的前導零在快照裡也不能掉
+  check('快照的持股鍵保留前導零',
+    rowsOn(today).filter(x => x['類型'] === '持股').some(x => /^0\d/.test(String(x['鍵']))),
+    rowsOn(today).filter(x => x['類型'] === '持股').map(x => x['鍵']).join(','));
+}
+
 // 選用：拿真實的券商匯出檔跑一次解析，只印不斷言（檔案不進版控）
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {

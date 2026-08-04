@@ -127,10 +127,10 @@ function setupTelegramCommands() {
   console.log(Telegram.setupCommands());
 }
 
-// ─── 舊表：每日快照 ───────────────────────────────────────────────
+// ─── 每日快照 ─────────────────────────────────────────────────────
 
-/** 只檢查不寫入：`@所有股票紀錄` 的標題列與現況是否對得上。加新標的前先跑這支。 */
-function verifyRecordSheet() {
+/** 只檢查不寫入：今天的快照會寫幾列、狀態是什麼 */
+function verifySnapshot() {
   var report = DataSync.verify();
   console.log(report);
   return report;
