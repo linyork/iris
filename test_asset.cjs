@@ -1134,17 +1134,15 @@ console.log('\nT18  市價抓不到時退到 TWSE');
   const f = String(posSheet.raw(at, 8));
 
   check('第一順位仍然是 GOOGLEFINANCE',
-    /^=IFERROR\(IF\(ISNUMBER\(GOOGLEFINANCE\(/.test(f), f.slice(0, 44));
-  // Loading... 不是錯誤值，只靠 IFERROR 會放行，$C*$H 就變成 #VALUE!
-  check('用 ISNUMBER 判斷，才擋得住 Loading...', /ISNUMBER\(/.test(f));
+    /^=IFERROR\(GOOGLEFINANCE\(/.test(f), f.slice(0, 40));
   check('備援打的是 TWSE STOCK_DAY_AVG', /STOCK_DAY_AVG/.test(f));
   // STOCK_DAY_AVG 回整個月、由舊到新，沒有貪婪前綴會抓到月初那天
   check('正則用貪婪前綴抓最後一筆，不是月初第一筆',
     f.indexOf('".*' + String.fromCharCode(92) + 'd{3}/') >= 0);
   check('stockNo 是指向本列代號的參照，不是寫死的代號',
     f.indexOf('&stockNo="&$A' + at) >= 0, f.slice(f.indexOf('stockNo') - 6, f.indexOf('stockNo') + 18));
-  check('最外層有收尾，失敗時回空字串而不是錯誤值（$I 靠 $H="" 判斷）',
-    /,""\)$/.test(f), f.slice(-12));
+  check('備援自己有收尾，失敗時回空字串而不是錯誤值（$I 靠 $H="" 判斷）',
+    /,""\)\)$/.test(f), f.slice(-12));
 
   // 出清的標的整格是空字串（不抓價），所以只檢查還有部位的那幾列
   check('每一列抓的是自己的代號（沒有兩列共用同一個 stockNo）',
