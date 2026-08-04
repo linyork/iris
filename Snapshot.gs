@@ -79,19 +79,19 @@ var Snapshot = (() => {
   /**
    * 總資產指標：今日 vs 昨日 vs 上週 vs 上月
    *
-   * 「今天」取的是`面板`的即時總資產，不是快照的最後一列 —— 快照一天只寫一次，
+   * 「今天」取的是`指標`的即時總資產，不是快照的最後一列 —— 快照一天只寫一次，
    * 盤中拿它當今天會落後一整天；歷史比較才用快照。
    */
   snap._totals = (ss) => {
     var rows = _totalHistory(ss, 40);
 
-    // 面板的總資產是即時算出來的（持倉市值 + 現金 + 實體資產）
+    // 指標表的總資產是即時算出來的（持倉市值 + 現金 + 實體資產）
     var live = null;
     try {
-      var panel = AssetSchema.readObjects(ss.getSheetByName('面板'));
+      var panel = AssetSchema.readObjects(ss.getSheetByName('指標'));
       var hit = panel.filter(x => _str(x['指標']) === '總資產')[0];
       if (hit) live = _num(hit['數值']);
-    } catch (e) { /* 面板讀不到就退回快照 */ }
+    } catch (e) { /* 讀不到就退回快照 */ }
 
     var todayStr = _ymd(new Date());
     if (live > 0) {

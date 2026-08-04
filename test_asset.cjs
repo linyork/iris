@@ -137,6 +137,9 @@ class Sheet {
   }
   getName() { return this.name; }
   setFrozenRows(n) { this.frozen = n; }
+  setFrozenColumns() { }
+  clear() { this.rows = []; this.width = 1; this.formats = {}; EVAL.reset(); }
+  clearNotes() { }
   deleteRow(r) { this.rows.splice(r - 1, 1); EVAL.reset(); }
   deleteRows(r, n) { this.rows.splice(r - 1, n); EVAL.reset(); }
   /** 取原始儲存格內容（不求值） */
@@ -310,6 +313,7 @@ global.GoogleSheet = {
 };
 
 load('AssetSchema.gs');
+load('Panel.gs');        // Position.rebuild() 最後會叫它重畫面板
 load('Position.gs');
 load('AssetMigrate.gs');
 load('AssetTools.gs');
@@ -395,7 +399,7 @@ console.log('\nT3  建表');
 const target = SpreadsheetApp.openById(AssetSchema.SHEET_ID);
 target.sheets.push(new Sheet('工作表1'));          // 模擬新試算表的預設分頁
 let r3 = AssetSchema.build();
-check('建立 16 個分頁', r3.created.length === 16, r3.created.length);
+check('建立 17 個分頁', r3.created.length === 17, r3.created.length);
 check('預設的「工作表1」被移除', !target.getSheetByName('工作表1'));
 check('交易表標題正確', target.getSheetByName('交易').raw(1, 2) === '動作', target.getSheetByName('交易').raw(1, 2));
 // 公式只填到有資料的最後一列。空表就該是空的 —— 預灌公式會讓 getLastRow()
@@ -493,14 +497,14 @@ check('已實現損益 0 筆（還沒賣過）', reb.realized === 0, reb.realize
   check('現金合計與舊表一致', near(cashTotal, legacyCash, 2), money(cashTotal) + ' vs ' + money(legacyCash));
 }
 {
-  const panel = AssetSchema.readObjects(target.getSheetByName('面板'));
+  const panel = AssetSchema.readObjects(target.getSheetByName('指標'));
   const get = k => num((panel.find(x => x['指標'] === k) || {})['數值']);
-  check('面板總資產 = 舊表面板 D4', near(get('總資產'), EXP.totalAssets, 3), money(get('總資產')));
-  check('面板股票市值 = 舊表面板 B3', near(get('股票市值'), EXP.stockValue, 2), money(get('股票市值')));
-  check('面板未實現損益 = 舊表收益', near(get('未實現損益'), EXP.unrealized, 2), money(get('未實現損益')));
+  check('指標總資產 = 舊表面板 D4', near(get('總資產'), EXP.totalAssets, 3), money(get('總資產')));
+  check('指標股票市值 = 舊表面板 B3', near(get('股票市值'), EXP.stockValue, 2), money(get('股票市值')));
+  check('指標未實現損益 = 舊表收益', near(get('未實現損益'), EXP.unrealized, 2), money(get('未實現損益')));
   // 舊表的「總股利」只 SUMIF 到還在持股表裡的持股，已出清標的領過的息從沒被算進去。
   // 新表把整本股利帳都算回來，所以會比舊表大 —— 這是修正不是 bug。
-  check('面板累計股利 = 整本股利帳（含已出清標的）',
+  check('指標累計股利 = 整本股利帳（含已出清標的）',
     near(get('累計股利'), EXP.dividendAll, 2), money(get('累計股利')));
   check('而且確實大於舊表的總股利', get('累計股利') > EXP.legacyDividend,
     money(get('累計股利')) + ' vs ' + money(EXP.legacyDividend));
@@ -552,9 +556,9 @@ console.log('\nT6  記一筆賣出（模擬 Telegram 輸入）');
   const broker = cash.find(c => c['帳戶'] === '國泰證券戶');
   check('券商戶餘額 = 期初 + 賣出淨額', near(num(broker['餘額']), EXP.cash[0].value + NET, 1), money(num(broker['餘額'])));
 
-  const panel = AssetSchema.readObjects(target.getSheetByName('面板'));
+  const panel = AssetSchema.readObjects(target.getSheetByName('指標'));
   const get = k => num((panel.find(x => x['指標'] === k) || {})['數值']);
-  check('面板已實現損益跟著出現', near(get('已實現損益'), NET - OUT, 1), money(get('已實現損益')));
+  check('指標已實現損益跟著出現', near(get('已實現損益'), NET - OUT, 1), money(get('已實現損益')));
   // 期初、賣出、期末估值全在同一天 → 時間跨度 0，XIRR 無解，這是對的
   check('同日現金流的 XIRR 仍為空，且說明講清楚原因',
     String((panel.find(x => x['指標'] === 'XIRR（年化）') || {})['數值']) === '' &&
@@ -625,16 +629,16 @@ console.log('\nT7b  代號的前導零不能被吃掉');
 // 不能像舊 sheet 那樣把缺的欄補在最後面然後繼續寫。
 console.log('\nT8  標題列與寫入位置必須一致');
 {
-  const panelSheet = target.getSheetByName('面板');
+  const panelSheet = target.getSheetByName('指標');
   panelSheet.getRange(1, 1).setValue('亂改的欄名');
   let threw = false;
-  try { Position.rebuild(); } catch (e) { threw = /面板.*第 1 欄/.test(e.message); }
+  try { Position.rebuild(); } catch (e) { threw = /指標.*第 1 欄/.test(e.message); }
   check('generated 分頁標題錯位 → 寫入被擋下', threw);
 
   const r8 = AssetSchema.build();
   check('build() 把 generated 分頁的標題列修回來',
     panelSheet.getRange(1, 1).getValue() === '指標', String(panelSheet.getRange(1, 1).getValue()));
-  check('修復動作有回報', r8.patched.some(x => /面板/.test(x)), JSON.stringify(r8.patched));
+  check('修復動作有回報', r8.patched.some(x => /指標/.test(x)), JSON.stringify(r8.patched));
 
   // 輸入層有人工資料，程式不可以自作主張搬欄位
   const tradeSheet = target.getSheetByName('交易');
@@ -653,7 +657,7 @@ console.log('\nT8  標題列與寫入位置必須一致');
 
 // ─── T9  賣超股數 ────────────────────────────────────────────────
 // 程式會把股數夾到實際持股，但交易列的「現金流」公式用的是原始股數 ——
-// 兩邊會對不起來，所以這件事必須浮到面板，不能只寫進 consolelog。
+// 兩邊會對不起來，所以這件事必須浮到指標表，不能只寫進 consolelog。
 console.log('\nT9  賣超股數必須浮上來');
 {
   AssetSchema.appendTrade({
@@ -665,8 +669,8 @@ console.log('\nT9  賣超股數必須浮上來');
   check('rebuild 的結果帶出警告', (r9.warnings || []).length === 1, JSON.stringify(r9.warnings));
   check('警告講明現金流會對不起來', /現金流/.test((r9.warnings || [])[0] || ''), (r9.warnings || [])[0]);
 
-  const panel = AssetSchema.readObjects(target.getSheetByName('面板'));
-  check('面板最上面出現待修正列', /待修正/.test(String(panel[0]['指標'])), String(panel[0]['指標']));
+  const panel = AssetSchema.readObjects(target.getSheetByName('指標'));
+  check('指標表最上面出現待修正列', /待修正/.test(String(panel[0]['指標'])), String(panel[0]['指標']));
   check('插在最前面不影響 VLOOKUP 取總資產',
     num((panel.find(x => x['指標'] === '總資產') || {})['數值']) > 0);
 }
@@ -853,9 +857,9 @@ console.log('\nT13  Snapshot 改讀新表');
     near(c.total, c.accounts.reduce((s, a) => s + a.amount, 0), 2), c.total);
 
   const t = Snapshot._totals(ss);
-  const panelTotal = num((AssetSchema.readObjects(target.getSheetByName('面板'))
+  const panelTotal = num((AssetSchema.readObjects(target.getSheetByName('指標'))
     .find(x => x['指標'] === '總資產') || {})['數值']);
-  check('_totals 的今天取面板的即時總資產', near(t.today, panelTotal, 2),
+  check('_totals 的今天取指標的即時總資產', near(t.today, panelTotal, 2),
     t.today + ' vs ' + panelTotal);
   check('_totals 有歷史比較欄位', 'dayChangePct' in t && 'monthChangePct' in t, JSON.stringify(t));
 
@@ -893,10 +897,10 @@ load('DataSync.gs');
   const written = rowsOn(today);
   check('寫入當日的列', r.ok && written.length === r.rows, written.length + ' vs ' + r.rows);
 
-  const panelTotal = num((AssetSchema.readObjects(target.getSheetByName('面板'))
+  const panelTotal = num((AssetSchema.readObjects(target.getSheetByName('指標'))
     .find(x => x['指標'] === '總資產') || {})['數值']);
   const snapTotal = written.find(x => x['類型'] === '合計' && x['鍵'] === '總資產');
-  check('合計/總資產 = 面板的總資產', near(num(snapTotal['市值']), panelTotal, 2),
+  check('合計/總資產 = 指標的總資產', near(num(snapTotal['市值']), panelTotal, 2),
     snapTotal && snapTotal['市值']);
 
   const heldCount = AssetSchema.readObjects(target.getSheetByName('持倉'))
@@ -1057,6 +1061,47 @@ if (process.env.STATEMENT_CSV && fs.existsSync(process.env.STATEMENT_CSV)) {
     r.name + ' ' + r.shares.toLocaleString() + ' 股 @' + r.price +
     ' 淨收付 ' + Math.round(r.net).toLocaleString() + '  ' + r.key));
   st.errors.forEach(e => console.log('  WARN ' + e));
+}
+
+// ─── T17  面板只畫還有部位的標的 ──────────────────────────────────
+// 面板是人看的，出清的標的擺在上面只會是一排 0；而且它必須是純公式，
+// 一旦有人把數字寫死，重算之後就會停在那個時間點。
+console.log('\nT17  面板只畫還有部位的標的');
+{
+  Position.rebuild();
+  const pnl = target.getSheetByName('面板');
+  const pos = AssetSchema.readObjects(target.getSheetByName('持倉'));
+  const heldCodes = pos.filter(x => num(x['股數']) > 0).map(x => String(x['代號'])).sort();
+  const soldCodes = pos.filter(x => num(x['股數']) <= 0).map(x => String(x['代號']));
+
+  // 找到明細表頭那一列
+  let top = 0;
+  for (let r = 1; r <= pnl.getLastRow(); r++) {
+    if (String(pnl.getRange(r, 1).getValue()) === '代號') { top = r; break; }
+  }
+  check('面板有持股明細表頭', top > 0, '第 ' + top + ' 列');
+
+  const shown = [];
+  for (let r = top + 1; r <= pnl.getLastRow(); r++) {
+    const v = String(pnl.getRange(r, 1).getValue());
+    if (!v || v === '合計') break;
+    shown.push(v);
+  }
+  check('面板列出的檔數 = 還有部位的檔數',
+    shown.length === heldCodes.length, shown.length + ' vs ' + heldCodes.length);
+  check('已出清的標的不出現在面板上',
+    soldCodes.length > 0 && !shown.some(c => soldCodes.indexOf(c) >= 0),
+    '已出清 ' + soldCodes.join(',') + ' / 面板 ' + shown.join(','));
+  check('面板的股數對得上持倉',
+    shown.every((c, i) => num(pnl.getRange(top + 1 + i, 5).getValue()) ===
+      num((pos.find(x => String(x['代號']) === c) || {})['股數'])));
+
+  // 每一格都必須是公式：寫死的數字撐不過下一次重算
+  const raws = shown.map((_, i) => String(pnl.raw(top + 1 + i, 7)));
+  check('當前價值那一欄是公式而不是寫死的數字',
+    raws.length > 0 && raws.every(x => x.charAt(0) === '='), raws[0]);
+
+  check('總資產那格也是公式', String(pnl.raw(5, 2)).charAt(0) === '=', String(pnl.raw(5, 2)));
 }
 
 // 選用：拿真實的券商匯出檔跑一次解析，只印不斷言（檔案不進版控）

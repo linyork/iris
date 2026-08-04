@@ -188,6 +188,32 @@ callback because the ReAct loop takes far longer than anyone will hold a sheet o
 | `@股利` | Dividend ledger — date, code, amount (appended by `recordDividend`) |
 | `@固定` | Fixed assets (gold weights), read by `Snapshot._gold()` |
 
+(The table above is the **legacy** 股票 sheet. The 資產管理 sheet's own tabs are defined in
+`AssetSchema.TABS` — that array is the spec, not a copy of it kept here.)
+
+### 面板 vs 指標
+
+Two tabs, one number set, on purpose:
+
+| Tab | Written by | Shape | Read by |
+|---|---|---|---|
+| `指標` | `Position._writePanelAndAllocation()` | 指標 / 數值 / 說明, values frozen at rebuild time | `Snapshot._totals`, `DataSync`, `GoogleSheet.getDashboard`, `持倉!R` VLOOKUP |
+| `面板` | `Panel.render()` | free-form, **every cell a formula** | humans |
+
+They were one tab and it did not work: 面板 had to keep a strict three-column contract
+(`writeBlock` → `assertHeader` refuses to write when column 1 isn't 指標) *and* be laid out
+for a person to read. Splitting them means the visual layout can move freely while every
+machine reader keeps a stable key-value table.
+
+`面板` stores nothing — it's `=持倉!$I3`, `=SUM(現金!$H$2:$H)` and so on, so it tracks
+GOOGLEFINANCE live instead of freezing at the last rebuild. `Panel.render()` only decides
+*how many rows to draw*: it lists holdings with 股數 > 0 and mirrors them row-for-row from
+`持倉`. That is why `Position.rebuild()` calls it last — sell out a position and the layout
+has to shrink. `renderPanel()` in `DevTools.gs` redraws it without recomputing anything.
+
+⚠️ `面板` is `freeform: true` in `AssetSchema.TABS`: no header contract, and `build()` skips
+the freeze/bold it applies to every other tab (row 1 there is data, not a header).
+
 ### Daily Snapshot
 
 `setData()` writes one day of state into `每日快照` at 18:00 — a **long table**:
@@ -232,8 +258,8 @@ their own modules**; the table only registers names.
 
 ⚠️ `atHour(9)` fires somewhere between 9:00 and 10:00, so **never use trigger order to
 guarantee freshness**. `setData()` and `buildDailyReport()` each call `Position.rebuild()`
-themselves, because 面板 and 配置 hold values computed at rebuild time — 持倉 prices are live
-formulas, but the total assets figure Snapshot reads is only as fresh as the last rebuild.
+themselves, because 指標 and 配置 hold values computed at rebuild time — 持倉 and 面板 prices
+are live formulas, but the total assets figure Snapshot reads is only as fresh as the last rebuild.
 `/refresh` does the same on demand.
 
 (legacy list, kept for reference)

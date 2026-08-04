@@ -202,3 +202,10 @@ function testAdvisorCheck() {
     console.log('❌ 失敗：' + ex.message);
   }
 }
+
+/** 只重畫「面板」的版面（不重算持倉）。改了 Panel.render() 之後用這支看結果。 */
+function renderPanel() {
+  var r = Panel.render();
+  console.log(JSON.stringify(r, null, 2));
+  return r;
+}

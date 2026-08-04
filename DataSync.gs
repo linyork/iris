@@ -14,7 +14,7 @@
  * 都只是列數變化，沒有任何欄位需要跟著移動。
  *
  * 寫入的內容（一天約 15~20 列）：
- *   合計 / 總資產、股票市值   ← 面板
+ *   合計 / 總資產、股票市值   ← 指標
  *   持股 / 每檔代號            ← 持倉（僅股數 > 0）
  *   現金 / 每個帳戶            ← 現金（台幣值）
  *   實體 / 黃金                ← 實體資產
@@ -60,7 +60,7 @@ var DataSync = (() => {
   var _buildRows = (ss, dateStr) => {
     var rows = [], prices = {}, badCodes = [];
 
-    var panel = AssetSchema.readObjects(ss.getSheetByName('面板'));
+    var panel = AssetSchema.readObjects(ss.getSheetByName('指標'));
     var pick = (key) => {
       var hit = panel.filter(x => _str(x['指標']) === key)[0];
       return hit ? _num(hit['數值']) : 0;
@@ -251,7 +251,7 @@ var DataSync = (() => {
 
 function setData() {
   try {
-    // 快照要記的是當下的面板數字，而面板是重算當下寫死的值 ——
+    // 快照要記的是當下的指標數字，而指標是重算當下寫死的值 ——
     // 不先重算就會把上一次寫交易時的舊數字當成今天的收盤狀態。
     Position.rebuild();
     DataSync.run();

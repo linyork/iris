@@ -5,7 +5,7 @@
  * 設計原則：**一切從交易明細推導。**
  *
  *   輸入層（人或 Iris 會寫）  標的 / 帳戶 / 實體資產 / 交易
- *   計算層（程式或公式產生）  持倉 / 已實現損益 / 現金 / 配置 / 面板
+ *   計算層（程式或公式產生）  持倉 / 已實現損益 / 現金 / 配置 / 指標 / 面板
  *   歷史層                   每日快照（長表）
  *   系統層                   env / consolelog / chat / …（與 iris 舊表同構）
  *
@@ -102,10 +102,20 @@ var AssetSchema = (() => {
       headers: ['維度', '分組', '成本', '市值', '實際%', '目標%', '偏離%', '偏離金額']
     },
     {
+      name: '指標',
+      generated: true,
+      note: '⚠️ 由 Position.rebuild() 覆寫。直式 key-value，程式讀的是這張。',
+      headers: ['指標', '數值', '說明']
+    },
+    {
+      // freeform：沒有標題列契約，整張由 Panel.render() 用公式排版。
+      // 人看的版面要能隨時搬動，所以不能同時背著「欄位不准動」的約束 ——
+      // 那份約束留給「指標」。
       name: '面板',
       generated: true,
-      note: '⚠️ 由 Position.rebuild() 覆寫。直式 key-value，新增指標不會動到既有位置。',
-      headers: ['指標', '數值', '說明']
+      freeform: true,
+      note: '⚠️ 由 Panel.render() 覆寫。人看的橫式儀表板，每一格都是公式。',
+      headers: []
     },
     {
       name: '每日快照',
@@ -295,6 +305,8 @@ var AssetSchema = (() => {
         } catch (e) { /* 舊版 API 沒有就算了，資料仍會寫進去 */ }
       });
 
+      // freeform 分頁的第 1 列是版面的一部分，不是標題列 —— 凍結或加粗都是錯的
+      if (tab.freeform) return;
       try {
         sheet.setFrozenRows(1);
         sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).setFontWeight('bold');

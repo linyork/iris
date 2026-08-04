@@ -445,20 +445,20 @@ var GoogleSheet = (() => {
   };
 
   /**
-   * 總覽儀表板：面板（直式 key-value）＋ 各帳戶現金 ＋ 配置三個維度
+   * 總覽儀表板：指標（直式 key-value）＋ 各帳戶現金 ＋ 配置三個維度
    */
   gs.getDashboard = () => {
     try {
       var ss = Snapshot._open();
       var out = [];
 
-      var panel = AssetSchema.readObjects(ss.getSheetByName('面板'));
+      var panel = AssetSchema.readObjects(ss.getSheetByName('指標'));
       if (panel.length) {
         out.push('【資產總覽】');
         panel.forEach(r => {
           var k = String(r['指標'] || '').trim();
           if (!k) return;
-          // 面板用「—— 標題 ——」當分隔列，值是空的
+          // 指標表用「—— 標題 ——」當分隔列，值是空的
           if (/^——/.test(k)) { out.push(k); return; }
           var v = r['數值'];
           if (v === '' || v === null || v === undefined) return;

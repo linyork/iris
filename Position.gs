@@ -1,6 +1,6 @@
 /**
  * Position
- * @description 從「交易」重算持倉、已實現損益、現金、配置、面板
+ * @description 從「交易」重算持倉、已實現損益、現金、配置、指標
  *
  * 這是整套帳的計算核心。跑法：把交易依日期重放一次，維護每檔的
  * （股數, 總成本）狀態，賣出時按**加權平均**沖銷 —— 與台灣券商對帳單一致。
@@ -13,8 +13,8 @@
  * 前 2 筆買賣的順序。SUMIF 那類彙總函式表達不出來，硬做要靠陣列公式遞迴，
  * 難讀又難除錯。逐筆重放只有幾十行，而且順便把已實現損益一起算出來。
  *
- * ⚠️ 這支會**整段覆寫**「持倉」「已實現損益」「現金」「配置」「面板」。
- *    那幾張表不要手改。
+ * ⚠️ 這支會**整段覆寫**「持倉」「已實現損益」「現金」「配置」「指標」，
+ *    最後再請 `Panel.render()` 重畫「面板」。那幾張表不要手改。
  */
 var Position = (() => {
   var p = {};
@@ -189,7 +189,7 @@ var Position = (() => {
     options = options || {};
     var ss = AssetSchema.open();
 
-    var need = ['交易', '標的', '帳戶', '實體資產', '持倉', '已實現損益', '現金', '配置', '面板'];
+    var need = ['交易', '標的', '帳戶', '實體資產', '持倉', '已實現損益', '現金', '配置', '指標', '面板'];
     var missing = need.filter(n => !ss.getSheetByName(n));
     if (missing.length) {
       var msg = '缺少分頁：' + missing.join('、') + '，請先執行 setupAssetSheet()';
@@ -243,7 +243,7 @@ var Position = (() => {
         _str(ins['區域']),
         _str(ins['類型']),
         _num(ins['目標配置%']),
-        "=IFERROR($I" + r + "/VLOOKUP(\"總資產\",面板!$A:$B,2,FALSE),0)",
+        "=IFERROR($I" + r + "/VLOOKUP(\"總資產\",指標!$A:$B,2,FALSE),0)",
         '=$R' + r + '-$Q' + r
       ];
     });
@@ -292,9 +292,13 @@ var Position = (() => {
     AssetSchema.writeBlock(ss.getSheetByName('已實現損益'), realRows, 10);
     AssetSchema.writeBlock(ss.getSheetByName('現金'), cashRows, 8);
 
-    SpreadsheetApp.flush();   // 面板要讀上面幾張表算完的值
+    SpreadsheetApp.flush();   // 指標要讀上面幾張表算完的值
 
     var summary = p._writePanelAndAllocation(ss, trades, replayed);
+
+    // 面板純粹是公式排版，只有「畫幾列」會變 —— 擺在最後重畫，
+    // 這樣持倉多一檔或出清一檔，版面就跟著對上。
+    Panel.render(ss);
 
     var result = {
       ok: true,
@@ -311,7 +315,7 @@ var Position = (() => {
   };
 
   /**
-   * 產生「面板」與「配置」。
+   * 產生「指標」與「配置」。
    * 這兩張要等持倉的公式算完（市值），所以獨立成一段、在 flush 之後跑。
    */
   p._writePanelAndAllocation = (ss, trades, replayed) => {
@@ -357,7 +361,7 @@ var Position = (() => {
 
     var pct = (n, d) => (d ? n / d : 0);
 
-    // 有被夾住的交易就頂在最上面。面板是 key-value、靠 VLOOKUP 取值，
+    // 有被夾住的交易就頂在最上面。指標是 key-value、靠 VLOOKUP 取值，
     // 插在最前面不會動到任何既有參照（持倉的「佔總資產%」就是這樣抓總資產的）。
     var warnRows = (replayed.warnings || []).map((w, i) => [
       '⚠️ 待修正 ' + (i + 1), '', w
@@ -392,7 +396,7 @@ var Position = (() => {
       ['交易筆數',     trades.length, ''],
       ['持倉檔數',     positions.filter(x => _num(x['股數']) > 0).length, '']
     ]);
-    AssetSchema.writeBlock(ss.getSheetByName('面板'), panelRows, 3);
+    AssetSchema.writeBlock(ss.getSheetByName('指標'), panelRows, 3);
 
     // ── 配置：大類 / 區域 / 類型 三個維度 ──
     var held = positions.filter(x => _num(x['股數']) > 0);
