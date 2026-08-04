@@ -114,12 +114,13 @@ var MiniApp = (() => {
 /**
  * Mini App 取資料（前端 google.script.run 呼叫）
  * @param {string} initData
+ * @param {boolean} [noCache] 下拉重整時帶 true，強制略過快取重讀
  * @returns {object} Dashboard payload
  */
-function miniAppData(initData) {
+function miniAppData(initData, noCache) {
   var auth = MiniApp.verifyInitData(initData);
   if (!auth.ok) throw new Error('驗證失敗：' + auth.error);
-  return Dashboard.getPayload(false);
+  return Dashboard.getPayload(!!noCache);
 }
 
 /**

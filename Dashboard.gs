@@ -93,6 +93,21 @@ var Dashboard = (() => {
     return payload;
   };
 
+  /**
+   * 丟掉快取，下一次取用一定重算。
+   *
+   * 由 `Position.rebuild()` 在寫完之後呼叫 —— 這比把 TTL 調短精準得多：
+   * 沒有異動時 15 分鐘照舊省載入時間，一有異動（記一筆交易、匯入對帳單、
+   * 排程重算）就立刻反映，不會出現「明明剛記完卻還看到舊數字」。
+   */
+  db.invalidate = () => {
+    try {
+      CacheService.getScriptCache().remove(CACHE_KEY);
+    } catch (e) {
+      Logger.warning('Dashboard.invalidate', '清快取失敗（不影響資料正確性）', e.message);
+    }
+  };
+
   return db;
 })();
 

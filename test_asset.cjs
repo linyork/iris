@@ -216,6 +216,7 @@ function evalFormula(src, sheet, row) {
     // GOOGLEFINANCE 在夾具裡對所有現存持股都查得到，所以 IFERROR 的第一分支
     // 永遠會贏 —— 底下這五個只需要「不丟例外」，TWSE 那條備援路徑本身的語意
     // 對測試沒有影響，本機也沒有網路可以真的打 TWSE。
+    ISNUMBER: (v) => typeof v === 'number' && isFinite(v),
     TODAY: () => new Date(),
     TEXT: (v) => String(v),
     IMPORTDATA: () => NA,
@@ -271,7 +272,7 @@ function evalFormula(src, sheet, row) {
   js = js.replace(new RegExp('(?<![\\w.$])' + SH + '\\$?([A-Z]{1,2})\\$?(\\d+)(?![\\w(])', 'g'),
     (_, sh, c, r) => `F._C(${sh ? JSON.stringify(sh) : 'null'},"${c}",${r})`);
   // 函式名
-  js = js.replace(/\b(IFERROR|IFS|IF|OR|AND|SUMIF|SUM|VLOOKUP|GOOGLEFINANCE|TODAY|TEXT|IMPORTDATA|CONCATENATE|REGEXEXTRACT|VALUE|N)\(/g, 'F.$1(');
+  js = js.replace(/\b(IFERROR|IFS|IF|OR|AND|SUMIF|SUM|VLOOKUP|GOOGLEFINANCE|ISNUMBER|TODAY|TEXT|IMPORTDATA|CONCATENATE|REGEXEXTRACT|VALUE|N)\(/g, 'F.$1(');
   // 比較運算子（& 是字串連接）
   js = js.replace(/<>/g, '!==').replace(/&/g, '+');
   js = js.replace(/([^<>!=])=([^=])/g, '$1==$2');
@@ -1132,17 +1133,76 @@ console.log('\nT18  市價抓不到時退到 TWSE');
   const at = rows.findIndex(x => num(x['股數']) > 0) + 2;
   const f = String(posSheet.raw(at, 8));
 
-  check('第一順位仍然是 GOOGLEFINANCE', /^=IFERROR\(GOOGLEFINANCE\(/.test(f), f.slice(0, 40));
+  check('第一順位仍然是 GOOGLEFINANCE',
+    /^=IFERROR\(IF\(ISNUMBER\(GOOGLEFINANCE\(/.test(f), f.slice(0, 44));
+  // Loading... 不是錯誤值，只靠 IFERROR 會放行，$C*$H 就變成 #VALUE!
+  check('用 ISNUMBER 判斷，才擋得住 Loading...', /ISNUMBER\(/.test(f));
   check('備援打的是 TWSE STOCK_DAY_AVG', /STOCK_DAY_AVG/.test(f));
+  // STOCK_DAY_AVG 回整個月、由舊到新，沒有貪婪前綴會抓到月初那天
+  check('正則用貪婪前綴抓最後一筆，不是月初第一筆',
+    f.indexOf('".*' + String.fromCharCode(92) + 'd{3}/') >= 0);
   check('stockNo 是指向本列代號的參照，不是寫死的代號',
     f.indexOf('&stockNo="&$A' + at) >= 0, f.slice(f.indexOf('stockNo') - 6, f.indexOf('stockNo') + 18));
-  check('備援自己也有收尾，失敗時回空字串而不是錯誤值',
-    /,""\)\)$/.test(f), f.slice(-12));
+  check('最外層有收尾，失敗時回空字串而不是錯誤值（$I 靠 $H="" 判斷）',
+    /,""\)$/.test(f), f.slice(-12));
 
   // 出清的標的整格是空字串（不抓價），所以只檢查還有部位的那幾列
   check('每一列抓的是自己的代號（沒有兩列共用同一個 stockNo）',
     rows.every((x, i) => num(x['股數']) <= 0 ||
       String(posSheet.raw(i + 2, 8)).indexOf('&stockNo="&$A' + (i + 2)) >= 0));
+}
+
+// ─── T19  抓不到市價時不能靜默少算 ────────────────────────────────
+// 2026-08-04 的真實事故：剛匯入的 009826 當下抓不到報價，市值被讀成 0，
+// 於是 302 萬憑空消失、指標寫下死值、儀表板顯示單日 −20%，而且沒有任何錯誤。
+// 修法有兩層：頭四個數字改用公式（報價回來會自己好），其餘死值則要出聲。
+console.log('\nT19  抓不到市價時要出聲，不要靜默少算');
+{
+  const posSheet = target.getSheetByName('持倉');
+  const before = AssetSchema.readObjects(posSheet);
+  const victim = before.findIndex(x => num(x['股數']) > 0) + 2;
+  const code = String(posSheet.getRange(victim, 1).getValue());
+
+  // 模擬「GOOGLEFINANCE 這一刻沒有這檔的資料」：市價整格空白
+  const saved = String(posSheet.raw(victim, 8));
+  posSheet.getRange(victim, 8).setValue('');
+
+  const r = Position._writePanelAndAllocation(target, [], { warnings: [] });
+  const panel = AssetSchema.readObjects(target.getSheetByName('指標'));
+  const warn = panel.filter(x => /待修正/.test(String(x['指標'])));
+
+  check('指標最上面出現缺價警告', warn.length === 1, JSON.stringify(warn[0] || {}));
+  check('警告點名是哪一檔',
+    String((warn[0] || {})['說明']).indexOf(code) >= 0,
+    String((warn[0] || {})['說明']).slice(0, 40));
+
+  // 頭四個數字是公式 —— 缺價當下算出來會偏低，但公式本身不會被凍住，
+  // 報價一回來就自己對了。這裡驗的是「它是公式」而不是「值正確」。
+  const rowOf = (k) => {
+    const sh = target.getSheetByName('指標');
+    for (let i = 2; i <= sh.getLastRow(); i++)
+      if (String(sh.getRange(i, 1).getValue()) === k) return i;
+    return 0;
+  };
+  ['總資產', '股票市值', '現金', '實體資產'].forEach(k => {
+    const at = rowOf(k);
+    check(k + ' 是公式，不是重算當下的死值',
+      at > 0 && String(target.getSheetByName('指標').raw(at, 2)).charAt(0) === '=',
+      k + ' @' + at + ' = ' + String(target.getSheetByName('指標').raw(at, 2)).slice(0, 24));
+  });
+
+  // 還原，後面的測試還要用
+  posSheet.getRange(victim, 8).setValue(saved);
+  Position.rebuild();
+  const after = AssetSchema.readObjects(target.getSheetByName('指標'));
+  // 夾具裡另有一檔測試用標的沒有假報價，所以警告不會整個消失 ——
+  // 要驗的是「這一檔的報價回來之後就不再被點名」
+  // 只看缺價那一類警告 —— 前面 T9 的賣超警告也點名同一檔，但那是另一回事
+  const stillNamed = after
+    .filter(x => /待修正/.test(String(x['指標'])) && /抓不到市價/.test(String(x['說明'])))
+    .some(x => String(x['說明']).indexOf(code) >= 0);
+  check('報價回來之後就不再點名這一檔', !stillNamed);
+  check('總資產回到正常量級', num((after.find(x => x['指標'] === '總資產') || {})['數值']) > 0);
 }
 
 // 選用：拿真實的券商匯出檔跑一次解析，只印不斷言（檔案不進版控）

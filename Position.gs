@@ -48,24 +48,37 @@ var Position = (() => {
   /**
    * 市價公式。GOOGLEFINANCE 抓不到時（額度用完、標的剛掛牌、Google 那邊短暫沒資料）
    * 退到 TWSE 官方的 STOCK_DAY_AVG 端點硬解析收盤價。只在 TPE 市場退這一步 ——
-   * 這支端點只認得上市代號，非 TPE 標的退了也是白retry。
+   * 那支端點只認得上市代號，非 TPE 標的退過去也是白費一次 IMPORTDATA。
    *
-   * ⚠️ REGEXEXTRACT 抓的是**這個月第一筆**符合的日期列。STOCK_DAY_AVG 回傳的是整月
-   *    資料、由舊到新排序，第一筆是月初、不是最新收盤 —— 這是抄現成公式時要注意的地方，
-   *    沒驗證過真的抓到今天的價格，用之前先自己對一次盤中報價。
-   * ⚠️ 外層一定要包一個 IFERROR(...,"") 收尾：這欄空字串是 $I 判斷「有沒有報到價」的
-   *    依據（=IF(OR($C=0,$H=""),0,$C*$H)），沒收尾的話，TWSE 那段一旦解析失敗就會是
-   *    #N/A / #VALUE! 錯誤值，不等於 ""，會讓 $I 連帶壞掉，一路串到 SUM($I$2:$I)、
-   *    面板總資產全部變成錯誤。
+   * 形狀是 `IFERROR(IF(ISNUMBER(gf), gf, twse), "")`，三層各有理由：
+   *
+   * 1. **`ISNUMBER` 而不是只靠 `IFERROR`。** GOOGLEFINANCE 取不到值時常常回的是
+   *    字串 `Loading...`，那**不是錯誤**，`IFERROR` 會原封不動放行 —— 接著 $I 的
+   *    `$C*$H` 就變成 `#VALUE!`，一路汙染 `SUM($I$2:$I)` 與總資產。`ISNUMBER`
+   *    同時擋掉錯誤值、`Loading...` 與空白，三種情況都退到備援。
+   * 2. **`.*` 開頭是為了抓最後一筆。** STOCK_DAY_AVG 回的是**整個月、由舊到新**，
+   *    不加 `.*` 會抓到月初那天的收盤價（2026-08-04 實測：第一筆 8/3 = 10.08，
+   *    最後一筆 8/4 = 10.18，30 萬股就差 3 萬）。RE2 沒有反向比對，用貪婪前綴
+   *    把游標推到最後一個日期列是唯一的辦法。
+   * 3. **`[^0-9]*` 而不是寫死引號。** IMPORTDATA 會把 JSON 當 CSV 解析，日期與
+   *    價格之間留下的是引號、逗號還是什麼都不留，取決於它怎麼切欄位。用「非數字
+   *    若干個」跨過去，兩種情況都對得上。
+   *
+   * ⚠️ 最外層的 `IFERROR(..., "")` 不能拿掉。$I 用 `$H=""` 判斷「這檔到底有沒有
+   *    報到價」（`=IF(OR($C=0,$H=""),0,$C*$H)`），備援失敗時必須是空字串而不是
+   *    錯誤值，否則整條鏈一起壞。
+   * ⚠️ 這條公式只在 GAS 產生、沒辦法在本機測試環境求值（IMPORTDATA 要連外網）。
+   *    測試驗的是公式長相，不是它真的抓得到價。改動之後請手動貼一格對一次。
    */
   var _priceFormula = (market, r) => {
     var gf = 'GOOGLEFINANCE("' + market + ':"&$A' + r + ',"price")';
     if (market !== 'TPE') return '=IFERROR(' + gf + ',"")';
+    var url = '"https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_AVG?date="' +
+              '&TEXT(TODAY(),"yyyyMMdd")&"&stockNo="&$A' + r;
     var twse =
-      'IFERROR(VALUE(REGEXEXTRACT(CONCATENATE(IMPORTDATA(' +
-      '"https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_AVG?date="&TEXT(TODAY(),"yyyyMMdd")&"&stockNo="&$A' + r + ')),' +
-      '"\\d{3}/\\d{2}/\\d{2}\\""([0-9.]+)")),"")';
-    return '=IFERROR(' + gf + ',' + twse + ')';
+      'IFERROR(VALUE(REGEXEXTRACT(CONCATENATE(IMPORTDATA(' + url + ')),' +
+      '".*\\d{3}/\\d{2}/\\d{2}[^0-9]*([0-9.]+)")),"")';
+    return '=IFERROR(IF(ISNUMBER(' + gf + '),' + gf + ',' + twse + '),"")';
   };
 
   // ─── 交易重放 ──────────────────────────────────────────────────
@@ -321,6 +334,10 @@ var Position = (() => {
     // 這樣持倉多一檔或出清一檔，版面就跟著對上。
     Panel.render(ss);
 
+    // 資料剛動過，儀表板與 Mini App 的快取就過期了。不清的話，記完一筆交易
+    // 最久要等 15 分鐘才看得到 —— 而使用者記完通常馬上就會去看。
+    if (typeof Dashboard !== 'undefined') Dashboard.invalidate();
+
     var result = {
       ok: true,
       positions: posRows.length,
@@ -356,6 +373,25 @@ var Position = (() => {
     var totalRealized = sum(positions, '已實現損益');
     var totalAssets   = stockValue + cashValue + physicalValue;
 
+    // ── 缺價守門 ──────────────────────────────────────────────
+    //
+    // 有股數卻讀到市值 0 = 那一刻報價還沒回來（GOOGLEFINANCE 對剛掛牌的標的
+    // 可能整天都沒有資料；`SpreadsheetApp.flush()` 也不等外部函式算完）。
+    // 這種時候**下面每一個彙總都是錯的**，而且錯得沒有跡象 —— 2026-08-04 就是
+    // 這樣把 009826 的 302 萬市值當成 0 寫進指標，儀表板顯示單日 −20%。
+    //
+    // 頭四個數字改用公式（見下）之後會自己修正，但 JS 這邊算出來的
+    // 未實現損益／報酬率／XIRR／配置仍然是死值，所以要把這件事講出來。
+    var noPrice = positions.filter(x => _num(x['股數']) > 0 && _num(x['市值']) <= 0);
+    if (noPrice.length) {
+      var codes = noPrice.map(x => _str(x['代號'])).join('、');
+      replayed.warnings.push(
+        codes + ' 有持股但抓不到市價，本次的未實現損益／報酬率／配置都少算了這幾檔。' +
+        '總資產與股票市值是公式、報價回來會自己更正；其餘數字請等下一次重算'
+      );
+      Logger.error('Position.rebuild', '有持股讀不到市價', { codes: codes });
+    }
+
     // ── XIRR：只看投資相關現金流，最後補一筆「今天全部變現」 ──
     //
     // ⚠️ 遷移進來的歷史股利要排除。期初建倉的日期是遷移日，若把遷移日「之前」
@@ -388,11 +424,21 @@ var Position = (() => {
       '⚠️ 待修正 ' + (i + 1), '', w
     ]);
 
+    // ⚠️ 這四格刻意是**公式**，不是重算當下的死值。
+    //
+    // 它們是整份資料的頭條數字：`Snapshot._totals` 拿總資產當「今天」、`DataSync`
+    // 把它寫進每日快照、`持倉!R` 用 VLOOKUP 抓它算佔比、儀表板與 Mini App 都顯示它。
+    // 寫成死值的話，重算那一刻只要有一檔報價沒回來，這個錯誤就會被凍住直到下次重算
+    // ——2026-08-04 就是這樣讓儀表板顯示單日 −20%。
+    //
+    // 寫成公式之後，報價回來的下一秒它自己就對了，不需要任何人跑 rebuild。
+    // 其餘各列仍是死值：它們牽涉加權平均成本這類路徑相依的計算，公式表達不出來。
     var panelRows = warnRows.concat([
-      ['總資產',       _round(totalAssets),   '股票市值 + 現金 + 實體資產'],
-      ['股票市值',     _round(stockValue),    '持倉表市值合計'],
-      ['現金',         _round(cashValue),     '各帳戶餘額換算台幣'],
-      ['實體資產',     _round(physicalValue), '黃金等'],
+      ['總資產',       '=SUM(持倉!$I$2:$I)+SUM(現金!$H$2:$H)+SUM(實體資產!$I$2:$I)',
+                       '股票市值 + 現金 + 實體資產'],
+      ['股票市值',     '=SUM(持倉!$I$2:$I)',      '持倉表市值合計'],
+      ['現金',         '=SUM(現金!$H$2:$H)',      '各帳戶餘額換算台幣'],
+      ['實體資產',     '=SUM(實體資產!$I$2:$I)',  '黃金等'],
       ['—— 投資績效 ——', '', ''],
       ['股票投入成本', _round(stockCost),     '目前仍持有部位的成本'],
       ['未實現損益',   _round(stockValue - stockCost), '市值 − 投入成本'],

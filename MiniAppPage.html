@@ -58,6 +58,11 @@
     .total { font-size: 34px; font-weight: 650; letter-spacing: -.02em;
              font-variant-numeric: tabular-nums; line-height: 1.15; }
     .sub { font-size: 12px; color: var(--hint); margin-top: 4px; }
+    .linkbtn {
+      background: none; border: 0; padding: 0; margin-left: 8px;
+      font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline;
+    }
+    .linkbtn[disabled] { opacity: .5; cursor: default; text-decoration: none; }
     .deltas { display: flex; gap: 16px; margin-top: 14px; }
     .delta .k { font-size: 11px; color: var(--hint); }
     .delta .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -137,6 +142,10 @@
   <div class="card">
     <div class="total" id="total">—</div>
     <div class="sub" id="stamp"></div>
+    <!-- 資料時間 + 重讀。沒有這兩個，數字看起來不對時無從判斷是「真的變了」
+         還是「拿到 15 分鐘前的快取」—— 那正是它感覺不會連動的一半原因。 -->
+    <div class="sub"><span id="freshness"></span>
+      <button type="button" id="reload" class="linkbtn">重新讀取</button></div>
     <div class="deltas" id="deltas"></div>
   </div>
 
@@ -305,6 +314,8 @@ function renderTotals(d) {
   if (!t) { document.getElementById('total').textContent = '尚無快照'; return; }
   document.getElementById('total').textContent = 'NT$ ' + fmt(t.today);
   document.getElementById('stamp').textContent = t.todayDate + ' 快照';
+  document.getElementById('freshness').textContent =
+    '資料時間 ' + (d.generatedAt || '—') + (d.fromCache ? '（快取）' : '');
   document.getElementById('deltas').innerHTML = [
     { k: '單日', v: signed(t.dayChange) + ' ' + pct(t.dayChangePct), c: dir(t.dayChangePct) },
     { k: '近一週', v: pct(t.weekChangePct),  c: dir(t.weekChangePct) },
@@ -455,13 +466,30 @@ document.getElementById('chips').addEventListener('click', function (e) {
       return;
     }
 
-    google.script.run
-      .withSuccessHandler(render)
-      .withFailureHandler(function (err) {
-        state.className = 'state err';
-        state.textContent = '載入失敗：' + (err && err.message ? err.message : err);
-      })
-      .miniAppData(INIT_DATA);
+    var reload = document.getElementById('reload');
+
+    // noCache 只在使用者按下重新讀取時帶 true。平常走快取是刻意的：
+    // 每次開面板都重算一遍，開啟速度會從瞬間變成數秒。
+    function load(noCache) {
+      reload.disabled = true;
+      reload.textContent = '讀取中…';
+      google.script.run
+        .withSuccessHandler(function (d) {
+          reload.disabled = false;
+          reload.textContent = '重新讀取';
+          render(d);
+        })
+        .withFailureHandler(function (err) {
+          reload.disabled = false;
+          reload.textContent = '重新讀取';
+          state.className = 'state err';
+          state.textContent = '載入失敗：' + (err && err.message ? err.message : err);
+        })
+        .miniAppData(INIT_DATA, !!noCache);
+    }
+
+    reload.onclick = function () { load(true); };
+    load(false);
   });
 })();
 </script>
