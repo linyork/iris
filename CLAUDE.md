@@ -230,8 +230,25 @@ without writing it.
 
 ## Broker CSV import
 
-Send the broker's 已實現損益 CSV export to the bot as a Telegram document and it lands in
-`交易`. `doPost` routes `message.type === 'document'` straight to `AssetImport.fromUpload()` —
+Send a broker CSV to the bot as a Telegram document and it lands in `交易`. Two formats are
+recognised by their header:
+
+- **證券對帳單** (has 委託書號) — both sides. Buy or sell is decided by the **sign of 淨收付**:
+  money in is a sale, money out is a purchase. That is the one column a statement cannot get
+  wrong. This is the format to prefer.
+- **已實現損益** (has 賣出日期) — sells only, for the reason below.
+
+**Duplicate detection has to work across the two formats**, because the same sale appears in
+both with different granularity — four matched lots in the realised report, two fills in the
+statement — so a content hash never matches. Both importers therefore check *quantity already
+recorded* for the same (date, code, action) and skip what is already covered, in addition to
+their own row key (`stm:date:order:shares`, `imp:date:code:shares:net`). The two directions
+are symmetric; a test sends the same sale in both formats and asserts nothing is written twice.
+
+Broker statements use short names (富邦台50) where 標的 uses the full one (富邦台灣50).
+`NAME_FIXES` in `AssetImport.gs` maps the known variants — deliberately an explicit list rather
+than fuzzy matching, because guessing wrong files a trade against the wrong instrument. An
+unmatched name is reported and skipped, never guessed. `doPost` routes `message.type === 'document'` straight to `AssetImport.fromUpload()` —
 no ChatBot, no LLM. The file is already structured; handing it to a model only adds a place
 for it to go wrong.
 

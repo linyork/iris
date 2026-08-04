@@ -992,6 +992,73 @@ console.log('\nT15  系統分頁搬到新表');
     AssetSchema.readObjects(target.getSheetByName('knowledge')).length);
 }
 
+// ─── T16  對帳單匯入（買賣都有 + 跨格式去重）──────────────────────
+console.log('\nT16  證券對帳單匯入');
+{
+  const H2 = HOLD[2];
+  const STM = '股名,日期,成交股數,淨收付,成交單價,成交價金,手續費,交易稅,稅款,委託書號,幣別,備註\n' +
+    // 賣出（錢進來）
+    H2.name + ',2026/08/20,"1,000","31,437",31.5,"31,500",20,43,0,A0001,台幣,\n' +
+    // 買進（錢出去）
+    H2.name + ',2026/08/20,500,"-15,772",31.5,"15,750",22,0,0,A0002,台幣,\n' +
+    // 同一張委託分兩批成交，書號相同、股數不同
+    H2.name + ',2026/08/21,300,"-9,463",31.5,"9,450",13,0,0,B0001,台幣,\n' +
+    H2.name + ',2026/08/21,200,"-6,308",31.5,"6,300",8,0,0,B0001,台幣,\n' +
+    '沒登記過的標的,2026/08/21,100,"-1,010",10,"1,000",10,0,0,C0001,台幣,\n';
+
+  const tradeSheet = target.getSheetByName('交易');
+  const countTrades = () => AssetSchema.readObjects(tradeSheet).length;
+
+  const parsed = AssetImport.parseStatement(STM);
+  check('解析出 4 列（未登記的標的不算）', parsed.rows.length === 4, parsed.rows.length);
+  check('淨收付為正判為賣出、為負判為買進',
+    parsed.rows[0].action === '賣出' && parsed.rows[1].action === '買進',
+    parsed.rows.map(r => r.action).join(','));
+  check('單價由成交價金反推', Math.abs(parsed.rows[0].price - 31500 / 1000) < 1e-6, parsed.rows[0].price);
+  check('同書號不同批次是兩筆不同的鍵',
+    parsed.rows[2].key !== parsed.rows[3].key, parsed.rows[2].key + ' / ' + parsed.rows[3].key);
+  check('未登記的標的有回報且要求先補代號',
+    parsed.errors.some(e => /沒登記過的標的/.test(e) && /代號/.test(e)), JSON.stringify(parsed.errors));
+
+  const n0 = countTrades();
+  AssetImport.importStatement(STM, { dryRun: true });
+  check('預覽不寫入', countTrades() === n0, countTrades());
+
+  const out = AssetImport.importStatement(STM);
+  check('匯入 4 列', countTrades() === n0 + 4, countTrades() + ' vs ' + (n0 + 4));
+  check('重傳同一份被鍵值擋下',
+    (AssetImport.importStatement(STM), countTrades() === n0 + 4), countTrades());
+
+  // 跨格式去重：同一批賣出改用「已實現損益」的拆法再送一次，不可以重複記
+  const REALIZED = '股票名稱,日期,股數,損益,交易別,買進日期,賣出日期,買進單價,賣出單價,手續費,交易稅,買進價金,賣出價金,報酬率,幣別\n' +
+    H2.name + ',2026/08/20,600,"100",現股,2025/01/01,2026/08/20,20,31.5,12,26,"12,000","18,862",5%,台幣\n' +
+    H2.name + ',2026/08/20,400,"80",現股,2025/01/01,2026/08/20,20,31.5,8,17,"8,000","12,575",5%,台幣\n';
+  const n1 = countTrades();
+  const dup = AssetImport.importRealized(REALIZED);
+  check('已實現格式的同一批賣出不會再記一次（數量比對）',
+    countTrades() === n1, countTrades() + ' vs ' + n1);
+
+  // 反向也要成立：對帳單再送一次也不能因為換格式就漏掉去重
+  const again = AssetImport.importStatement(STM);
+  check('反向重送仍然不重複', countTrades() === n1, countTrades());
+  check('回覆有說明略過的原因', /略過/.test(again), again.split('\n')[1]);
+}
+
+// 選用：拿真實的對帳單跑一次解析，只印不斷言（檔案不進版控）
+//   STATEMENT_CSV=path/to.csv node test_asset.cjs
+if (process.env.STATEMENT_CSV && fs.existsSync(process.env.STATEMENT_CSV)) {
+  console.log('\n[對帳單解析預覽] ' + process.env.STATEMENT_CSV);
+  const inst = target.getSheetByName('標的');
+  inst.getRange(inst.getLastRow() + 1, 1, 1, 10).setValues([['009826', '貝萊德世界股票',
+    'TPE', 'TWD', 'GOOGLEFINANCE', '全球', '指', '', '持有中', '預覽用']]);
+  const st = AssetImport.parseStatement(fs.readFileSync(process.env.STATEMENT_CSV, 'utf8'));
+  console.log('  解析 ' + st.rows.length + ' 列，錯誤 ' + st.errors.length + ' 項');
+  st.rows.forEach(r => console.log('  ' + r.date + ' ' + r.action + ' ' + r.code + ' ' +
+    r.name + ' ' + r.shares.toLocaleString() + ' 股 @' + r.price +
+    ' 淨收付 ' + Math.round(r.net).toLocaleString() + '  ' + r.key));
+  st.errors.forEach(e => console.log('  WARN ' + e));
+}
+
 // 選用：拿真實的券商匯出檔跑一次解析，只印不斷言（檔案不進版控）
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
