@@ -210,6 +210,26 @@ oldest-first — so the fallback yields an early-in-month close, not today's. Tr
 "better than a blank" rather than a live quote; verify against an intraday price before
 relying on it.
 
+### 目標配置%
+
+只有一個地方填：**`標的` 的 `目標配置%`**，手動維護，沒有任何程式碼寫值進去
+（遷移與自動登記新標的都留空）。`持倉` 同名那一欄是
+`=IFERROR(VLOOKUP($A{r},標的!$A:$H,8,FALSE),0)` —— 指回去，不是重算當下抄過來的
+死值，所以改完目標不必等下一次 `Position.rebuild()`，`偏離` 當場就跟著動。
+
+那個欄索引是 `AssetSchema.headerMap(instSheet)` 讀**活的標題列**算出來的，不是寫死的
+數字，也不是 `TABS` —— 公式住在試算表裡，就得對得上試算表實際的欄序。寫死的話，在
+`目標配置%` 左邊插一欄就會靜默抓到隔壁欄（現在那裡是 `類型`，文字讀成 0），每一檔的
+目標都變 0 而且不報錯。同一個坑在 [`AssetSchema.gs`](AssetSchema.gs) 的
+`TRADE_FORMULAS` 還在（`名稱` 寫死 `標的!$A:$B,2`），只是第 2 欄幾乎不會被推走。
+
+⚠️ **填比例不是百分比。** `佔總資產%`、`配置` 的 `實際%` 都是 0..1 的比例，
+`偏離` = `佔總資產%` − `目標配置%`。填 12.5 而不是 0.125，偏離會差一百倍。
+
+⚠️ 留空讀到 0，而 `配置` 用 `target > 0` 判斷「有沒有設目標」—— 所以某個
+區域／類型分組全部留空時，`目標%` / `偏離%` / `偏離金額` 三欄寫成空字串，
+「沒設目標」和「目標是 0」在畫面上長得一樣。
+
 ### 面板 vs 指標
 
 Two tabs, one number set, on purpose:

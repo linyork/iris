@@ -234,8 +234,9 @@ var Position = (() => {
       return { ok: false, reason: msg };
     }
 
+    var instSheet   = ss.getSheetByName('標的');
     var trades      = AssetSchema.readObjects(ss.getSheetByName('交易'));
-    var instruments = AssetSchema.readObjects(ss.getSheetByName('標的'));
+    var instruments = AssetSchema.readObjects(instSheet);
     var accounts    = AssetSchema.readObjects(ss.getSheetByName('帳戶'));
 
     var replayed = p.replay(trades);
@@ -244,6 +245,22 @@ var Position = (() => {
     // A~G 由程式算；H 之後放公式，讓市價/市值跟著 GOOGLEFINANCE 即時變動。
     var instByCode = {};
     instruments.forEach(i => { instByCode[_str(i['代號'])] = i; });
+
+    // 目標配置% 指回「標的」而不是抄成死值：那一欄是人手維護的，抄過來的話
+    // 改完目標要等下一次 rebuild，偏離才會跟著動。
+    //
+    // 欄索引讀**活的標題列**，不是 TABS —— 公式住在試算表裡，就得對得上試算表
+    // 實際的欄序。寫死一個數字的話，在它左邊插一欄就會靜默抓到隔壁欄（現在那裡
+    // 是「類型」，文字被讀成 0），每一檔的目標都變 0 而且不報錯。
+    // 真的找不到這一欄才退回 TABS 的位置：VLOOKUP 會抓到空白讀成 0，
+    // 比組出 $A:$ 這種爛範圍讓整欄噴錯好。
+    var _targetIdx = AssetSchema.headerMap(instSheet)['目標配置%'];
+    if (_targetIdx === undefined || _targetIdx < 0) {
+      _targetIdx = AssetSchema.expected('標的').indexOf('目標配置%');
+      Logger.error('Position.rebuild', '「標的」找不到 目標配置% 欄，退回 TABS 的位置');
+    }
+    _targetIdx += 1;                                   // VLOOKUP 的欄索引是 1-based
+    var _targetRef = '標的!$A:$' + AssetSchema.colLetter(_targetIdx);
 
     var codes = Object.keys(replayed.positions)
       .filter(c => {
@@ -277,7 +294,7 @@ var Position = (() => {
         '=IF(SUM($I$2:$I)=0,0,$I' + r + '/SUM($I$2:$I))',
         _str(ins['區域']),
         _str(ins['類型']),
-        _num(ins['目標配置%']),
+        '=IFERROR(VLOOKUP($A' + r + ',' + _targetRef + ',' + _targetIdx + ',FALSE),0)',
         "=IFERROR($I" + r + "/VLOOKUP(\"總資產\",指標!$A:$B,2,FALSE),0)",
         '=$R' + r + '-$Q' + r
       ];

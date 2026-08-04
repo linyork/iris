@@ -1203,6 +1203,86 @@ console.log('\nT19  抓不到市價時要出聲，不要靜默少算');
   check('總資產回到正常量級', num((after.find(x => x['指標'] === '總資產') || {})['數值']) > 0);
 }
 
+// ─── T20  目標配置% 指回「標的」而不是抄成死值 ────────────────────
+// 「標的」是人手維護的輸入表。抄成死值的話，改完目標要等下一次 rebuild
+// 偏離才會動；寫成 VLOOKUP 就是改完當下即時反映。
+console.log('\nT20  目標配置% 跟著「標的」走');
+{
+  const posSheet  = target.getSheetByName('持倉');
+  const instSheet = target.getSheetByName('標的');
+  const TARGET_COL = AssetSchema.expected('持倉').indexOf('目標配置%') + 1;
+  const DEV_COL    = AssetSchema.expected('持倉').indexOf('偏離') + 1;
+  const SHARE_COL  = AssetSchema.expected('持倉').indexOf('佔總資產%') + 1;
+
+  const at   = AssetSchema.readObjects(posSheet).findIndex(x => num(x['股數']) > 0) + 2;
+  const code = String(posSheet.getRange(at, 1).getValue());
+  const f    = String(posSheet.raw(at, TARGET_COL));
+
+  check('目標配置% 是公式，不是重算當下抄過來的死值', f.charAt(0) === '=', f);
+  check('公式指回「標的」表', /VLOOKUP\(\$A\d+,標的!/.test(f), f);
+
+  // 「標的」的那一列
+  const instAt = AssetSchema.readObjects(instSheet)
+    .findIndex(x => String(x['代號']) === code) + 2;
+  const instCol = AssetSchema.expected('標的').indexOf('目標配置%') + 1;
+  const savedTarget = instSheet.raw(instAt, instCol);
+
+  // 比例，不是 12.5 —— 佔總資產% 與配置的實際% 都是 0..1 的比例
+  instSheet.getRange(instAt, instCol).setValue(0.125);
+
+  // ⚠️ 這裡刻意**不跑** rebuild
+  const row = AssetSchema.readObjects(posSheet)[at - 2];
+  check('改「標的」之後不必重算，持倉就跟著變',
+    num(row['目標配置%']) === 0.125, row['目標配置%']);
+  check('偏離 = 佔總資產% − 目標配置%',
+    Math.abs(num(posSheet.getRange(at, DEV_COL).getValue()) -
+             (num(posSheet.getRange(at, SHARE_COL).getValue()) - 0.125)) < 1e-9);
+
+  // 空白仍然是 0，不是 #N/A —— 配置那邊用 target > 0 判斷「有沒有設目標」
+  instSheet.getRange(instAt, instCol).setValue('');
+  check('「標的」留空時讀到 0，不是錯誤值',
+    num(AssetSchema.readObjects(posSheet)[at - 2]['目標配置%']) === 0,
+    AssetSchema.readObjects(posSheet)[at - 2]['目標配置%']);
+
+  // 重算之後配置表才會把它彙總進去（配置是死值，跟持倉不同）
+  instSheet.getRange(instAt, instCol).setValue(0.125);
+  Position.rebuild();
+  const alloc = AssetSchema.readObjects(target.getSheetByName('配置'));
+  check('重算後配置表的分組目標% 含進這一檔',
+    alloc.some(x => Math.abs(num(x['目標%']) - 0.125) < 1e-9),
+    JSON.stringify(alloc.filter(x => x['目標%'] !== '').map(x => x['分組'] + '=' + x['目標%'])));
+
+  instSheet.getRange(instAt, instCol).setValue(savedTarget === undefined ? '' : savedTarget);
+  Position.rebuild();
+
+  // 欄索引讀活的標題列而不是寫死：把 目標配置% 整欄搬到最後面（模擬有人直接
+  // 在試算表上調欄序、卻沒動 TABS），公式要跟著搬，而不是繼續抓第 8 欄的「類型」
+  const width = AssetSchema.expected('標的').length;
+  const saved = instSheet.getRange(1, 1, instSheet.getLastRow(), width).getValues();
+  const moved = saved.map(r => {
+    const cp = r.slice();
+    cp.push(cp.splice(instCol - 1, 1)[0]);            // 那一欄挪到最右邊
+    return cp;
+  });
+  moved[0][moved[0].length - 1] = '目標配置%';
+  instSheet.getRange(1, 1, moved.length, width).setValues(moved);
+  instSheet.getRange(instAt, width).setValue(0.125);
+
+  Position.rebuild();
+  const movedF = String(posSheet.raw(at, TARGET_COL));
+  check('欄序改變後公式跟著指到新位置',
+    movedF.indexOf(',' + width + ',FALSE)') >= 0, movedF);
+  check('欄序改變後讀到的還是同一個目標值',
+    num(AssetSchema.readObjects(posSheet)[at - 2]['目標配置%']) === 0.125,
+    AssetSchema.readObjects(posSheet)[at - 2]['目標配置%']);
+
+  instSheet.getRange(1, 1, saved.length, width).setValues(saved);
+  Position.rebuild();
+  check('還原後回到原欄位',
+    String(posSheet.raw(at, TARGET_COL)).indexOf(',' + instCol + ',FALSE)') >= 0,
+    String(posSheet.raw(at, TARGET_COL)));
+}
+
 // 選用：拿真實的券商匯出檔跑一次解析，只印不斷言（檔案不進版控）
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
