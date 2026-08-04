@@ -251,6 +251,9 @@ var DataSync = (() => {
 
 function setData() {
   try {
+    // 快照要記的是當下的面板數字，而面板是重算當下寫死的值 ——
+    // 不先重算就會把上一次寫交易時的舊數字當成今天的收盤狀態。
+    Position.rebuild();
     DataSync.run();
   } catch (ex) {
     Logger.error('setData', '每日快照失敗', ex && ex.message ? ex.message : String(ex));

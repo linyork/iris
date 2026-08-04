@@ -16,18 +16,11 @@
 
 // ─── 系統 ─────────────────────────────────────────────────────────
 
-/**
- * 列出目前所有已註冊的 Trigger。
- * 刪除任何 trigger 進入點之前先跑這支：手動在觸發條件頁面建的 trigger
- * 不會出現在 setupAllTriggers() 的程式碼裡，指向不存在的函式會每天靜默失敗。
- */
+/** 列出實際註冊的 Trigger 並與 Cron.SCHEDULE 比對 */
 function listTriggers() {
-  var ts = ScriptApp.getProjectTriggers();
-  console.log('共 ' + ts.length + ' 個 Trigger：');
-  // ⚠️ getEventType() 回傳列舉物件，直接丟進 console.log 會展開成上百行的
-  //    循環結構把記錄擠爆。一定要 String() 轉成字串。
-  ts.forEach(t => console.log('  ' + t.getHandlerFunction() + '  |  ' + String(t.getEventType())));
-  return ts.map(t => t.getHandlerFunction());
+  var report = Cron.list();
+  console.log(report);
+  return report;
 }
 
 /**
@@ -60,53 +53,12 @@ function setup() {
   console.log('DEBUG_MODE:          ' + Config.DEBUG_MODE + '  ← env!B2 控制');
 }
 
-/**
- * 重建所有系統 Trigger（首次部署或重設時執行一次）
- * ⚠️ 會先清除**所有**既有 Trigger 再重建，手動建過的也會一起消失。
- */
+/** 依 Cron.SCHEDULE 重建所有 Trigger。⚠️ 會先清掉所有既有的，含手動建的 */
 function setupAllTriggers() {
-  try {
-    var triggers = ScriptApp.getProjectTriggers();
-    triggers.forEach(t => ScriptApp.deleteTrigger(t));
-    Logger.info('setupAllTriggers', '已清除 ' + triggers.length + ' 個舊 Trigger');
-
-    // 每日 04:00 — 記憶清理
-    ScriptApp.newTrigger('dailyCleanUp').timeBased().atHour(4).everyDays(1).create();
-
-    // 每日 09:00 — 財經早報
-    ScriptApp.newTrigger('dailyReport').timeBased().atHour(9).everyDays(1).create();
-
-    // 每日 10:00 / 14:00 — 盤中警報
-    ScriptApp.newTrigger('marketAlert').timeBased().atHour(10).everyDays(1).create();
-    ScriptApp.newTrigger('marketAlert').timeBased().atHour(14).everyDays(1).create();
-
-    // 每週六 09:00 — 週報
-    ScriptApp.newTrigger('weeklyReport').timeBased()
-      .onWeekDay(ScriptApp.WeekDay.SATURDAY).atHour(9).create();
-
-    // 每月 1 日 10:00 — 月報（避開早報的 09:00）
-    ScriptApp.newTrigger('monthlyReport').timeBased().onMonthDay(1).atHour(10).create();
-
-    // 每日 18:00 — 資產快照
-    ScriptApp.newTrigger('setData').timeBased().atHour(18).everyDays(1).create();
-
-    // 每日 19:00 — 主動顧問感知（等 setData 寫完快照；atHour 是 1 小時窗口不是精準時間，
-    // 所以留 1 小時 buffer）
-    ScriptApp.newTrigger('advisorCheckEvening').timeBased().atHour(19).everyDays(1).create();
-
-    console.log('✅ Trigger 設定完成：');
-    console.log('   每日 04:00 → dailyCleanUp');
-    console.log('   每日 09:00 → dailyReport');
-    console.log('   每日 10:00 → marketAlert');
-    console.log('   每日 14:00 → marketAlert');
-    console.log('   每週六 09:00 → weeklyReport');
-    console.log('   每月 1 日 10:00 → monthlyReport');
-    console.log('   每日 18:00 → setData');
-    console.log('   每日 19:00 → advisorCheckEvening');
-  } catch (ex) {
-    Logger.error('setupAllTriggers', '設定 Trigger 失敗', ex);
-    console.log('❌ 設定失敗：' + ex.message);
-  }
+  var r = Cron.setup();
+  console.log(JSON.stringify(r));
+  console.log(Cron.list());
+  return r;
 }
 
 /**

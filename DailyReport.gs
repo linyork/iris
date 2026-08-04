@@ -26,6 +26,9 @@ function buildDailyReport() {
     Logger.info('dailyReport', '開始產生早報', nowStr);
 
     // 1. 蒐集資料
+    // 排程的先後順序不保證（atHour 是一小時的窗口），所以自己先重算一次
+    Position.rebuild();
+
     var dashboard = GoogleSheet.getDashboard();
     var holdings  = GoogleSheet.getHoldings();
     var news      = WebSearch.search('台股 美股 全球股市 今日財經新聞');

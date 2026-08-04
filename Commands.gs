@@ -26,10 +26,37 @@ var Commands = (() => {
       name: 'report',
       description: '立即產生今日財經早報（需 1~2 分鐘）',
       handler: (event) => handleReport(event)
+    },
+    {
+      name: 'refresh',
+      description: '重新計算持倉、面板與配置',
+      handler: () => handleRefresh()
     }
   ];
 
   // ─── 各指令實作 ────────────────────────────────────────────
+
+  /**
+   * 手動重算。
+   *
+   * `持倉` 的市價與市值是活公式，但 `面板` 與 `配置` 是重算當下寫死的值，
+   * 而「總資產」是從面板讀的 —— 盤中想看到當下的數字就得重算一次。
+   * 排程在 13:00 也有一班，這支是不想等的時候用的。
+   */
+  var handleRefresh = () => {
+    var r = Position.rebuild();
+    if (!r || !r.ok) {
+      return '重算失敗：' + ((r && r.reason) || '未知原因');
+    }
+    var lines = [
+      '已重新計算。',
+      '▸ 持倉 ' + r.positions + ' 檔（含已出清）、已實現損益 ' + r.realized + ' 筆',
+      '▸ 交易 ' + r.trades + ' 筆',
+      '▸ 總資產 ' + Math.round(r.totalAssets).toLocaleString()
+    ];
+    if (r.warnings && r.warnings.length) lines.push('⚠️ ' + r.warnings.join('；'));
+    return lines.join('\n');
+  };
 
   /**
    * Mini App 網址 = webhook 的 /exec 加上 ?view=tg

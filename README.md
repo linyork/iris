@@ -339,6 +339,7 @@ expected_hash     = hex(HMAC_SHA256(訊息 = data_check_string, 金鑰 = secret_
 | 每日 14:00 | `marketAlert` | 盤中異動警報（第二次） |
 | 每週六 09:00 | `weeklyReport` | 週度績效回顧 |
 | 每月 1 日 10:00 | `monthlyReport` | 月度總結 |
+| 每日 13:00 | `rebuildAssets` | 收盤後重算持倉／面板／配置 |
 | 每日 18:00 | `setData` | 寫入當日快照至新表的 `每日快照`（長表，同日覆寫） |
 | 每日 19:00 | `advisorCheckEvening` | 主動顧問感知（讀快照 + 決策，LLM 判斷是否推播） |
 

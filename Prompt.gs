@@ -48,6 +48,7 @@ var Prompt = (() => {
 ▸ 分析持倉風險涉及外部因素 → searchWeb + getHoldings
 ▸ 問股利收入、年度股利統計 → getDividendHistory
 ▸ 說「收到股利」→ recordDividend（日期預設今日）
+▸ 說「重新整理 / 重算 / 更新一下數字」→ 請他直接輸入 /refresh（不需要工具）
 ▸ 說「買了 / 賣了 / 提了錢 / 匯了錢 / 付了費用」→ recordTrade
    動作只能是：買進 / 賣出 / 股利 / 存入 / 提出 / 費用 / 利息 / 轉出 / 轉入
    買賣必須有 代號＋股數＋單價，缺一律先問，不要自己補

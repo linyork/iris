@@ -223,7 +223,20 @@ What survived, because it was never about columns:
 `verifySnapshot()` and `dryRunSetData()` in `DevTools.gs` report what today would write
 without writing it.
 
-### Scheduled Triggers (set via `setupAllTriggers()` in `Main.gs`)
+### Scheduled Triggers
+
+`Cron.gs` holds `SCHEDULE` — one declarative table of what runs when and why. `Cron.setup()`
+rebuilds every trigger from it and `Cron.list()` diffs it against what GAS actually has, so a
+hand-made trigger or a missing one shows up instead of failing quietly. **Handlers stay in
+their own modules**; the table only registers names.
+
+⚠️ `atHour(9)` fires somewhere between 9:00 and 10:00, so **never use trigger order to
+guarantee freshness**. `setData()` and `buildDailyReport()` each call `Position.rebuild()`
+themselves, because 面板 and 配置 hold values computed at rebuild time — 持倉 prices are live
+formulas, but the total assets figure Snapshot reads is only as fresh as the last rebuild.
+`/refresh` does the same on demand.
+
+(legacy list, kept for reference)
 - `04:00` — `dailyCleanUp()`: purge expired STM + chat rows older than 30 days
 - `18:00` — `setData()` in `DataSync.gs`: write the daily snapshot into `每日快照`
   (header-reconciling and idempotent per date — see [Daily Snapshot](#daily-snapshot))
