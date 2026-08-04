@@ -191,6 +191,25 @@ callback because the ReAct loop takes far longer than anyone will hold a sheet o
 (The table above is the **legacy** 股票 sheet. The 資產管理 sheet's own tabs are defined in
 `AssetSchema.TABS` — that array is the spec, not a copy of it kept here.)
 
+### 持倉的市價
+
+`Position._priceFormula()` builds column H. GOOGLEFINANCE first; when it returns an error
+(quota, a freshly listed ETF Google has no data for), TPE rows fall back to parsing TWSE's
+`STOCK_DAY_AVG` endpoint. Non-TPE markets get no fallback — that endpoint only knows 上市 codes.
+
+Two things that must stay true when touching this:
+
+- **`stockNo` is `&$A{r}`, a reference to that row's own 代號** — never a literal. A hardcoded
+  ticker makes every row fetch the same stock's price and reports no error at all.
+- **Both layers end in `,"")`.** Column I decides "did we get a quote?" with `$H=""`. If the
+  fallback can surface `#N/A` / `#VALUE!` instead of an empty string, I breaks, then
+  `SUM($I$2:$I)`, then 指標's 總資產, then everything downstream of it.
+
+⚠️ The regex grabs the **first** matching date row, and STOCK_DAY_AVG returns the whole month
+oldest-first — so the fallback yields an early-in-month close, not today's. Treat it as
+"better than a blank" rather than a live quote; verify against an intraday price before
+relying on it.
+
 ### 面板 vs 指標
 
 Two tabs, one number set, on purpose:

@@ -213,6 +213,15 @@ function evalFormula(src, sheet, row) {
       if (m && PRICES[m[1]] !== undefined) return PRICES[m[1]];
       return NA;
     },
+    // GOOGLEFINANCE 在夾具裡對所有現存持股都查得到，所以 IFERROR 的第一分支
+    // 永遠會贏 —— 底下這五個只需要「不丟例外」，TWSE 那條備援路徑本身的語意
+    // 對測試沒有影響，本機也沒有網路可以真的打 TWSE。
+    TODAY: () => new Date(),
+    TEXT: (v) => String(v),
+    IMPORTDATA: () => NA,
+    CONCATENATE: (...a) => a.flat(Infinity).map(v => (v === NA ? '' : String(v))).join(''),
+    REGEXEXTRACT: () => NA,
+    VALUE: (v) => (v === NA ? NA : num(v)),
     // 範圍與儲存格存取
     _R1: (sheetName, colLetter, fromRow) => {
       const sh = sheetName ? CURRENT_SS.getSheetByName(sheetName) : sheet;
@@ -239,9 +248,17 @@ function evalFormula(src, sheet, row) {
   };
 
   // ── 轉成 JS 運算式 ──
-  // 先把字串常值抽走，否則 "CURRENCY:XAUTWD" 會被當成 A:B 範圍
+  // 先把字串常值抽走，否則 "CURRENCY:XAUTWD" 會被當成 A:B 範圍。
+  // Sheets 的字串跳脫是連續兩個雙引號，不是反斜線，所以要用 (?:[^"]|"")*
+  // 才吃得完整段 —— 單純 [^"]* 會在第一個 "" 就提早斷掉，把 REGEXEXTRACT 的
+  // pattern 從中間切開。抽出來之後還要還原成真字元、再用 JSON.stringify 包成
+  // 合法的 JS 字面值，否則 pattern 裡的反斜線會被 JS 自己的跳脫規則吃掉，
+  // 組出來的運算式編譯不過。
   const lits = [];
-  let js = src.replace(/"([^"]*)"/g, m => { lits.push(m); return '' + (lits.length - 1) + ''; });
+  let js = src.replace(/"(?:[^"]|"")*"/g, m => {
+    lits.push(JSON.stringify(m.slice(1, -1).replace(/""/g, '"')));
+    return '' + (lits.length - 1) + '';
+  });
 
   const SH = '(?:([\\u4e00-\\u9fa5A-Za-z_][\\u4e00-\\u9fa5\\w]*)!)?';
   // 兩欄範圍 A:B
@@ -254,7 +271,7 @@ function evalFormula(src, sheet, row) {
   js = js.replace(new RegExp('(?<![\\w.$])' + SH + '\\$?([A-Z]{1,2})\\$?(\\d+)(?![\\w(])', 'g'),
     (_, sh, c, r) => `F._C(${sh ? JSON.stringify(sh) : 'null'},"${c}",${r})`);
   // 函式名
-  js = js.replace(/\b(IFERROR|IFS|IF|OR|AND|SUMIF|SUM|VLOOKUP|GOOGLEFINANCE|N)\(/g, 'F.$1(');
+  js = js.replace(/\b(IFERROR|IFS|IF|OR|AND|SUMIF|SUM|VLOOKUP|GOOGLEFINANCE|TODAY|TEXT|IMPORTDATA|CONCATENATE|REGEXEXTRACT|VALUE|N)\(/g, 'F.$1(');
   // 比較運算子（& 是字串連接）
   js = js.replace(/<>/g, '!==').replace(/&/g, '+');
   js = js.replace(/([^<>!=])=([^=])/g, '$1==$2');
@@ -1102,6 +1119,30 @@ console.log('\nT17  面板只畫還有部位的標的');
     raws.length > 0 && raws.every(x => x.charAt(0) === '='), raws[0]);
 
   check('總資產那格也是公式', String(pnl.raw(5, 2)).charAt(0) === '=', String(pnl.raw(5, 2)));
+}
+
+// ─── T18  市價的 TWSE 備援 ────────────────────────────────────────
+// GOOGLEFINANCE 抓不到時退到 TWSE 的 STOCK_DAY_AVG。本機沒有網路也打不到 TWSE，
+// 所以這裡驗的是**公式長相**：代號必須是指向 $A 欄的參照，不能是寫死的某一檔 ——
+// 寫死的話每一列都會去抓同一支股票的價格，而且完全不會報錯。
+console.log('\nT18  市價抓不到時退到 TWSE');
+{
+  const posSheet = target.getSheetByName('持倉');
+  const rows = AssetSchema.readObjects(posSheet);
+  const at = rows.findIndex(x => num(x['股數']) > 0) + 2;
+  const f = String(posSheet.raw(at, 8));
+
+  check('第一順位仍然是 GOOGLEFINANCE', /^=IFERROR\(GOOGLEFINANCE\(/.test(f), f.slice(0, 40));
+  check('備援打的是 TWSE STOCK_DAY_AVG', /STOCK_DAY_AVG/.test(f));
+  check('stockNo 是指向本列代號的參照，不是寫死的代號',
+    f.indexOf('&stockNo="&$A' + at) >= 0, f.slice(f.indexOf('stockNo') - 6, f.indexOf('stockNo') + 18));
+  check('備援自己也有收尾，失敗時回空字串而不是錯誤值',
+    /,""\)\)$/.test(f), f.slice(-12));
+
+  // 出清的標的整格是空字串（不抓價），所以只檢查還有部位的那幾列
+  check('每一列抓的是自己的代號（沒有兩列共用同一個 stockNo）',
+    rows.every((x, i) => num(x['股數']) <= 0 ||
+      String(posSheet.raw(i + 2, 8)).indexOf('&stockNo="&$A' + (i + 2)) >= 0));
 }
 
 // 選用：拿真實的券商匯出檔跑一次解析，只印不斷言（檔案不進版控）

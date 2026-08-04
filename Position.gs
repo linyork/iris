@@ -45,6 +45,29 @@ var Position = (() => {
     return Math.round((n + Number.EPSILON) * f) / f;
   };
 
+  /**
+   * 市價公式。GOOGLEFINANCE 抓不到時（額度用完、標的剛掛牌、Google 那邊短暫沒資料）
+   * 退到 TWSE 官方的 STOCK_DAY_AVG 端點硬解析收盤價。只在 TPE 市場退這一步 ——
+   * 這支端點只認得上市代號，非 TPE 標的退了也是白retry。
+   *
+   * ⚠️ REGEXEXTRACT 抓的是**這個月第一筆**符合的日期列。STOCK_DAY_AVG 回傳的是整月
+   *    資料、由舊到新排序，第一筆是月初、不是最新收盤 —— 這是抄現成公式時要注意的地方，
+   *    沒驗證過真的抓到今天的價格，用之前先自己對一次盤中報價。
+   * ⚠️ 外層一定要包一個 IFERROR(...,"") 收尾：這欄空字串是 $I 判斷「有沒有報到價」的
+   *    依據（=IF(OR($C=0,$H=""),0,$C*$H)），沒收尾的話，TWSE 那段一旦解析失敗就會是
+   *    #N/A / #VALUE! 錯誤值，不等於 ""，會讓 $I 連帶壞掉，一路串到 SUM($I$2:$I)、
+   *    面板總資產全部變成錯誤。
+   */
+  var _priceFormula = (market, r) => {
+    var gf = 'GOOGLEFINANCE("' + market + ':"&$A' + r + ',"price")';
+    if (market !== 'TPE') return '=IFERROR(' + gf + ',"")';
+    var twse =
+      'IFERROR(VALUE(REGEXEXTRACT(CONCATENATE(IMPORTDATA(' +
+      '"https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_AVG?date="&TEXT(TODAY(),"yyyyMMdd")&"&stockNo="&$A' + r + ')),' +
+      '"\\d{3}/\\d{2}/\\d{2}\\""([0-9.]+)")),"")';
+    return '=IFERROR(' + gf + ',' + twse + ')';
+  };
+
   // ─── 交易重放 ──────────────────────────────────────────────────
 
   /**
@@ -231,9 +254,7 @@ var Position = (() => {
         _round(st.dividend, 2),
         _round(st.realized, 2),
         // 市價：出清的標的不抓價，省 GOOGLEFINANCE 配額也避免 #N/A
-        st.shares > 0
-          ? '=IFERROR(GOOGLEFINANCE("' + market + ':"&$A' + r + ',"price"),"")'
-          : '',
+        st.shares > 0 ? _priceFormula(market, r) : '',
         '=IF(OR($C' + r + '=0,$H' + r + '=""),0,$C' + r + '*$H' + r + ')',
         '=$I' + r + '-$D' + r,
         '=IF($D' + r + '=0,0,$J' + r + '/$D' + r + ')',
