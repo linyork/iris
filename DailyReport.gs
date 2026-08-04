@@ -1,12 +1,82 @@
 /**
  * DailyReport
- * @description 每日早上 9:00 自動產生個人化財經早報，透過 LINE push 給主人
+ * @description 排程產生的三份報告：每日早報、每週週報、每月月報
+ *
+ * 三份報告的骨架完全相同 —— 蒐資料 → 組 system context → 三段式 contents →
+ * SMART 檔次跑一趟 → 推給所有主人。以前三支函式各寫了一遍這個骨架，
+ * 於是「日期與年份規則」那段被抄了三份，動一次要改三個地方。
+ *
+ * 現在骨架只有一份（`_generateReport`），三份報告各自只描述**自己不一樣的地方**：
+ * 期間怎麼稱呼、要餵哪些資料、要問什麼。加第四份報告只要再寫一個 spec。
+ *
+ * ⚠️ `dailyReport` / `weeklyReport` / `monthlyReport` 是 Trigger 以**名稱**綁定的
+ *    進入點（見 `Cron.SCHEDULE`），`buildDailyReport` 則被 `Commands.gs` 的
+ *    `/report` 呼叫。這四個名字都不能改。
  */
+
+/** 三份報告共用的排版要求 */
+var REPORT_FORMAT =
+  '格式須適合純文字閱讀，不使用 Markdown，以換行和全形符號（▸ ◆ 【】）排版。\n';
+
+/**
+ * 報告產生的共用骨架。
+ *
+ * @param {object} spec
+ * @param {string} spec.scope    '早報' / '週報' / '月報'，會進日期規則那段
+ * @param {string} [spec.period] 報告期間說明，接在 System Info 的 Today 後面
+ * @param {string} spec.caller   記進 consolelog 的呼叫者名稱
+ * @param {function(): object} spec.gather  蒐集資料，回傳 {標題: 內容} 的物件
+ * @param {string} spec.ask      要模型做什麼（資料由 gather 附在後面）
+ * @param {string} [spec.knowledgeQuery] 要搜什麼長期知識，預設 '投資策略 配置'
+ * @returns {string|null} 報告內文；產生失敗回 null
+ */
+function _generateReport(spec) {
+  try {
+    Logger.info(spec.caller, '開始產生' + spec.scope,
+      Utilities.formatDate(new Date(), 'GMT+8', 'yyyy/MM/dd HH:mm'));
+
+    // 排程的先後順序不保證（atHour 是一小時的窗口），所以自己先重算一次 ——
+    // 指標與配置是重算當下寫死的值，不重算就會拿上一次寫交易時的舊數字當今天。
+    Position.rebuild();
+
+    var data = spec.gather();
+
+    var systemContext = Prompt.systemContext({
+      scope:     spec.scope,
+      period:    spec.period,
+      knowledge: GoogleSheet.searchKnowledge(spec.knowledgeQuery || '投資策略 配置')
+    });
+
+    var userPrompt = spec.ask + '\n\n' +
+      Object.keys(data).map(k => '【' + k + '】\n' + data[k]).join('\n\n');
+
+    var contents = [
+      { role: 'user',  parts: [{ text: systemContext }] },
+      { role: 'model', parts: [{ text: Prompt.ACKNOWLEDGEMENT }] },
+      { role: 'user',  parts: [{ text: userPrompt }] }
+    ];
+
+    var report = Utils.extractText(
+      AIServiceFactory.callAPI(contents, { model: 'SMART', caller: spec.caller })
+    );
+
+    if (!report) {
+      Logger.error(spec.caller, spec.scope + '產生失敗', 'AI 回傳空值');
+      return null;
+    }
+    return report;
+  } catch (ex) {
+    Logger.error(spec.caller, spec.scope + '產生失敗', ex);
+    return null;
+  }
+}
+
+// ─── 早報 ─────────────────────────────────────────────────────────
 
 /**
  * 產生今日早報內文（不發送）
  *
- * 從 dailyReport() 抽出來，讓排程推播與 /report 指令共用同一段邏輯：
+ * 與 dailyReport() 分開，讓排程推播與 /report 指令共用同一段邏輯：
  * 排程要「週末跳過 + 推給所有主人」，/report 要「隨時可跑 + 只回給發問的人」，
  * 差異全部留在呼叫端，這裡只負責產生內容。
  *
@@ -16,80 +86,30 @@
  * @returns {{dateStr: string, body: string}|null} 產生失敗回 null
  */
 function buildDailyReport() {
-  try {
-    var today = new Date();
-    var nowStr  = Utilities.formatDate(today, 'GMT+8', 'yyyy/MM/dd HH:mm');
-    var dateStr = Utilities.formatDate(today, 'GMT+8', 'MM/dd');
-    var todayFull = Utilities.formatDate(today, 'GMT+8', 'yyyy-MM-dd');
-    var currentYear = Utilities.formatDate(today, 'GMT+8', 'yyyy');
+  var dateStr = Utilities.formatDate(new Date(), 'GMT+8', 'MM/dd');
 
-    Logger.info('dailyReport', '開始產生早報', nowStr);
-
-    // 1. 蒐集資料
-    // 排程的先後順序不保證（atHour 是一小時的窗口），所以自己先重算一次
-    Position.rebuild();
-
-    var dashboard = GoogleSheet.getDashboard();
-    var holdings  = GoogleSheet.getHoldings();
-    var news      = WebSearch.search('台股 美股 全球股市 今日財經新聞');
-
-    // 2. 讀取長期知識（個人偏好）
-    var knowledge = GoogleSheet.searchKnowledge('投資策略 風險 配置');
-    var stm       = GoogleSheet.getValidShortTermMemories();
-
-    // 3. 組裝 prompt
-    var systemContext = Config.SYSTEM_PROMPT +
-      '\n\n[System Info]\nCurrent Time: ' + nowStr +
-      '\nToday: ' + todayFull + '（今天的日期，年份為 ' + currentYear + '）' +
-      '\nUser: 主人 (Master)' +
-      '\n\n[重要：日期與年份規則]\n' +
-      '- 報告內容必須以 Today（' + todayFull + '）為基準\n' +
-      '- 引用新聞或事件時，若新聞日期不屬於 ' + currentYear + ' 年或鄰近日期，視為過時資料，須誠實標註「資料時點較舊」或「未取得當日資訊」，不得當成今日資訊呈現\n' +
-      '- 禁止在報告中沿用其他年份的舊事件假裝為今日重點';
-    if (knowledge && !knowledge.includes('沒有找到')) {
-      systemContext += '\n\n[相關長期知識]:\n' + knowledge;
-    }
-    if (stm) {
-      systemContext += '\n\n[短期記憶]:\n' + stm;
-    }
-
-    var userPrompt =
-      '請根據以下資料，產生今日（' + currentYear + '/' + dateStr + '）的個人化財經早報。\n' +
-      '格式須適合 LINE 純文字閱讀，不使用 Markdown，以換行和符號（▸ ◆ 【】）排版。\n' +
+  var body = _generateReport({
+    scope:  '早報',
+    caller: 'dailyReport',
+    knowledgeQuery: '投資策略 風險 配置',
+    gather: () => ({
+      '我的投資組合': GoogleSheet.getDashboard(),
+      '持倉明細':     GoogleSheet.getHoldings(),
+      '今日財經新聞': WebSearch.search('台股 美股 全球股市 今日財經新聞')
+    }),
+    ask:
+      '請根據以下資料，產生今日的個人化財經早報。\n' + REPORT_FORMAT +
       '內容請包含：\n' +
       '1. 今日市場概況（台股、美股、相關指數）\n' +
       '2. 與我持倉直接相關的重點新聞或風險\n' +
       '3. 今日值得關注的機會或操作提示\n' +
-      '4. 一句話總結今日建議\n\n' +
-      '【我的投資組合】\n' + dashboard + '\n\n' +
-      '【持倉明細】\n' + holdings + '\n\n' +
-      '【今日財經新聞】\n' + news;
+      '4. 一句話總結今日建議'
+  });
 
-    var contents = [
-      { role: 'user',  parts: [{ text: systemContext }] },
-      { role: 'model', parts: [{ text: Prompt.ACKNOWLEDGEMENT }] },
-      { role: 'user',  parts: [{ text: userPrompt }] }
-    ];
-
-    // 4. 呼叫 AI
-    var response = AIServiceFactory.callAPI(contents, { model: 'SMART', caller: 'dailyReport' });
-    var report   = Utils.extractText(response);
-
-    if (!report) {
-      Logger.error('buildDailyReport', '早報產生失敗', 'AI 回傳空值');
-      return null;
-    }
-
-    return { dateStr: dateStr, body: report };
-  } catch (ex) {
-    Logger.error('buildDailyReport', '早報產生失敗', ex);
-    return null;
-  }
+  return body ? { dateStr: dateStr, body: body } : null;
 }
 
-/**
- * 每日 09:00 排程：產生早報並推播給所有主人
- */
+/** 每日 09:00 排程：產生早報並推播給所有主人 */
 function dailyReport() {
   try {
     var dow = new Date().getDay();
@@ -98,139 +118,88 @@ function dailyReport() {
     var result = buildDailyReport();
     if (!result) return;
 
-    var header  = '【Iris 早報 ' + result.dateStr + '】\n\n';
-    var masters = Config.ADMIN_STRING.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
-    masters.forEach(function(userId) {
-      MessagingServiceFactory.push(userId, header + result.body);
-    });
-
-    Logger.info('dailyReport', '早報發送完成', { recipients: masters.length });
+    var n = MessagingServiceFactory.pushToMasters(
+      '【Iris 早報 ' + result.dateStr + '】\n\n' + result.body);
+    Logger.info('dailyReport', '早報發送完成', { recipients: n });
   } catch (ex) {
     Logger.error('dailyReport', '早報發送失敗', ex);
   }
 }
 
-/**
- * 每週六 09:00 發送週報
- */
+// ─── 週報 ─────────────────────────────────────────────────────────
+
+/** 每週六 09:00 發送週報 */
 function weeklyReport() {
   try {
-    var _now = new Date();
-    var nowStr  = Utilities.formatDate(_now, 'GMT+8', 'yyyy/MM/dd HH:mm');
-    var dateStr = Utilities.formatDate(_now, 'GMT+8', 'MM/dd');
-    var todayFull = Utilities.formatDate(_now, 'GMT+8', 'yyyy-MM-dd');
-    var currentYear = Utilities.formatDate(_now, 'GMT+8', 'yyyy');
-    Logger.info('weeklyReport', '開始產生週報', nowStr);
+    var now     = new Date();
+    var dateStr = Utilities.formatDate(now, 'GMT+8', 'MM/dd');
 
-    var history  = GoogleSheet.getHistory(7);
-    var holdings = GoogleSheet.getHoldings();
-    var dividend = GoogleSheet.getDividendHistory(new Date().getFullYear());
-    var news     = WebSearch.search('台股 美股 本週財經重點');
-    var knowledge = GoogleSheet.searchKnowledge('投資策略 配置');
-
-    var systemContext = Config.SYSTEM_PROMPT +
-      '\n\n[System Info]\nCurrent Time: ' + nowStr +
-      '\nToday: ' + todayFull + '（年份為 ' + currentYear + '）' +
-      '\nUser: 主人 (Master)' +
-      '\n\n[重要：日期與年份規則]\n' +
-      '- 週報內容必須以 ' + currentYear + ' 年為基準\n' +
-      '- 引用新聞時若日期不屬於本年度或鄰近日期，須標註「資料時點較舊」，禁止當成本週重點呈現';
-    if (knowledge && !knowledge.includes('沒有找到')) systemContext += '\n\n[相關長期知識]:\n' + knowledge;
-
-    var userPrompt =
-      '請根據以下資料，產生本週（截至 ' + currentYear + '/' + dateStr + '）的投資週報。\n' +
-      '格式適合 LINE 純文字，不使用 Markdown，用全形符號排版。\n' +
-      '內容請包含：\n' +
-      '1. 本週總資產變化與績效\n' +
-      '2. 各 ETF 本週表現（漲跌幅）\n' +
-      '3. 本週重要財經事件\n' +
-      '4. 下週需關注的重點\n' +
-      '5. 一句話操作建議\n\n' +
-      '【本週歷史走勢】\n' + history + '\n\n' +
-      '【持倉現況】\n' + holdings + '\n\n' +
-      '【今年股利統計】\n' + dividend + '\n\n' +
-      '【本週財經新聞】\n' + news;
-
-    var contents = [
-      { role: 'user',  parts: [{ text: systemContext }] },
-      { role: 'model', parts: [{ text: Prompt.ACKNOWLEDGEMENT }] },
-      { role: 'user',  parts: [{ text: userPrompt }] }
-    ];
-
-    var response = AIServiceFactory.callAPI(contents, { model: 'SMART', caller: 'weeklyReport' });
-    var report   = Utils.extractText(response);
-    if (!report) { Logger.error('weeklyReport', '產生失敗'); return; }
-
-    var masters = Config.ADMIN_STRING.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
-    masters.forEach(function(userId) {
-      MessagingServiceFactory.push(userId, '【Iris 週報 ' + dateStr + '】\n\n' + report);
+    var body = _generateReport({
+      scope:  '週報',
+      period: '本週（截至 ' + Utilities.formatDate(now, 'GMT+8', 'yyyy-MM-dd') + '）',
+      caller: 'weeklyReport',
+      gather: () => ({
+        '本週歷史走勢': GoogleSheet.getHistory(7),
+        '持倉現況':     GoogleSheet.getHoldings(),
+        '今年股利統計': GoogleSheet.getDividendHistory(new Date().getFullYear()),
+        '本週財經新聞': WebSearch.search('台股 美股 本週財經重點')
+      }),
+      ask:
+        '請根據以下資料，產生本週的投資週報。\n' + REPORT_FORMAT +
+        '內容請包含：\n' +
+        '1. 本週總資產變化與績效\n' +
+        '2. 各 ETF 本週表現（漲跌幅）\n' +
+        '3. 本週重要財經事件\n' +
+        '4. 下週需關注的重點\n' +
+        '5. 一句話操作建議'
     });
+    if (!body) return;
 
-    Logger.info('weeklyReport', '週報發送完成', { recipients: masters.length });
+    var n = MessagingServiceFactory.pushToMasters(
+      '【Iris 週報 ' + dateStr + '】\n\n' + body);
+    Logger.info('weeklyReport', '週報發送完成', { recipients: n });
   } catch (ex) {
     Logger.error('weeklyReport', '週報發送失敗', ex);
   }
 }
 
-/**
- * 每月 1 日 09:00 發送上月月報
- */
+// ─── 月報 ─────────────────────────────────────────────────────────
+
+/** 每月 1 日 10:00 發送上月月報 */
 function monthlyReport() {
   try {
-    var now     = new Date();
-    var nowStr  = Utilities.formatDate(now, 'GMT+8', 'yyyy/MM/dd HH:mm');
+    var now       = new Date();
     var lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    var yearStr = Utilities.formatDate(lastMonth, 'GMT+8', 'yyyy');
-    var monthStr = Utilities.formatDate(lastMonth, 'GMT+8', 'MM');
-    Logger.info('monthlyReport', '開始產生月報', nowStr);
+    var yearStr   = Utilities.formatDate(lastMonth, 'GMT+8', 'yyyy');
+    var monthStr  = Utilities.formatDate(lastMonth, 'GMT+8', 'MM');
+    var label     = yearStr + '/' + monthStr;
 
-    var history   = GoogleSheet.getHistory(35);
-    var dashboard = GoogleSheet.getDashboard();
-    var dividend  = GoogleSheet.getDividendHistory(parseInt(yearStr));
-    var news      = WebSearch.search('上個月 台股 總體經濟 回顧');
-    var knowledge = GoogleSheet.searchKnowledge('投資策略 目標 配置');
-
-    var todayFull = Utilities.formatDate(now, 'GMT+8', 'yyyy-MM-dd');
-    var systemContext = Config.SYSTEM_PROMPT +
-      '\n\n[System Info]\nCurrent Time: ' + nowStr +
-      '\nToday: ' + todayFull +
-      '\nReport Period: ' + yearStr + '-' + monthStr + '（上月）' +
-      '\nUser: 主人 (Master)' +
-      '\n\n[重要：日期與年份規則]\n' +
-      '- 月報主題為 ' + yearStr + '/' + monthStr + '，所有事件回顧須屬於該月\n' +
-      '- 引用新聞時若日期不屬於該月，須標註資料時點，不得張冠李戴';
-    if (knowledge && !knowledge.includes('沒有找到')) systemContext += '\n\n[相關長期知識]:\n' + knowledge;
-
-    var userPrompt =
-      '請根據以下資料，產生 ' + yearStr + ' 年 ' + monthStr + ' 月的投資月報。\n' +
-      '格式適合 LINE 純文字，不使用 Markdown，用全形符號排版。\n' +
-      '內容請包含：\n' +
-      '1. 上月整體績效（資產增減、收益率變化）\n' +
-      '2. 上月股利收入\n' +
-      '3. 配置與目標的偏差\n' +
-      '4. 上月重大事件回顧\n' +
-      '5. 本月操作建議\n\n' +
-      '【近 35 天走勢】\n' + history + '\n\n' +
-      '【資產總覽】\n' + dashboard + '\n\n' +
-      '【' + yearStr + ' 年股利統計】\n' + dividend + '\n\n' +
-      '【上月財經新聞】\n' + news;
-
-    var contents = [
-      { role: 'user',  parts: [{ text: systemContext }] },
-      { role: 'model', parts: [{ text: Prompt.ACKNOWLEDGEMENT }] },
-      { role: 'user',  parts: [{ text: userPrompt }] }
-    ];
-
-    var response = AIServiceFactory.callAPI(contents, { model: 'SMART', caller: 'monthlyReport' });
-    var report   = Utils.extractText(response);
-    if (!report) { Logger.error('monthlyReport', '產生失敗'); return; }
-
-    var masters = Config.ADMIN_STRING.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
-    masters.forEach(function(userId) {
-      MessagingServiceFactory.push(userId, '【Iris 月報 ' + yearStr + '/' + monthStr + '】\n\n' + report);
+    var body = _generateReport({
+      scope:  '月報',
+      period: label + '（上月）—— 所有事件回顧須屬於該月',
+      caller: 'monthlyReport',
+      knowledgeQuery: '投資策略 目標 配置',
+      gather: () => ({
+        '近 35 天走勢': GoogleSheet.getHistory(35),
+        '資產總覽':     GoogleSheet.getDashboard(),
+        [yearStr + ' 年股利統計']: GoogleSheet.getDividendHistory(parseInt(yearStr, 10)),
+        '上月財經新聞': WebSearch.search('上個月 台股 總體經濟 回顧')
+      }),
+      ask:
+        '請根據以下資料，產生 ' + yearStr + ' 年 ' + monthStr + ' 月的投資月報。\n' +
+        REPORT_FORMAT +
+        '內容請包含：\n' +
+        '1. 上月整體績效（資產增減、收益率變化）\n' +
+        '2. 上月股利收入\n' +
+        '3. 配置與目標的偏差\n' +
+        '4. 上月重大事件回顧\n' +
+        '5. 本月操作建議'
     });
+    if (!body) return;
 
-    Logger.info('monthlyReport', '月報發送完成', { recipients: masters.length });
+    var n = MessagingServiceFactory.pushToMasters(
+      '【Iris 月報 ' + label + '】\n\n' + body);
+    Logger.info('monthlyReport', '月報發送完成', { recipients: n });
   } catch (ex) {
     Logger.error('monthlyReport', '月報發送失敗', ex);
   }

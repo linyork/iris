@@ -19,16 +19,10 @@
 var Position = (() => {
   var p = {};
 
-  var _num = (v) => {
-    if (v === null || v === undefined || v === '') return 0;
-    if (typeof v === 'number') return isFinite(v) ? v : 0;
-    var s = String(v).trim();
-    if (s.charAt(0) === '#' || /^loading/i.test(s)) return 0;
-    var n = parseFloat(s.replace(/[,$%]/g, ''));
-    return isNaN(n) ? 0 : n;
-  };
-
-  var _str = (v) => String(v === null || v === undefined ? '' : v).trim();
+  // 儲存格取值走 AssetSchema.str / .num（見那裡的註解）。包成箭頭函式而不是
+  // 直接指派，是因為 GAS 的檔案載入順序沒有保證。
+  var _num = (v) => AssetSchema.num(v);
+  var _str = (v) => AssetSchema.str(v);
 
   var _date = (v) => {
     if (v instanceof Date) return v;

@@ -62,9 +62,7 @@ function marketAlert() {
     });
     lines.push('\n可詢問 Iris 分析原因或影響。');
 
-    var message = lines.join('\n');
-    var masters = Config.ADMIN_STRING.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
-    masters.forEach(function(userId) { MessagingServiceFactory.push(userId, message); });
+    MessagingServiceFactory.pushToMasters(lines.join('\n'));
 
     Logger.info('marketAlert', '警報發送', { count: alerts.length, time: timeStr });
   } catch (ex) {

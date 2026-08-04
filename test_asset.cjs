@@ -306,7 +306,10 @@ global.Utilities = {
       .replace('mm', p(t.getUTCMinutes())).replace('ss', p(t.getUTCSeconds()));
   }
 };
-global.Config = { SHEET_ID: 'legacy' };
+// AssetSchema.SHEET_ID 是指回這裡的 getter（正式環境讀指令碼屬性），
+// 所以 mock 一定要在第一次讀取試算表之前就位。值本身是什麼不重要，
+// 只要跟 LEGACY_SHEET_ID 不同、能當 STORE 的鍵就行。
+global.Config = { SHEET_ID: 'assets' };
 const LOGS = [];
 global.Logger = {
   info: (...a) => LOGS.push(['INFO', ...a]),
@@ -321,14 +324,6 @@ global.Date.now = RealDate.now;
 
 // 用間接 eval 讓 .gs 的 var 宣告落在全域，跟 Apps Script 的平坦命名空間一致
 const load = f => (0, eval)(fs.readFileSync(path.join(__dirname, f), 'utf8'));
-// 舊表的股利同步：AssetTools 會呼叫它，這裡記下來供斷言
-const DIVIDEND_MIRROR = [];
-global.GoogleSheet = {
-  recordDividend: (symbol, amount, date) => {
-    DIVIDEND_MIRROR.push({ symbol: String(symbol), amount: Number(amount), date: String(date) });
-    return 'ok';
-  }
-};
 
 load('AssetSchema.gs');
 load('Panel.gs');        // Position.rebuild() 最後會叫它重畫面板
@@ -414,6 +409,23 @@ console.log('\nT2  XIRR');
 
 // ─── T3  建表 ────────────────────────────────────────────────────
 console.log('\nT3  建表');
+
+// 試算表 ID 只能有一個來源。這裡以前寫死一個常數，而系統分頁走指令碼屬性 ——
+// 兩者分岔的話資產數字讀舊表、記憶讀新表，不會有任何錯誤。
+{
+  check('SHEET_ID 讀的是指令碼屬性，不是寫死的常數',
+    AssetSchema.SHEET_ID === Config.SHEET_ID, AssetSchema.SHEET_ID);
+  const orig = Config.SHEET_ID;
+  Config.SHEET_ID = 'somewhere-else';
+  check('改了屬性，AssetSchema 就跟著改（沒有第二份真相）',
+    AssetSchema.SHEET_ID === 'somewhere-else', AssetSchema.SHEET_ID);
+  Config.SHEET_ID = '';
+  let threw = '';
+  try { AssetSchema.open(); } catch (e) { threw = e.message; }
+  check('屬性沒設時 open() 自己擋下來並講清楚原因', /SHEET_ID/.test(threw), threw);
+  Config.SHEET_ID = orig;
+}
+
 const target = SpreadsheetApp.openById(AssetSchema.SHEET_ID);
 target.sheets.push(new Sheet('工作表1'));          // 模擬新試算表的預設分頁
 let r3 = AssetSchema.build();
@@ -588,15 +600,6 @@ console.log('\nT6  記一筆賣出（模擬 Telegram 輸入）');
     money(get('總資產')));
 }
 
-// ─── T7  對帳報告 ────────────────────────────────────────────────
-console.log('\nT7  對帳報告（此時已多一筆賣出，應偵測到差異）');
-{
-  const report = AssetMigrate.verify();
-  check('報告偵測到 0056 與舊表不符', /✗ 0056 股數/.test(report), '');
-  check('其他 7 檔仍相符', (report.match(/✓ \d+ 股數/g) || []).length === 7,
-    (report.match(/✓ \d+ 股數/g) || []).length);
-}
-
 // ─── T7b  代號必須維持文字型別 ───────────────────────────────────
 // 台股代號有前導零。寫進「自動」格式的欄位會被 Sheets 轉成數字（0056 → 56），
 // GOOGLEFINANCE("TPE:"&代號) 就查無此股，市值整欄靜默變 0。
@@ -756,7 +759,7 @@ console.log('\nT11  recordTrade 的驗證與寫入');
   check('交易表多一列', countTrades() === n0 + 1, countTrades() + ' vs ' + (n0 + 1));
   check('持倉股數增加 1000', sharesOf(H0.code) === before + 1000, sharesOf(H0.code) + ' vs ' + (before + 1000));
   check('只有一個證券戶時自動帶入帳戶', /國泰證券戶/.test(r1), r1);
-  check('提醒舊表沒有跟著更新', /舊表/.test(r1), '');
+  check('回覆帶回重算後的持倉與帳戶餘額', /均價/.test(r1) && /餘額/.test(r1), r1);
 
   // 新標的自動登記，且代號必須是文字
   const instBefore = AssetSchema.readObjects(instSheet).length;
@@ -767,15 +770,18 @@ console.log('\nT11  recordTrade 的驗證與寫入');
     inst.some(x => x['代號'] === '00929'), JSON.stringify(inst.map(x => x['代號']).slice(-2)));
   check('回覆有說明是自動建立的', /自動/.test(r2), r2);
 
-  // 股利要同步回舊表
-  const mirrorBefore = DIVIDEND_MIRROR.length;
+  // 股利只是動作欄不同的一列交易，走同一條路才會觸發重算
+  const divBefore = num((AssetSchema.readObjects(target.getSheetByName('持倉'))
+    .find(x => x['代號'] === H0.code) || {})['累計股利']);
   const r3 = AssetTools.recordTrade({ action: '股利', symbol: H0.code, amount: 12345, date: '2026-09-01' });
-  check('股利有同步寫回舊表 @股利', DIVIDEND_MIRROR.length === mirrorBefore + 1,
-    JSON.stringify(DIVIDEND_MIRROR.slice(-1)));
-  check('同步的日期用舊表的斜線格式',
-    /^2026\/09\/01$/.test((DIVIDEND_MIRROR[DIVIDEND_MIRROR.length - 1] || {}).date || ''),
-    (DIVIDEND_MIRROR[DIVIDEND_MIRROR.length - 1] || {}).date);
-  check('股利不會出現「舊表沒更新」的提醒', !/舊表的股數/.test(r3), r3);
+  const divRow = AssetSchema.readObjects(target.getSheetByName('交易'))
+    .filter(t => t['動作'] === '股利' && String(t['代號']) === H0.code).slice(-1)[0] || {};
+  check('股利寫成「交易」的一列', num(divRow['金額']) === 12345, JSON.stringify(divRow['金額']));
+  check('日期正規化成 yyyy-MM-dd', String(divRow['日期']) === '2026-09-01', divRow['日期']);
+  check('重算後累計股利跟著加上去',
+    near(num((AssetSchema.readObjects(target.getSheetByName('持倉'))
+      .find(x => x['代號'] === H0.code) || {})['累計股利']), divBefore + 12345, 1),
+    r3);
 }
 
 // ─── T12  券商已實現損益 CSV 匯入 ─────────────────────────────────
@@ -957,61 +963,6 @@ load('DataSync.gs');
   check('快照的持股鍵保留前導零',
     rowsOn(today).filter(x => x['類型'] === '持股').some(x => /^0\d/.test(String(x['鍵']))),
     rowsOn(today).filter(x => x['類型'] === '持股').map(x => x['鍵']).join(','));
-}
-
-// ─── T15  系統分頁搬移 ────────────────────────────────────────────
-// 搬完才能把 SHEET_ID 指向新表；knowledge 沒搬過去 AdvisorCheck 就失明。
-console.log('\nT15  系統分頁搬到新表');
-{
-  // 在舊表塞幾筆系統資料（合成的）
-  // 要 seed 在 migrateSystem 實際會去讀的那張表（Config.SHEET_ID），不是 fixture 那張
-  const sysSrc = SpreadsheetApp.openById(Config.SHEET_ID);
-  const seed = (name, rows) => {
-    let s = sysSrc.getSheetByName(name);
-    if (!s) s = sysSrc.insertSheet(name);
-    rows.forEach((r, i) => s.getRange(i + 1, 1, 1, r.length).setValues([r]));
-    return s;
-  };
-  seed('env', [['name', 'value'], ['DEBUG_MODE', false], ['AI_PROVIDER', 'NVIDIA']]);
-  seed('knowledge', [['tags', 'content', 'timestamp'],
-    ['[偏好] 投資工具限制', '只買 ETF，不碰個股', '2026-01-01'],
-    ['[決策] 再平衡', '單一標的超過三成就通知我', '2026-02-01']]);
-  seed('short_term_memory', [['key', 'content', 'expire_at', 'category'],
-    ['本週計畫', '觀察歐洲部位', '2099-01-01 00:00:00', 'context']]);
-  seed('alert_log', [['timestamp', 'trigger_source', 'decision_ref', 'message', 'snapshot_summary']]);
-  seed('chat', [['userId', 'role', 'message', 'timestamp'],
-    ['TELEGRAM:1', 'user', '你好', '2026-08-01 10:00:00']]);
-
-  const preview = AssetMigrate.migrateSystem({ dryRun: true });
-  check('預覽不寫入', preview.dryRun === true &&
-    AssetSchema.readObjects(target.getSheetByName('knowledge')).length === 0,
-    JSON.stringify(preview.counts));
-  check('預覽有算出每張表的筆數', preview.counts.knowledge === 2, JSON.stringify(preview.counts));
-
-  const r = AssetMigrate.migrateSystem();
-  check('搬移成功', r.ok === true, JSON.stringify(r.counts));
-
-  const kn = AssetSchema.readObjects(target.getSheetByName('knowledge'));
-  check('knowledge 搬過去了', kn.length === 2, kn.length);
-  check('決策清單的內容完整',
-    kn.some(x => /再平衡/.test(String(x['tags'])) && /三成/.test(String(x['content']))),
-    JSON.stringify(kn.map(x => x['tags'])));
-
-  // Config 讀的是 env!B2 / env!B3 這兩個固定位置，搬完必須還在原位
-  const envSheet = target.getSheetByName('env');
-  check('env!B2 是 DEBUG_MODE 的值', envSheet.getRange('B2').getValue() === false,
-    String(envSheet.getRange('B2').getValue()));
-  check('env!B3 是 AI_PROVIDER 的值', envSheet.getRange('B3').getValue() === 'NVIDIA',
-    String(envSheet.getRange('B3').getValue()));
-
-  const stm = AssetSchema.readObjects(target.getSheetByName('short_term_memory'));
-  check('短期記憶搬過去了', stm.length === 1, stm.length);
-
-  // 重跑是覆蓋不是疊加
-  AssetMigrate.migrateSystem();
-  check('重跑不會疊加',
-    AssetSchema.readObjects(target.getSheetByName('knowledge')).length === 2,
-    AssetSchema.readObjects(target.getSheetByName('knowledge')).length);
 }
 
 // ─── T16  對帳單匯入（買賣都有 + 跨格式去重）──────────────────────

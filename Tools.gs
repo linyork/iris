@@ -84,7 +84,7 @@ var Tools = (() => {
     },
     {
       name: 'recordDividend',
-      description: '登記一筆收到的股利。當使用者說「收到 XXX 股利」或「股利入帳」時使用。內部走 recordTrade，新舊兩張表都會記到。',
+      description: '登記一筆收到的股利。當使用者說「收到 XXX 股利」或「股利入帳」時使用。內部走 recordTrade，寫進「交易」表後自動重算持倉。',
       parameters: {
         type: 'object',
         properties: {
@@ -196,8 +196,8 @@ var Tools = (() => {
 
         case 'recordDividend':
           if (!args.symbol || !args.amount) return '缺少必要參數：symbol 與 amount 皆為必填。';
-          // 統一走 recordTrade —— 它會同時寫新表的「交易」與舊表的 @股利。
-          // 只寫其中一邊會讓兩張表從此漂移，而讀取面現在還在舊表。
+          // 統一走 recordTrade：股利只是動作欄不同的一列交易，
+          // 走同一條路才會一併觸發重算，累計股利與帳戶餘額才跟得上。
           return AssetTools.recordTrade({
             action: '股利', symbol: args.symbol, amount: args.amount, date: args.date
           });

@@ -7,7 +7,7 @@
  *
  * 不做判斷、不做通知、只做資料整理。
  *
- * ⚠️ **資料來源已改為新的「資產管理」表**（`AssetSchema.SHEET_ID`）。
+ * ⚠️ **資料來源已改為新的「資產管理」表**（指令碼屬性 `SHEET_ID`）。
  * 對外的輸出形狀刻意一個欄位都沒動 —— Dashboard、MiniApp、AdvisorCheck
  * 全都吃這裡的結果，形狀不變它們就不用改。要改欄位的話那三個要一起看。
  *
@@ -21,21 +21,16 @@
 var Snapshot = (() => {
   var snap = {};
 
-  /** 資料一律讀新的「資產管理」表 */
-  snap._open = () => SpreadsheetApp.openById(AssetSchema.SHEET_ID);
-
-  var _str = (v) => String(v === null || v === undefined ? '' : v).trim();
+  /** 資料一律讀「資產管理」表。走 AssetSchema.open() 才會經過 SHEET_ID 的守門。 */
+  snap._open = () => AssetSchema.open();
 
   // ─── 工具函式 ──────────────────────────────────────────────
-
-  var _num = (v) => {
-    if (v === null || v === undefined || v === '') return 0;
-    var s = String(v).trim();
-    // GOOGLEFINANCE 錯誤值或 loading 狀態
-    if (s.startsWith('#') || /^Loading/i.test(s) || s === 'N/A') return 0;
-    var n = parseFloat(s.replace(/[,%$]/g, ''));
-    return isNaN(n) ? 0 : n;
-  };
+  //
+  // 儲存格取值一律走 AssetSchema.str / .num（見那裡的註解）。包成區域別名只是
+  // 讓下面的程式短一點；用箭頭函式而不是直接指派，是因為 GAS 的檔案載入順序
+  // 沒有保證，指派會在 AssetSchema 還沒定義時就爆掉。
+  var _str = (v) => AssetSchema.str(v);
+  var _num = (v) => AssetSchema.num(v);
 
   var _pct = (curr, base) => {
     if (!base) return 0;

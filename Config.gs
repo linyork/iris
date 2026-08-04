@@ -32,6 +32,11 @@ var Config = (() => {
     get TELEGRAM_API_BASE() { return 'https://api.telegram.org/bot' + this.TELEGRAM_API_KEY; },
 
     // ─── Google Sheets ────────────────────────────────────────
+    //
+    // 整個專案**只有這一個**試算表 ID。資產分頁（標的／交易／持倉／…）與系統分頁
+    // （chat／knowledge／short_term_memory／alert_log／env）都在同一張表裡，
+    // `AssetSchema.SHEET_ID` 也是指回這裡的 getter，不是另一個寫死的值。
+    // 換試算表只要改這個屬性一個地方。
     get SHEET_ID()     { return scriptProperties.getProperty(ENV_KEYS.SHEET_ID); },
     get ADMIN_STRING() { return scriptProperties.getProperty(ENV_KEYS.ADMIN_STRING); },
 
@@ -113,9 +118,6 @@ var Config = (() => {
     // 想調回 4~5 輪的話，先看 consolelog 裡 ReAct 迴圈結束的 elapsedMs 實際分佈。
     TOOL_MAX_ITERATIONS: 3,
     ALERT_ETF_DROP:      0.03,  // 單檔 ETF 日跌幅超過此值觸發警報
-
-    // ─── 系統提示詞 ───────────────────────────────────────────
-    get SYSTEM_PROMPT() { return Prompt.SYSTEM_PROMPT; },
 
     // ─── Debug 模式（env!B2）──────────────────────────────────
     get DEBUG_MODE() {

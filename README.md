@@ -11,7 +11,7 @@
 > | `ChatBot.gs` 的 ReAct 迴圈 | `LangGraph` StateGraph + ToolNode |
 > | `Tools.gs` 的 13 個工具 | `@tool` decorator / `StructuredTool` |
 > | `AIServiceFactory` + `AIAdapter` | `BaseChatModel` 抽象 + provider 子類 |
-> | `HistoryManager` + STM 注入 | `Memory` / `Checkpointer` |
+> | `GoogleSheet` 的 chat 讀寫 + STM 注入 | `Memory` / `Checkpointer` |
 > | `searchKnowledge` 關鍵字查 Sheet | `VectorStore` retriever |
 > | `AdvisorCheck` 排程感知層 | LangGraph 子圖 + Conditional Edge |
 >
@@ -127,14 +127,13 @@ Telegram Bot API ───┤        │
 | `Line.gs` | LINE 簽章驗證、reply / push 訊息封裝 |
 | `Telegram.gs` | Telegram update 正規化、訊息推送、webhook 與指令選單註冊 |
 | `ChatBot.gs` | ReAct 對話迴圈，注入記憶、處理工具呼叫與 XML 清理 |
-| `Prompt.gs` | `SYSTEM_PROMPT`（對話人設）與 `ADVISOR_PROMPT`（感知層 prompt） |
+| `Prompt.gs` | `SYSTEM_PROMPT`（對話人設）、`ADVISOR_PROMPT`（感知層 prompt）、`systemContext()`（四個 LLM 迴圈共用的開頭與日期規則） |
 | `Tools.gs` | 工具定義與分派 |
 | `AIServiceFactory.gs` | 依 `env!B3` 路由 Gemini / NVIDIA，含備援模型 fallback |
 | `GeminiService.gs` | Gemini API 呼叫（含 function calling） |
 | `NvidiaService.gs` | NVIDIA NIM OpenAI 相容 API 呼叫，含 3 次退避重試 |
 | `AIAdapter.gs` | Gemini ⇄ OpenAI 格式相互轉換、分離 `reasoning_content` |
 | `GoogleSheet.gs` | 所有 Sheet 讀寫：持倉、儀表板、歷史、股利、記憶、知識 |
-| `HistoryManager.gs` | 讀寫 `chat` 工作表 |
 | `Snapshot.gs` | 結構化資料層：總資產、持倉、現金、配置、股利、黃金，供顧問層與儀表板共用 |
 | `Dashboard.gs` | 網頁儀表板的 payload 組裝、快取與存取控制 |
 | `DashboardPage.html` | 儀表板前端單頁 |
@@ -142,7 +141,7 @@ Telegram Bot API ───┤        │
 | `MiniAppPage.html` | Mini App 前端（手機優先，可點持倉問 Iris） |
 | `AdvisorCheck.gs` | 主動感知層：呼叫 LLM 判斷是否 push 通知 |
 | `AlertLog.gs` | 通知史記錄與去重 |
-| `DailyReport.gs` | `buildDailyReport()` 產生器，加上每日 09:00 早報、週六週報、每月 1 日月報 |
+| `DailyReport.gs` | 三份報告共用的 `_generateReport()` 骨架，加上每日 09:00 早報、週六週報、每月 1 日月報 |
 | `MarketAlert.gs` | 10:00 / 14:00 盤中異動警報（單檔 ETF 日跌幅 > `ALERT_ETF_DROP`） |
 | `DataSync.gs` | 每日 18:00 寫入 `每日快照`（長表，同日冪等，見「每日快照」） |
 | `StockPrice.gs` | 即時台股股價查詢（TWSE API，僅上市） |
@@ -152,7 +151,7 @@ Telegram Bot API ───┤        │
 | `AssetTools.gs` | 新表的寫入用例層：`recordTrade` 驗證後 append 一列並重算 |
 | `Panel.gs` | 「面板」分頁的排版：整張都是指向持倉／現金／實體資產的公式，由 `Position.rebuild()` 最後呼叫。程式讀的數字在「指標」那張，不在這裡 |
 | `AssetImport.gs` | 券商已實現損益 CSV 匯入（Telegram 傳檔進來），**只記賣出**、內容去重 |
-| `DevTools.gs` | **所有在 GAS 編輯器手動執行的進入點**：建表、遷移、對帳、dry run、診斷。編輯器的函式下拉選單不顯示檔案來源，所以集中在這裡；trigger 與 web 進入點因為綁定名稱，仍留在各自的檔案 |
+| `DevTools.gs` | **所有在 GAS 編輯器手動執行的進入點**：建表、重算、dry run、診斷。編輯器的函式下拉選單不顯示檔案來源，所以集中在這裡；trigger 與 web 進入點因為綁定名稱，仍留在各自的檔案。遷移相關的進入點已移除 —— 遷移做完了，留在選單裡只會被誤觸 |
 | `Config.gs` | 集中讀取 Script Properties 與 `env!B2/B3`，含 cache |
 
 ---
@@ -213,7 +212,7 @@ Telegram Bot API ───┤        │
 | `getHistory(days)` | 每日資產快照歷史（預設 30 天，最多 365） |
 | `getPrice(symbols)` | 即時台股股價（一次最多 10 檔） |
 | `getDividendHistory(year)` | 股利收入統計 |
-| `recordDividend(symbol, amount, date)` | 登記股利入帳（內部走 `recordTrade`，新舊兩表都記） |
+| `recordDividend(symbol, amount, date)` | 登記股利入帳（內部走 `recordTrade`，寫進「交易」表後自動重算） |
 | `recordTrade(action, symbol, shares, price, fee, tax, amount, account, date, note)` | **寫進新的「資產管理」表**：買進／賣出／股利／存入／提出／費用／利息／轉出／轉入，記完自動 `Position.rebuild()` 重算持倉與餘額 |
 | `rememberShortTerm(key, content, hours)` | 寫入短期記憶（預設 24h，最長 168h） |
 | `saveKnowledge(tags, content)` | 寫入長期知識（含結構化 tag） |
@@ -395,7 +394,7 @@ shouldAlert? → Line.pushMsg + AlertLog.append
 
 | Key | 必填 | 用途 |
 |---|---|---|
-| `SHEET_ID` | ✅ | Google Sheet ID |
+| `SHEET_ID` | ✅ | 「資產管理」試算表 ID —— 資產分頁與系統分頁都在這一張。全專案唯一來源，`AssetSchema.SHEET_ID` 是指回這裡的 getter，換表只要改這一個地方 |
 | `ADMIN_STRING` | ✅ | 管理員 userId 允許清單，逗號分隔；Telegram 加 `TELEGRAM:` 前綴 |
 | `LINE_API_KEY` | ⚙️ | LINE channel access token（用 LINE 時必填） |
 | `LINE_CHANNEL_SECRET` | ⚙️ | LINE webhook 簽章驗證（用 LINE 時必填） |

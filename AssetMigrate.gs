@@ -2,6 +2,17 @@
  * AssetMigrate
  * @description 把舊「股票」試算表的資料搬進新的「資產管理」試算表
  *
+ * ⚠️ **遷移已經完成，`SHEET_ID` 也已經指向新表。這支不再有生產用途。**
+ *
+ * 留著是因為它是回歸測試唯一的真實資料來源：`test_asset.cjs` 用 `run()` 拿
+ * 舊表的實際數字 seed 出整份新表，再驗「加權平均重算出來的股數／成本／
+ * 累計股利 == 舊表本來就有的數字」。那層保護沒辦法用合成資料重現
+ * —— 真實金額不能寫進進 git 的測試檔（見 CLAUDE.md）。
+ *
+ * 因此它**刻意沒有 DevTools 進入點**：在 GAS 的函式下拉選單裡誤觸一次，
+ * 就會拿已經凍結的舊表重寫現行的期初列。要重跑只能從編輯器直接呼叫
+ * `AssetMigrate.run()`，而在跑之前請先想清楚為什麼要跑。
+ *
  * 只讀舊表，不寫舊表。可以重複執行 —— 每次會先清掉自己上次寫的
  * `來源 = migration` 列，所以不會疊出重複資料。
  *
@@ -22,15 +33,9 @@ var AssetMigrate = (() => {
 
   var MIGRATION_SOURCE = 'migration';
 
-  var _num = (v) => {
-    if (v === null || v === undefined || v === '') return 0;
-    if (typeof v === 'number') return isFinite(v) ? v : 0;
-    var s = String(v).trim();
-    if (s.charAt(0) === '#') return 0;
-    var n = parseFloat(s.replace(/[,$%]/g, ''));
-    return isNaN(n) ? 0 : n;
-  };
-  var _str = (v) => String(v === null || v === undefined ? '' : v).trim();
+  // 儲存格取值走 AssetSchema.str / .num（見那裡的註解）
+  var _num = (v) => AssetSchema.num(v);
+  var _str = (v) => AssetSchema.str(v);
 
   /** 日期正規化成 yyyy-MM-dd；認不出來回空字串 */
   var _dateStr = (v, tz) => {
@@ -433,132 +438,6 @@ var AssetMigrate = (() => {
     }
   };
 
-  // ─── 系統分頁搬移 ──────────────────────────────────────────────
-
-  /** 這五張跟資產無關，但 Iris 沒有它們就失憶 */
-  var SYSTEM_TABS = ['env', 'knowledge', 'short_term_memory', 'alert_log', 'chat'];
-
-  /**
-   * 把系統分頁從舊表複製到新表，**為了之後把 SHEET_ID 指向新表**。
-   *
-   * 搬 `knowledge` 是重點：裡面是主人的投資原則與決策清單，AdvisorCheck 靠它
-   * 判斷要不要主動推播。少了它，主動感知等於失明。
-   *
-   * `env` 連同第 2、3 列一起照抄 —— `Config` 讀的是 `env!B2`（DEBUG_MODE）與
-   * `env!B3`（AI_PROVIDER）這兩個**固定位置**，不是欄名。位置對上了就不用改程式。
-   *
-   * 目的地會先清空再寫，所以重跑是覆蓋而不是疊加。舊表完全不會被改動。
-   *
-   * @param {object} [options]
-   * @param {boolean} [options.dryRun] 只回報會搬多少列
-   */
-  m.migrateSystem = (options) => {
-    options = options || {};
-    var src = SpreadsheetApp.openById(Config.SHEET_ID);
-    var dst = AssetSchema.open();
-
-    if (Config.SHEET_ID === AssetSchema.SHEET_ID) {
-      return { ok: false, reason: 'SHEET_ID 已經指向新表了，不需要再搬一次' };
-    }
-
-    var report = {}, lines = [];
-    SYSTEM_TABS.forEach(name => {
-      var s = src.getSheetByName(name);
-      var d = dst.getSheetByName(name);
-      if (!s) { report[name] = '舊表沒有這張'; return; }
-      if (!d) { report[name] = '新表沒有這張，先跑 setupAssetSheet()'; return; }
-
-      var lastRow = s.getLastRow();
-      var lastCol = Math.max(s.getLastColumn(), 1);
-      var count = Math.max(lastRow - 1, 0);
-      report[name] = count;
-      if (options.dryRun || count === 0) return;
-
-      var values = s.getRange(2, 1, count, lastCol).getValues();
-
-      // 先清乾淨，重跑才是覆蓋而不是接在後面
-      var dLast = d.getLastRow();
-      if (dLast >= 2) {
-        d.getRange(2, 1, dLast - 1, Math.max(d.getLastColumn(), lastCol)).clearContent();
-      }
-      d.getRange(2, 1, count, lastCol).setValues(values);
-    });
-
-    SYSTEM_TABS.forEach(n => lines.push('▸ ' + n + '：' + report[n]));
-
-    var result = {
-      ok: true,
-      dryRun: !!options.dryRun,
-      counts: report,
-      note: options.dryRun
-        ? '這是預覽，還沒寫入'
-        : '搬完了。接著把指令碼屬性 SHEET_ID 改成 ' + AssetSchema.SHEET_ID
-    };
-    Logger.info('AssetMigrate.migrateSystem', '系統分頁搬移', result);
-    return result;
-  };
-
-  // ─── 對帳 ──────────────────────────────────────────────────────
-
-  /**
-   * 比對新舊試算表的關鍵數字。遷移完 + 重算完之後跑這個。
-   * 容差 1 元（浮點與四捨五入）。
-   */
-  m.verify = () => {
-    var legacy = m.readLegacy();
-    var ss = AssetSchema.open();
-    var positions = AssetSchema.readObjects(ss.getSheetByName('持倉'));
-    var cash      = AssetSchema.readObjects(ss.getSheetByName('現金'));
-
-    var byCode = {};
-    positions.forEach(x => { byCode[_str(x['代號'])] = x; });
-
-    var lines = ['【新舊對帳】', ''];
-    var bad = 0;
-    var cmp = (label, oldV, newV, tol) => {
-      var ok = Math.abs(oldV - newV) <= (tol === undefined ? 1 : tol);
-      if (!ok) bad++;
-      lines.push((ok ? '  ✓ ' : '  ✗ ') + label +
-        '：舊 ' + Math.round(oldV).toLocaleString() +
-        ' / 新 ' + Math.round(newV).toLocaleString() +
-        (ok ? '' : '　差 ' + Math.round(newV - oldV).toLocaleString()));
-    };
-
-    lines.push('▸ 持倉');
-    legacy.holdings.forEach(h => {
-      var np = byCode[h.code];
-      if (!np) { bad++; lines.push('  ✗ ' + h.code + '：新表找不到這檔'); return; }
-      cmp(h.code + ' 股數', h.shares, _num(np['股數']), 0.001);
-      cmp(h.code + ' 成本', h.cost, _num(np['總成本']));
-      cmp(h.code + ' 累計股利', h.dividend, _num(np['累計股利']));
-    });
-
-    lines.push('');
-    lines.push('▸ 現金帳戶');
-    var cashByName = {};
-    cash.forEach(c => { cashByName[_str(c['帳戶'])] = c; });
-    legacy.accounts.forEach(a => {
-      var nc = cashByName[a.name];
-      if (!nc) { bad++; lines.push('  ✗ ' + a.name + '：新表找不到'); return; }
-      cmp(a.name + '（' + a.currency + '）', a.balance, _num(nc['餘額']), 0.01);
-    });
-
-    lines.push('');
-    lines.push('▸ 股利筆數：舊 ' + legacy.dividends.length +
-      ' / 新（交易表 migration 股利）' + _countMigratedDividends(ss));
-    lines.push('▸ 每日快照：舊 ' + legacy.snapshot.rows.length + ' 天');
-
-    lines.push('');
-    lines.push(bad === 0 ? '全部對得起來 ✓' : '⚠️ 有 ' + bad + ' 項對不起來，先別切換');
-    return lines.join('\n');
-  };
-
-  var _countMigratedDividends = (ss) => {
-    var trades = AssetSchema.readObjects(ss.getSheetByName('交易'));
-    return trades.filter(t => _str(t['來源']) === MIGRATION_SOURCE && _str(t['動作']) === '股利').length;
-  };
 
   return m;
 })();
-
-// ─── GAS 編輯器進入點 ─────────────────────────────────────────────

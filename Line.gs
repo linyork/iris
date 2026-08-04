@@ -4,7 +4,6 @@
  */
 var Line = (() => {
   var line = {};
-  line.event = {};
 
   var verifySignature = (e) => {
     try {
@@ -72,7 +71,6 @@ var Line = (() => {
     event.isMaster = Utils.checkMaster(event.source.userId);
     event.profile  = getProfile(event.source);
     event.sourceId = getSourceId(event.source);
-    line.event = event;
   };
 
   line.pushMsg = (userId, message) => {

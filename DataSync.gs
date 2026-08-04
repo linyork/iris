@@ -30,15 +30,9 @@ var DataSync = (() => {
   var ST_STALE   = '資料未更新';
   var ST_BADFEED = '報價異常';
 
-  var _str = (v) => String(v === null || v === undefined ? '' : v).trim();
-  var _num = (v) => {
-    if (v === null || v === undefined || v === '') return 0;
-    if (typeof v === 'number') return isFinite(v) ? v : 0;
-    var s = _str(v);
-    if (s.charAt(0) === '#' || /^loading/i.test(s)) return 0;
-    var n = parseFloat(s.replace(/[,$]/g, ''));
-    return isNaN(n) ? 0 : n;
-  };
+  // 儲存格取值走 AssetSchema.str / .num（見那裡的註解）
+  var _str = (v) => AssetSchema.str(v);
+  var _num = (v) => AssetSchema.num(v);
 
   var _ymd = (d, tz) => Utilities.formatDate(d, tz || 'GMT+8', 'yyyy-MM-dd');
 

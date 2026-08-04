@@ -162,7 +162,6 @@ function dailyCleanUp() {
     }
 
     // 清除超過 30 天的 chat 紀錄
-    // 清除超過 30 天的 chat 紀錄
     var chatSheet = ss.getSheetByName('chat');
     if (chatSheet) {
       var cutoff  = new Date();

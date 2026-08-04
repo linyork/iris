@@ -13,7 +13,26 @@ Outbound messages go the other way through `MessagingServiceFactory`, which disp
 There is a second, read-only face on the same script: a web dashboard served by `doGet()`.
 See [Web Dashboard](#web-dashboard).
 
-Asset data lives in the 資產管理 sheet (`AssetSchema.SHEET_ID`); `Config.SHEET_ID` still holds the system tabs (chat, memory, knowledge, alert_log, env) and the frozen legacy tables.
+**Everything lives in one spreadsheet, named by one value.** The Script Property `SHEET_ID` is the
+single source — asset tabs (標的/交易/持倉/…) *and* system tabs (chat, memory, knowledge, alert_log,
+env). `AssetSchema.SHEET_ID` is a getter that returns `Config.SHEET_ID`, not a second constant, so
+repointing the property moves the whole bot. `AssetSchema.open()` throws a named error if the
+property is unset rather than letting `openById(null)` produce GAS's unreadable message.
+
+The old 股票 sheet is frozen; nothing reads or writes it except `AssetMigrate.gs`, which is now
+only a test fixture (see [Legacy sheet](#legacy-sheet)). Its id stays hardcoded as
+`AssetSchema.LEGACY_SHEET_ID` — it will never change, and it doesn't deserve a property.
+
+Two ways in, both landing on the same property:
+
+- **Asset layer** — `AssetSchema.open()` / `Snapshot._open()`. Guarded, and the one to use for new code.
+- **System layer** — `GoogleSheet`, `AlertLog`, `AdvisorCheck._loadDecisions`, `dailyCleanUp`, and
+  `Config`'s own `env!B2`/`B3` reads call `SpreadsheetApp.openById(Config.SHEET_ID)` directly. No
+  guard, but each already wraps its own try/catch and degrades to an empty result.
+
+⚠️ Never write a spreadsheet id as a literal. That is precisely how the asset layer and the memory
+layer ended up with two independent ideas of which sheet they were on — silently, because both
+values happened to be correct at the time.
 
 ## Development Workflow
 
@@ -57,7 +76,7 @@ renaming or relocating them fails silently:
 1. `Main.gs` — `doPost()` receives the LINE **or** Telegram webhook, normalizes it into a single LINE-shaped event object, deduplicates via `CacheService` (6h TTL), silently drops non-master events, calls `ChatBot.reply()`
 2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 3 turns). Injects short-term memory + relevant knowledge into system context before each call. Caches tool results within a single turn to prevent duplicate calls.
 3. `AIServiceFactory.gs` — Routes to `GeminiService` or `NvidiaService` based on `env!B3`. NVIDIA path goes through `AIAdapter` (Gemini ↔ OpenAI format conversion) so the rest of the codebase always speaks Gemini format.
-4. `Tools.gs` — Defines and executes **13** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. Asset reads (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, reading the 資產管理 sheet — writes (`recordTrade`, `recordDividend`) which go to the **new** 資產管理 sheet via `AssetTools.gs`, memory (`rememberShortTerm`, `saveKnowledge`, `searchKnowledge`, `listMemories`, `deleteMemory`), external (`searchWeb`).
+4. `Tools.gs` — Defines and executes **13** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. Asset reads (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, reading the 資產管理 sheet — writes (`recordTrade`, `recordDividend` — both land in the 交易 tab via `AssetTools.gs`, since a dividend is just a row with a different 動作), memory (`rememberShortTerm`, `saveKnowledge`, `searchKnowledge`, `listMemories`, `deleteMemory`), external (`searchWeb`).
 5. `GoogleSheet.gs` — All data access. Single spreadsheet instance cached per execution.
 
 ### AI Provider Switching
@@ -168,6 +187,24 @@ callback because the ReAct loop takes far longer than anyone will hold a sheet o
 > reply-keyboard button, not from inline buttons or the menu button. Hence the `google.script.run`
 > round trip.
 
+### Shared seams — don't re-copy these
+
+Four things used to exist as near-identical copies scattered across modules. Each copy drifted
+slightly from the others, and in every case the drift was unintentional. If you need one of these,
+call it — do not paste a local variant.
+
+| Use this | Instead of | Why it matters |
+|---|---|---|
+| `Prompt.systemContext({scope, period, knowledge, stm})` | hand-rolling `[System Info]` + the date/year rules | The date rules existed in 4 places (`ChatBot` + 3 reports). Miss one and that loop quotes last year's news as today's. |
+| `_generateReport(spec)` in `DailyReport.gs` | copying the gather → prompt → SMART → push skeleton | Daily/weekly/monthly differ *only* in what they feed and what they ask. A fourth report is one more spec, not one more function. |
+| `AssetSchema.num()` / `.str()` | a local `_num` / `_str` | Seven modules each carried one, differing by a character or two — some caught `Loading...`, some didn't. An uncaught error value becomes `NaN` and `NaN` propagates through every total without raising anything. |
+| `MessagingServiceFactory.pushToMasters(msg)` | splitting `ADMIN_STRING` yourself | Five copies of the same three lines. Who gets a notification shouldn't depend on which scheduled job sent it. |
+
+The `AssetSchema.num` / `.str` aliases inside each module are written as
+`var _num = (v) => AssetSchema.num(v);`, **not** `var _num = AssetSchema.num;` — GAS gives no
+guarantee about file load order, and a direct assignment runs at IIFE time, when `AssetSchema`
+may not exist yet.
+
 ### Memory System
 - **Short-term** (`short_term_memory` sheet): keyed entries with expiry timestamps, injected into every prompt, cleaned by daily trigger
 - **Long-term** (`knowledge` sheet): keyword-search only (no vectors), searched against current user message before each prompt
@@ -184,12 +221,25 @@ callback because the ReAct loop takes far longer than anyone will hold a sheet o
 | `所有股票` | Holdings — row2: 0000 aggregate, row3+: individual ETFs |
 | `面板` | Dashboard — B1:B8 summary, C1:D4 net value, E1:F8 cash by account |
 | `配置` | Asset allocation — rows 2-21 |
-| `@所有股票紀錄` | Legacy wide-format snapshots. Frozen — nothing writes here any more |
-| `@股利` | Dividend ledger — date, code, amount (appended by `recordDividend`) |
-| `@固定` | Fixed assets (gold weights), read by `Snapshot._gold()` |
+| `@所有股票紀錄` | Legacy wide-format snapshots |
+| `@股利` | Dividend ledger — date, code, amount |
+| `@固定` | Fixed assets (gold weights) |
 
-(The table above is the **legacy** 股票 sheet. The 資產管理 sheet's own tabs are defined in
-`AssetSchema.TABS` — that array is the spec, not a copy of it kept here.)
+### Legacy sheet
+
+The table above is the **legacy** 股票 sheet, and it is **entirely frozen** — no code reads or
+writes it in production. The 資產管理 sheet's own tabs are defined in `AssetSchema.TABS`; that
+array is the spec, not a copy of it kept here.
+
+The one thing still pointing at it is `AssetMigrate.gs`, and only from `test_asset.cjs`:
+`AssetMigrate.run()` seeds the whole new sheet from the legacy sheet's real numbers so the suite
+can assert *weighted-average replay reproduces what the old sheet already said*. That check can't
+be rebuilt from synthetic data, because real figures must never enter a committed test file
+(see [No real figures in git](#no-real-figures-in-git)).
+
+⚠️ `AssetMigrate` deliberately has **no `DevTools.gs` entry point**. Running it today would rewrite
+the live 期初 rows from a frozen spreadsheet; keeping it out of the GAS function dropdown is what
+stops that from happening by accident.
 
 ### 持倉的市價
 
@@ -301,10 +351,9 @@ themselves, because 指標 and 配置 hold values computed at rebuild time — �
 are live formulas, but the total assets figure Snapshot reads is only as fresh as the last rebuild.
 `/refresh` does the same on demand.
 
-(legacy list, kept for reference)
-- `04:00` — `dailyCleanUp()`: purge expired STM + chat rows older than 30 days
-- `18:00` — `setData()` in `DataSync.gs`: write the daily snapshot into `每日快照`
-  (header-reconciling and idempotent per date — see [Daily Snapshot](#daily-snapshot))
+Don't restate the schedule here. `Cron.SCHEDULE` is the source of truth and `Cron.list()` diffs it
+against what GAS actually has; a copy in this file can only ever drift out of date, which is
+exactly what happened to the two hand-maintained lists that used to sit here.
 
 ## Broker CSV import
 
@@ -366,11 +415,6 @@ fine — that is the owner's own project and where the data lives anyway. The re
 - The same applies to docs. Describe *what* is reconciled, not the amounts.
 - Tickers, account names and sheet layout are not covered by this — they do not disclose
   how much anything is worth.
-
-### Scheduled Triggers (set via `setupAllTriggers()` in `Main.gs`)
-- `04:00` — `dailyCleanUp()`: purge expired STM + chat rows older than 30 days
-- `18:00` — `setData()` in `DataSync.gs`: write the daily snapshot into `每日快照` (long format, idempotent per date — see [Daily Snapshot](#daily-snapshot))
-  (header-reconciling and idempotent per date — see [Daily Snapshot](#daily-snapshot))
 
 ## Configuration
 

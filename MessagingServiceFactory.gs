@@ -41,6 +41,22 @@ var MessagingServiceFactory = (() => {
   };
 
   /**
+   * 推播給 ADMIN_STRING 裡的每一位主人（早報、週報、月報、盤中警報、顧問提醒）。
+   *
+   * 拆解 ADMIN_STRING 的那三行以前在五個地方各抄了一份。它們本來就該一樣 ——
+   * 允許清單只有一份，誰收得到通知不該取決於是哪支排程送的。
+   *
+   * @param {string} message
+   * @returns {number} 實際推播的人數
+   */
+  factory.pushToMasters = (message) => {
+    var masters = String(Config.ADMIN_STRING || '').split(',')
+      .map(s => s.trim()).filter(s => s);
+    masters.forEach(userId => factory.push(userId, message));
+    return masters.length;
+  };
+
+  /**
    * 送出「正在輸入…」狀態提示（開始處理、尚未產生回覆前呼叫）
    * @param {object} event - 中立事件物件（含 platform、sourceId）
    * @note LINE 無對等的簡易 typing API，直接略過（不影響流程）

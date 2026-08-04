@@ -27,13 +27,9 @@
 var AssetImport = (() => {
   var m = {};
 
-  var _str = (v) => String(v === null || v === undefined ? '' : v).trim();
-  var _num = (v) => {
-    var s = _str(v).replace(/[",$%]/g, '');
-    if (!s) return 0;
-    var n = parseFloat(s);
-    return isNaN(n) ? 0 : n;
-  };
+  // 儲存格／CSV 取值走 AssetSchema.str / .num —— 後者會剃掉 CSV 殘留的引號
+  var _str = (v) => AssetSchema.str(v);
+  var _num = (v) => AssetSchema.num(v);
   var _money = (n) => Math.round(_num(n)).toLocaleString();
 
   /** 這份報表必須有的欄位；缺任何一個就不是這種檔案 */

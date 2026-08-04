@@ -95,55 +95,25 @@ function dryRunSetData() {
   return result;
 }
 
-// ─── 新表：資產管理 ───────────────────────────────────────────────
+// ─── 資產管理表 ───────────────────────────────────────────────────
 //
-// 首次建置順序：setupAssetSheet → migrateLegacyData → rebuildPositions → verifyAssetSheet
-// 四支都是冪等的，重跑不會疊加。
+// 舊表 → 新表的遷移已經做完，SHEET_ID 也已經指向新表，所以那幾支
+// 遷移／對帳的進入點都拿掉了 —— 留在下拉選單裡只會被誤觸，而誤觸的代價是
+// 拿凍結的舊表重寫現行的期初列。遷移程式本身還在 `AssetMigrate.gs`，
+// 現在的用途是測試的 fixture，要跑請從編輯器直接呼叫。
 
-/** 步驟 1：在「資產管理」試算表建立／補齊所有分頁與公式 */
+/** 在「資產管理」試算表建立／補齊所有分頁與公式。冪等，重跑不會疊加。 */
 function setupAssetSheet() {
   var r = AssetSchema.build();
   console.log(JSON.stringify(r, null, 2));
   return r;
 }
 
-/** 步驟 2：從舊表遷移標的／帳戶／實體資產／交易／每日快照 */
-function migrateLegacyData() {
-  var r = AssetMigrate.run();
-  console.log(JSON.stringify(r, null, 2));
-  return r;
-}
-
-/** 步驟 3：從「交易」重算持倉、已實現損益、現金、配置、面板 */
+/** 從「交易」重算持倉、已實現損益、現金、配置、面板 */
 function rebuildPositions() {
   var r = Position.rebuild();
   console.log(JSON.stringify(r, null, 2));
   return r;
-}
-
-/**
- * 步驟 5：把系統分頁（env / knowledge / short_term_memory / alert_log / chat）
- * 從舊表複製到新表。**這是把 SHEET_ID 指向新表之前的最後一步。**
- * 先跑 previewSystemMigration() 看筆數，再跑這支。
- */
-function migrateSystemData() {
-  var r = AssetMigrate.migrateSystem();
-  console.log(JSON.stringify(r, null, 2));
-  return r;
-}
-
-/** 只看會搬多少列，不寫入 */
-function previewSystemMigration() {
-  var r = AssetMigrate.migrateSystem({ dryRun: true });
-  console.log(JSON.stringify(r, null, 2));
-  return r;
-}
-
-/** 步驟 4：逐項比對新舊兩張表的股數、成本、累計股利、帳戶餘額 */
-function verifyAssetSheet() {
-  var report = AssetMigrate.verify();
-  console.log(report);
-  return report;
 }
 
 // ─── 儀表板 / 顧問 ────────────────────────────────────────────────

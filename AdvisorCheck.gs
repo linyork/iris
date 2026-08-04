@@ -65,9 +65,7 @@ var AdvisorCheck = (() => {
         return;
       }
 
-      var masters = String(Config.ADMIN_STRING || '').split(',')
-        .map(s => s.trim()).filter(s => s);
-      masters.forEach(userId => MessagingServiceFactory.push(userId, message));
+      MessagingServiceFactory.pushToMasters(message);
 
       // 8. 記錄到 alert_log
       var summary = ac._summarizeSnapshot(snapshot);
@@ -194,8 +192,6 @@ var AdvisorCheck = (() => {
 
   // ─── Trigger 入口（GAS Time-based Trigger 直接呼叫）────────
 
-  ac.runMorning = () => ac.run('10:00');
-  ac.runAfternoon = () => ac.run('14:00');
   ac.runEvening = () => ac.run('18:00');
 
   return ac;
@@ -203,6 +199,6 @@ var AdvisorCheck = (() => {
 
 // ─── Trigger 入口：必須是頂層函式，GAS Time-based Trigger 才抓得到 ──
 
-// 只有 19:00 這班有註冊 trigger。早/午盤兩班在縮成單一時段時就沒有呼叫者了，
-// 已於此處移除；要恢復的話 AdvisorCheck.runMorning / runAfternoon 仍然在。
+// 只有 19:00 這班有註冊 trigger（見 Cron.SCHEDULE）。要加回盤中那兩班的話，
+// ac.run() 吃的是觸發來源字串，多寫一支 `ac.run('10:00')` 的頂層函式即可。
 function advisorCheckEvening() { AdvisorCheck.runEvening(); }

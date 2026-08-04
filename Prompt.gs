@@ -94,6 +94,57 @@ var Prompt = (() => {
   prompt.ACKNOWLEDGEMENT = '明白，我是 Iris，您的專屬資產管理助理。請告訴我您需要什麼協助？';
 
   // ──────────────────────────────────────────────────────────
+  // 共用的 system context 開頭
+  // ──────────────────────────────────────────────────────────
+
+  /**
+   * 每個 LLM 迴圈的 system context 開頭都是同一組東西：人設 + 當下時間 + 日期規則
+   * （＋這一輪查到的知識與短期記憶）。這段以前在 `ChatBot.reply` 與三支報告函式裡
+   * 各抄了一份，改一次日期規則要改四個地方 —— 而那正是最容易改漏的一段，
+   * 漏掉的那一份會讓模型拿去年的新聞當今天講。
+   *
+   * 日期規則只有一份、四個呼叫端共用；差異只有 `scope`（這次產出的東西叫什麼）
+   * 與 `period`（報告期間），其餘完全相同。
+   *
+   * @param {object} o
+   * @param {string} o.scope       這次要產出什麼：'回覆' / '早報' / '週報' / '月報'
+   * @param {string} [o.period]    報告期間的補充說明，接在 Today 後面
+   * @param {string} [o.user]      使用者標示，預設 '主人 (Master)'
+   * @param {string} [o.knowledge] searchKnowledge 的結果，查無資料時會自動略過
+   * @param {string} [o.stm]       短期記憶
+   * @returns {string}
+   */
+  prompt.systemContext = (o) => {
+    o = o || {};
+    var now = new Date();
+    var f = (fmt) => Utilities.formatDate(now, 'GMT+8', fmt);
+    var year = f('yyyy');
+    var scope = o.scope || '回覆';
+
+    var out = prompt.SYSTEM_PROMPT +
+      '\n\n[System Info]' +
+      '\nCurrent Time: ' + f('yyyy/MM/dd HH:mm') +
+      '\nToday: ' + f('yyyy-MM-dd') + '（今天的日期，年份為 ' + year + '）' +
+      (o.period ? '\nReport Period: ' + o.period : '') +
+      '\nUser: ' + (o.user || '主人 (Master)') +
+      '\n\n[重要：日期與年份規則]\n' +
+      '- ' + scope + '的內容一律以上方 Today（' + f('yyyy-MM-dd') + '）為基準\n' +
+      '- 凡是查詢或描述「今日/最近/本週/近期」，必須使用 Today 的實際年份 ' + year + '，' +
+      '禁止自行假設、寫死或沿用其他年份\n' +
+      '- 工具或新聞回傳的日期若與上述期間不符（例如撈到去年同日的新聞），' +
+      '須誠實標註「資料時點較舊」或「未取得當期資訊」，不得當成當期資訊呈現';
+
+    // searchKnowledge 查無資料時回的是一句人話而不是空字串，直接串進 prompt
+    // 會變成「相關長期知識：沒有找到…」，比不放還糟
+    if (o.knowledge && !/沒有找到|尚無資料/.test(o.knowledge)) {
+      out += '\n\n[相關長期知識]:\n' + o.knowledge;
+    }
+    if (o.stm) out += '\n\n[短期記憶 / 當前脈絡]:\n' + o.stm;
+
+    return out;
+  };
+
+  // ──────────────────────────────────────────────────────────
   // AdvisorCheck 專用 system prompt（主動感知層）
   // ──────────────────────────────────────────────────────────
   prompt.ADVISOR_PROMPT = `你是 Iris，主人的專屬財務顧問。

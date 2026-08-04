@@ -18,12 +18,8 @@
 var Panel = (() => {
   var p = {};
 
-  var _num = (v) => {
-    if (v === null || v === undefined || v === '') return 0;
-    if (typeof v === 'number') return isFinite(v) ? v : 0;
-    var n = parseFloat(String(v).replace(/[,$%]/g, ''));
-    return isNaN(n) ? 0 : n;
-  };
+  // 儲存格取值走 AssetSchema.num（見那裡的註解）
+  var _num = (v) => AssetSchema.num(v);
 
   var MONEY = '#,##0';
   var PRICE = '#,##0.0000';

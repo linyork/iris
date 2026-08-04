@@ -24,23 +24,39 @@
 var AssetSchema = (() => {
   var s = {};
 
-  /** 「資產管理」試算表 */
-  s.SHEET_ID = '1FyzX14qmo6glUwGpwYAoSN4UvUGm4n2kURcxSAOQtys';
+  /**
+   * 「資產管理」試算表 —— **唯一來源是指令碼屬性 `SHEET_ID`**。
+   *
+   * 這裡以前寫死一個 ID，於是整份程式有兩個各自獨立的真相：資產層讀這個常數，
+   * 系統層（chat / knowledge / short_term_memory / alert_log / env）讀指令碼屬性。
+   * 兩者碰巧相同時一切正常，但只要有人改了其中一邊 —— 例如換一張新的試算表卻
+   * 只更新指令碼屬性 —— 資產數字會繼續讀舊表、記憶讀新表，而且**不會有任何錯誤**。
+   *
+   * 用 getter 而不是 `s.SHEET_ID = Config.SHEET_ID`：後者在 IIFE 載入當下就求值，
+   * 而 GAS 不保證檔案載入順序，`Config` 那時可能還不存在。
+   */
+  Object.defineProperty(s, 'SHEET_ID', {
+    get: () => Config.SHEET_ID,
+    enumerable: true
+  });
 
-  /** 舊的「股票」試算表，只讀，供遷移用 */
+  /**
+   * 舊的「股票」試算表，只讀。
+   * 這個維持寫死 —— 它是一張已經凍結、不會再改的表，而且只有 `AssetMigrate`
+   * 在測試裡當 fixture 用得到，沒有理由再多一個指令碼屬性去設定它。
+   */
   s.LEGACY_SHEET_ID = '1wKRC30tcoC6FOOW6dKBGFeexqkVUtR3b28NY92tGiWs';
 
-  // ─── 列舉值（Prompt 與工具驗證都引用這裡）────────────────────
-
+  // ─── 動作列舉 ────────────────────────────────────────────────
+  //
+  // 這是「交易」的動作全集，供閱讀與比對用 —— 實際的必填驗證在
+  // `AssetTools.REQUIRED`，那裡刻意不含「期初」（見下）。
+  //
   // 「期初」是建倉用的特殊動作：它會建立持倉與成本，但**不產生現金流**
   // （帳戶期初餘額已經是遷移當下的實際餘額，再扣一次就重複了）。
   // 同理，遷移進來的歷史交易一律把「帳戶」欄留空 —— 現金表是
   // SUMIF(帳戶) 出來的，空帳戶自然不會影響任何餘額。
   s.ACTIONS = ['買進', '賣出', '股利', '存入', '提出', '費用', '利息', '轉出', '轉入', '期初'];
-  s.ACCOUNT_TYPES = ['證券', '現金', '外幣'];
-  s.REGIONS = ['台', '美', '歐', '日', '全球', '新興'];
-  s.KINDS = ['息', '指', '個股', '債', '其他'];
-  s.CATEGORIES = ['投資', '薪資', '生活', '保險', '稅務', '其他'];
 
   // ─── 分頁定義 ──────────────────────────────────────────────────
   //
@@ -159,7 +175,48 @@ var AssetSchema = (() => {
 
   // ─── 工具 ──────────────────────────────────────────────────────
 
-  s.open = () => SpreadsheetApp.openById(s.SHEET_ID);
+  /**
+   * 打開「資產管理」試算表。
+   *
+   * 屬性沒設時自己先擋下來 —— `openById(null)` 丟的是「Unexpected error while
+   * getting the method or property openById」，看不出來是設定漏了還是程式壞了。
+   */
+  s.open = () => {
+    var id = s.SHEET_ID;
+    if (!id) {
+      throw new Error('指令碼屬性 SHEET_ID 沒有設定 —— 資產表與系統分頁都讀這一個值。' +
+        '請到 GAS 專案設定 → 指令碼屬性補上，或執行 setup() 檢查。');
+    }
+    return SpreadsheetApp.openById(id);
+  };
+
+  /**
+   * 儲存格 → 字串。空值一律成空字串，前後空白剃掉。
+   */
+  s.str = (v) => String(v === null || v === undefined ? '' : v).trim();
+
+  /**
+   * 儲存格 → 數字。**讀不出數字一律回 0，不回 NaN。**
+   *
+   * 這七個模組（Snapshot / Position / DataSync / AssetTools / AssetImport /
+   * AssetMigrate / Panel）以前各自帶一份 `_num`，彼此差一兩個字元 —— 有的擋
+   * `Loading...` 有的沒擋、有的剃 `%` 有的沒剃。差異全是無意的，但只要有一份
+   * 漏擋，那條路上的錯誤值就會變成 NaN 一路傳進彙總，而 NaN 不會報錯。
+   *
+   * 這是那七份的聯集：
+   *   - 本來就是數字就直接用（`Infinity` / `NaN` 算讀不出來，回 0）
+   *   - `#N/A` `#VALUE!` 這類公式錯誤值、GOOGLEFINANCE 的 `Loading...`、`N/A`
+   *     一律當成「還沒有值」回 0，不要讓它們變成 NaN
+   *   - 千分位、貨幣符號、百分比符號、CSV 殘留的引號都剃掉
+   */
+  s.num = (v) => {
+    if (v === null || v === undefined || v === '') return 0;
+    if (typeof v === 'number') return isFinite(v) ? v : 0;
+    var t = String(v).trim();
+    if (t.charAt(0) === '#' || /^loading/i.test(t) || t === 'N/A') return 0;
+    var n = parseFloat(t.replace(/[",%$]/g, ''));
+    return isNaN(n) ? 0 : n;
+  };
 
   /** 標題文字 → 0-based 索引。找不到的欄位回 -1。 */
   s.headerMap = (sheet) => {

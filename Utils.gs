@@ -28,22 +28,6 @@ var Utils = (() => {
     } catch (e) { return ''; }
   };
 
-  utils.safeParseJson = (text, expect) => {
-    if (!text || typeof text !== 'string') return null;
-    expect = expect || 'object';
-    try {
-      var cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
-      var open  = expect === 'array' ? '[' : '{';
-      var close = expect === 'array' ? ']' : '}';
-      var first = cleaned.indexOf(open);
-      var last  = cleaned.lastIndexOf(close);
-      if (first !== -1 && last !== -1 && last > first) {
-        cleaned = cleaned.substring(first, last + 1);
-      }
-      return JSON.parse(cleaned);
-    } catch (e) { return null; }
-  };
-
   var TIMESTAMP_RE = /^\[\d{4}[\/\-]\d{2}[\/\-]\d{2}\s+\d{2}:\d{2}:\d{2}\]\s*/;
   utils.stripTimestampPrefix = (str) => {
     if (typeof str !== 'string') return str;
@@ -58,12 +42,6 @@ var Utils = (() => {
       .replace(/\*([^*\n]+)\*/g, '$1')     // *斜體*
       .replace(/__([^_\n]+)__/g, '$1')     // __底線粗體__
       .replace(/`([^`\n]+)`/g, '$1');      // `行內程式碼`
-  };
-
-  utils.truncateForLine = (str, limit) => {
-    limit = limit || 4900;
-    if (typeof str !== 'string' || str.length <= limit) return str;
-    return str.slice(0, limit) + '\n\n（回覆過長已截斷，可詢問更具體的問題以取得完整資訊）';
   };
 
   // 清除模型誤輸出的 <tool_call>...</tool_call> XML 殘留

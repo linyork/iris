@@ -3,7 +3,6 @@
  * @description 「資產管理」新表的用例層 —— Iris 的工具會呼叫這裡
  *
  * 讀寫兩面都在新表了：寫入走這裡，讀取走 Snapshot（getHoldings / getDashboard / …）。
- * 舊表只剩系統類分頁（chat / 記憶 / 知識）與股利鏡像還在用。
  *
  * 設計上刻意讓「說一句話」對應「append 一列」：
  *   「今天賣掉 3000 股 0056，49.5，手續費 21」→ 交易表加一列 → Position.rebuild()
@@ -12,13 +11,9 @@
 var AssetTools = (() => {
   var t = {};
 
-  var _str = (v) => String(v === null || v === undefined ? '' : v).trim();
-  var _num = (v) => {
-    if (v === null || v === undefined || v === '') return 0;
-    if (typeof v === 'number') return isFinite(v) ? v : 0;
-    var n = parseFloat(String(v).replace(/[,$]/g, ''));
-    return isNaN(n) ? 0 : n;
-  };
+  // 儲存格取值走 AssetSchema.str / .num（見那裡的註解）
+  var _str = (v) => AssetSchema.str(v);
+  var _num = (v) => AssetSchema.num(v);
   var _money = (n) => Math.round(_num(n)).toLocaleString();
 
   /** 各動作的必填欄位；期初不開放（那是遷移建倉用的，見 AssetSchema.ACTIONS） */
@@ -174,19 +169,6 @@ var AssetTools = (() => {
 
       var rebuilt = Position.rebuild();
 
-      // ── 股利同步回舊表 ──
-      // 舊表留著當備援，順手保持它的股利流水帳是完整的。
-      // SHEET_ID 一旦指向新表，就沒有「另一張表」要同步了
-      var mirrored = '';
-      if (action === '股利' && Config.SHEET_ID !== AssetSchema.SHEET_ID) {
-        try {
-          GoogleSheet.recordDividend(val.symbol, val.amount, dateStr.replace(/-/g, '/'));
-          mirrored = '（已同步記入舊表 @股利）';
-        } catch (e) {
-          mirrored = '（⚠️ 舊表 @股利 同步失敗：' + e.message + '）';
-        }
-      }
-
       // ── 組回覆 ──
       var lines = [];
       lines.push('已記錄第 ' + row + ' 列：' + dateStr + ' ' + action +
@@ -196,7 +178,7 @@ var AssetTools = (() => {
         (val.amount ? ' $' + _money(val.amount) : '') +
         (val.fee ? '，手續費 ' + _money(val.fee) : '') +
         (val.tax ? '，交易稅 ' + _money(val.tax) : '') +
-        ' → ' + val.account + ' ' + mirrored);
+        ' → ' + val.account);
 
       if (autoAdded) {
         lines.push('▸ ' + val.symbol + ' 是新標的，已自動加進「標的」表（名稱與區域/類型待補）');
@@ -221,11 +203,6 @@ var AssetTools = (() => {
       } else {
         lines.push('⚠️ 交易已寫入，但重算持倉失敗：' +
           (rebuilt && rebuilt.reason ? rebuilt.reason : '未知原因') + '。數字暫時不準。');
-      }
-
-      // 讀取面還沒切換，這句一定要留著
-      if (action !== '股利') {
-        lines.push('※ 舊表沒有跟著動，但查詢已經改讀新表，所以我回答你的數字會是對的。');
       }
 
       Logger.info('AssetTools.recordTrade', '記錄交易', {
