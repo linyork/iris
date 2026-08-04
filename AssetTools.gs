@@ -176,8 +176,9 @@ var AssetTools = (() => {
 
       // ── 股利同步回舊表 ──
       // 舊表留著當備援，順手保持它的股利流水帳是完整的。
+      // SHEET_ID 一旦指向新表，就沒有「另一張表」要同步了
       var mirrored = '';
-      if (action === '股利') {
+      if (action === '股利' && Config.SHEET_ID !== AssetSchema.SHEET_ID) {
         try {
           GoogleSheet.recordDividend(val.symbol, val.amount, dateStr.replace(/-/g, '/'));
           mirrored = '（已同步記入舊表 @股利）';

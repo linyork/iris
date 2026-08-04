@@ -169,6 +169,24 @@ function rebuildPositions() {
   return r;
 }
 
+/**
+ * 步驟 5：把系統分頁（env / knowledge / short_term_memory / alert_log / chat）
+ * 從舊表複製到新表。**這是把 SHEET_ID 指向新表之前的最後一步。**
+ * 先跑 previewSystemMigration() 看筆數，再跑這支。
+ */
+function migrateSystemData() {
+  var r = AssetMigrate.migrateSystem();
+  console.log(JSON.stringify(r, null, 2));
+  return r;
+}
+
+/** 只看會搬多少列，不寫入 */
+function previewSystemMigration() {
+  var r = AssetMigrate.migrateSystem({ dryRun: true });
+  console.log(JSON.stringify(r, null, 2));
+  return r;
+}
+
 /** 步驟 4：逐項比對新舊兩張表的股數、成本、累計股利、帳戶餘額 */
 function verifyAssetSheet() {
   var report = AssetMigrate.verify();

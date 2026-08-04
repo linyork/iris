@@ -937,6 +937,61 @@ load('DataSync.gs');
     rowsOn(today).filter(x => x['類型'] === '持股').map(x => x['鍵']).join(','));
 }
 
+// ─── T15  系統分頁搬移 ────────────────────────────────────────────
+// 搬完才能把 SHEET_ID 指向新表；knowledge 沒搬過去 AdvisorCheck 就失明。
+console.log('\nT15  系統分頁搬到新表');
+{
+  // 在舊表塞幾筆系統資料（合成的）
+  // 要 seed 在 migrateSystem 實際會去讀的那張表（Config.SHEET_ID），不是 fixture 那張
+  const sysSrc = SpreadsheetApp.openById(Config.SHEET_ID);
+  const seed = (name, rows) => {
+    let s = sysSrc.getSheetByName(name);
+    if (!s) s = sysSrc.insertSheet(name);
+    rows.forEach((r, i) => s.getRange(i + 1, 1, 1, r.length).setValues([r]));
+    return s;
+  };
+  seed('env', [['name', 'value'], ['DEBUG_MODE', false], ['AI_PROVIDER', 'NVIDIA']]);
+  seed('knowledge', [['tags', 'content', 'timestamp'],
+    ['[偏好] 投資工具限制', '只買 ETF，不碰個股', '2026-01-01'],
+    ['[決策] 再平衡', '單一標的超過三成就通知我', '2026-02-01']]);
+  seed('short_term_memory', [['key', 'content', 'expire_at', 'category'],
+    ['本週計畫', '觀察歐洲部位', '2099-01-01 00:00:00', 'context']]);
+  seed('alert_log', [['timestamp', 'trigger_source', 'decision_ref', 'message', 'snapshot_summary']]);
+  seed('chat', [['userId', 'role', 'message', 'timestamp'],
+    ['TELEGRAM:1', 'user', '你好', '2026-08-01 10:00:00']]);
+
+  const preview = AssetMigrate.migrateSystem({ dryRun: true });
+  check('預覽不寫入', preview.dryRun === true &&
+    AssetSchema.readObjects(target.getSheetByName('knowledge')).length === 0,
+    JSON.stringify(preview.counts));
+  check('預覽有算出每張表的筆數', preview.counts.knowledge === 2, JSON.stringify(preview.counts));
+
+  const r = AssetMigrate.migrateSystem();
+  check('搬移成功', r.ok === true, JSON.stringify(r.counts));
+
+  const kn = AssetSchema.readObjects(target.getSheetByName('knowledge'));
+  check('knowledge 搬過去了', kn.length === 2, kn.length);
+  check('決策清單的內容完整',
+    kn.some(x => /再平衡/.test(String(x['tags'])) && /三成/.test(String(x['content']))),
+    JSON.stringify(kn.map(x => x['tags'])));
+
+  // Config 讀的是 env!B2 / env!B3 這兩個固定位置，搬完必須還在原位
+  const envSheet = target.getSheetByName('env');
+  check('env!B2 是 DEBUG_MODE 的值', envSheet.getRange('B2').getValue() === false,
+    String(envSheet.getRange('B2').getValue()));
+  check('env!B3 是 AI_PROVIDER 的值', envSheet.getRange('B3').getValue() === 'NVIDIA',
+    String(envSheet.getRange('B3').getValue()));
+
+  const stm = AssetSchema.readObjects(target.getSheetByName('short_term_memory'));
+  check('短期記憶搬過去了', stm.length === 1, stm.length);
+
+  // 重跑是覆蓋不是疊加
+  AssetMigrate.migrateSystem();
+  check('重跑不會疊加',
+    AssetSchema.readObjects(target.getSheetByName('knowledge')).length === 2,
+    AssetSchema.readObjects(target.getSheetByName('knowledge')).length);
+}
+
 // 選用：拿真實的券商匯出檔跑一次解析，只印不斷言（檔案不進版控）
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {

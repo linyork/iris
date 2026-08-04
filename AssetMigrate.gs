@@ -433,6 +433,71 @@ var AssetMigrate = (() => {
     }
   };
 
+  // ─── 系統分頁搬移 ──────────────────────────────────────────────
+
+  /** 這五張跟資產無關，但 Iris 沒有它們就失憶 */
+  var SYSTEM_TABS = ['env', 'knowledge', 'short_term_memory', 'alert_log', 'chat'];
+
+  /**
+   * 把系統分頁從舊表複製到新表，**為了之後把 SHEET_ID 指向新表**。
+   *
+   * 搬 `knowledge` 是重點：裡面是主人的投資原則與決策清單，AdvisorCheck 靠它
+   * 判斷要不要主動推播。少了它，主動感知等於失明。
+   *
+   * `env` 連同第 2、3 列一起照抄 —— `Config` 讀的是 `env!B2`（DEBUG_MODE）與
+   * `env!B3`（AI_PROVIDER）這兩個**固定位置**，不是欄名。位置對上了就不用改程式。
+   *
+   * 目的地會先清空再寫，所以重跑是覆蓋而不是疊加。舊表完全不會被改動。
+   *
+   * @param {object} [options]
+   * @param {boolean} [options.dryRun] 只回報會搬多少列
+   */
+  m.migrateSystem = (options) => {
+    options = options || {};
+    var src = SpreadsheetApp.openById(Config.SHEET_ID);
+    var dst = AssetSchema.open();
+
+    if (Config.SHEET_ID === AssetSchema.SHEET_ID) {
+      return { ok: false, reason: 'SHEET_ID 已經指向新表了，不需要再搬一次' };
+    }
+
+    var report = {}, lines = [];
+    SYSTEM_TABS.forEach(name => {
+      var s = src.getSheetByName(name);
+      var d = dst.getSheetByName(name);
+      if (!s) { report[name] = '舊表沒有這張'; return; }
+      if (!d) { report[name] = '新表沒有這張，先跑 setupAssetSheet()'; return; }
+
+      var lastRow = s.getLastRow();
+      var lastCol = Math.max(s.getLastColumn(), 1);
+      var count = Math.max(lastRow - 1, 0);
+      report[name] = count;
+      if (options.dryRun || count === 0) return;
+
+      var values = s.getRange(2, 1, count, lastCol).getValues();
+
+      // 先清乾淨，重跑才是覆蓋而不是接在後面
+      var dLast = d.getLastRow();
+      if (dLast >= 2) {
+        d.getRange(2, 1, dLast - 1, Math.max(d.getLastColumn(), lastCol)).clearContent();
+      }
+      d.getRange(2, 1, count, lastCol).setValues(values);
+    });
+
+    SYSTEM_TABS.forEach(n => lines.push('▸ ' + n + '：' + report[n]));
+
+    var result = {
+      ok: true,
+      dryRun: !!options.dryRun,
+      counts: report,
+      note: options.dryRun
+        ? '這是預覽，還沒寫入'
+        : '搬完了。接著把指令碼屬性 SHEET_ID 改成 ' + AssetSchema.SHEET_ID
+    };
+    Logger.info('AssetMigrate.migrateSystem', '系統分頁搬移', result);
+    return result;
+  };
+
   // ─── 對帳 ──────────────────────────────────────────────────────
 
   /**
