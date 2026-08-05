@@ -185,6 +185,39 @@ var AssetTools = (() => {
         }
       }
 
+      // ── 賣出：帳本裡真的有這些股票嗎 ──
+      //
+      // 擋在寫入之前，不是寫完再警告。兩套帳對同一列的看法不一致才是問題所在：
+      // `Position.replay` 知道你沒持股，會把那筆跳過（股數不動、不產生已實現損益）；
+      // 但「現金流」是那一列**自己的試算表公式**算出來的，它只讀這列寫了幾股幾塊，
+      // 看不到持倉。放進去的結果是股票沒動、錢卻入帳 —— 帳戶餘額與總資產都會多。
+      //
+      // 判斷讓 replay 本人跑一次「到這個日期為止」的重放，不自己算持股：加權平均是
+      // 路徑相依的，另外寫一份判斷邏輯遲早會和真正的重放分岔。日期一併考慮，
+      // 是因為補記的賣出要看的是**那一天**手上有多少，不是今天有多少。
+      //
+      // ⚠️ 這道關卡只在 recordTrade。券商匯入不擋 —— 對帳單說賣了就是賣了，
+      //    那裡缺的是買進（見 AssetImport 的「只記賣出」註解），擋下來只會讓
+      //    真實成交進不了帳。手改與匯入進來的賣超仍然靠 replay 的警告收尾。
+      if (action === '賣出') {
+        var upto = AssetSchema.readTrades(ss).filter(x => {
+          var d = _str(x['日期']) ? _normalizeDate(x['日期'], tz) : '';
+          return d && d <= dateStr;
+        });
+        var st = Position.replay(upto).positions[val.symbol];
+        var held = st ? st.shares : 0;
+        if (held < val.shares) {
+          return held <= 0
+            ? '這筆賣出擋下來了：' + dateStr + ' 當下你手上沒有 ' + val.symbol +
+              '，賣不掉 ' + _money(val.shares) + ' 股。\n' +
+              '如果真的賣了，表示帳本裡少了對應的買進 —— 請先把買進補記進來，再記這一筆。' +
+              '（硬記下去的話持倉不會動，但那列的現金流照樣入帳，帳戶餘額會憑空變多）'
+            : '這筆賣出擋下來了：' + dateStr + ' 當下 ' + val.symbol + ' 只有 ' +
+              _money(held) + ' 股，賣不掉 ' + _money(val.shares) + ' 股。\n' +
+              '請先確認股數。真的賣了這麼多的話，表示帳本裡少了買進，請先補記買進再記這一筆。';
+        }
+      }
+
       // ── 帳戶 ──
       var accounts = AssetSchema.readObjects(ss.getSheetByName('帳戶'))
         .filter(x => _str(x['帳戶']) && _str(x['狀態']) !== '停用');

@@ -362,10 +362,28 @@ a transfer never touches 持倉, so `Position.replay` has nothing to warn about.
 moves. `voidTrade` therefore prints an explicit warning naming the amount whenever the voided row
 is 轉出/轉入; the pairing itself is still the human's job.
 
-A dangling **賣出** (its 買進 voided) *is* caught: `replay` skips the sale as 「當下無持股」, pushes a
-warning that surfaces in `voidTrade`'s reply and as a `⚠️ 待修正` row in 指標 — but the sale's 現金流
-still lands in the account. The money is wrong until the sale is voided too; the difference is that
-you are told.
+### 賣不掉你沒有的股票
+
+`recordTrade` refuses a 賣出 outright when the ledger doesn't hold that many shares **on that
+date** — nothing is written. The problem it prevents is two ledgers disagreeing about one row:
+`Position.replay` knows you hold nothing and skips the sale (shares untouched, no realised P&L),
+but 現金流 is that row's **own spreadsheet formula** — it reads only the shares and price written
+on the line and cannot see 持倉. Let the row in and the stock never moves while the money lands.
+
+The check replays the trades up to that date and asks `Position.replay` itself rather than
+counting shares locally: weighted average is path-dependent, and a second implementation of that
+rule would eventually drift from the real one. Date matters because a back-dated sale must be
+judged against what was held **that day**, not today.
+
+⚠️ **The gate is on `recordTrade` only.** Broker imports are not blocked — a statement saying you
+sold means you sold; what's missing there is the buy (see AssetImport's "only the sell side"
+note), and refusing would keep real fills out of the book. So a dangling 賣出 can still arrive by
+import, by hand-editing the sheet, or by voiding a 買進 that has a later sale. Those are caught
+after the fact, not before: `replay` skips the sale and pushes a warning that surfaces in the
+`voidTrade` / `rebuild` reply and as a `⚠️ 待修正` row in 指標 — but the sale's 現金流 still lands.
+The money stays wrong until that sale is voided too; the difference is that you are told.
+`T9` in `test_asset.cjs` covers exactly this path, which is why it appends via
+`AssetSchema.appendTrade` instead of `recordTrade`.
 
 **Every reader of 交易 must go through `AssetSchema.readTrades(ss)`**, which filters voids by
 default and attaches `__row` (the real sheet row — `readObjects` skips blanks, so index+2 is not

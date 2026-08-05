@@ -1450,6 +1450,23 @@ console.log('\nT23  作廢記錯的交易');
   check('已實現損益表也退回原本的列數（不是多一筆反向的）',
     AssetSchema.readObjects(realSheet).length === realRows0, AssetSchema.readObjects(realSheet).length);
 
+  // ── 沒有的股票不給賣：擋在寫入之前，不是寫完再警告 ──
+  // 持倉那邊會跳過賣不掉的部分，但那一列的現金流是自己的公式算的、看不到持倉 ——
+  // 硬記下去就是股票沒動、錢卻入帳。作廢買進之後那檔就該賣不掉了。
+  const NEW2 = '0002T';
+  const buy2 = rowNumOf(AssetTools.recordTrade({
+    action: '買進', symbol: NEW2, shares: 500, price: 10, account: ACC }));
+  const nBefore = countRows();
+  check('賣超持股被擋下，並講出實際有幾股',
+    /只有 500 股/.test(AssetTools.recordTrade({
+      action: '賣出', symbol: NEW2, shares: 600, price: 12, account: ACC })), '');
+  AssetTools.voidTrade({ row: buy2, reason: '這筆買進是假的' });
+  check('把買進作廢之後，那一檔就賣不掉了',
+    /手上沒有/.test(AssetTools.recordTrade({
+      action: '賣出', symbol: NEW2, shares: 500, price: 12, account: ACC })), '');
+  check('被擋下的賣出都沒有寫進交易表',
+    countRows() === nBefore, countRows() + ' vs ' + nBefore);
+
   // ── 擋下來的情況 ──
   const epochRow = (AssetSchema.readTrades(target).find(x => String(x['動作']) === '期初') || {}).__row;
   check('不存在的列號被擋下', /沒有第 9999 列/.test(AssetTools.voidTrade({ row: 9999, reason: 'x' })), '');
