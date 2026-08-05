@@ -229,7 +229,8 @@ var Position = (() => {
     }
 
     var instSheet   = ss.getSheetByName('標的');
-    var trades      = AssetSchema.readObjects(ss.getSheetByName('交易'));
+    // 作廢的列不進重放，也不進 XIRR 與「交易筆數」—— readTrades 預設就濾掉了
+    var trades      = AssetSchema.readTrades(ss);
     var instruments = AssetSchema.readObjects(instSheet);
     var accounts    = AssetSchema.readObjects(ss.getSheetByName('帳戶'));
 

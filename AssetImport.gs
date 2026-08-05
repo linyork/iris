@@ -201,11 +201,14 @@ var AssetImport = (() => {
       // ── 去重 ──
       // 去重要兩層，而且**必須和對帳單那邊對稱** —— 同一批賣出可能先從對帳單
       // 進來過（拆法不同，內容雜湊對不上），這時只能靠數量比對認出來。
+      // 作廢的列**內容鍵仍然算數，數量不算**：作廢是刻意的動作，重送同一個檔案
+      // 不該讓它悄悄復活；但它已經不是真實部位了，不能再抵掉新資料的股數。
       var existing = {}, recorded = {};
-      AssetSchema.readObjects(ss.getSheetByName('交易')).forEach(t => {
+      AssetSchema.readTrades(ss, { includeVoid: true }).forEach(t => {
         var note = _str(t['備註']);
         var k = note.match(/imp:[^\s|]+/);
         if (k) existing[k[0]] = true;
+        if (AssetSchema.isVoid(t)) return;
 
         if (_str(t['動作']) !== '賣出') return;
         var d = t['日期'] instanceof Date
@@ -425,11 +428,13 @@ var AssetImport = (() => {
       }
 
       // ── 既有資料：鍵值 + 每（日期,代號,動作）已記錄的股數 ──
+      // 與已實現損益那邊對稱：作廢的列留著鍵（不復活），但不再抵扣數量
       var seenKeys = {}, recorded = {};
-      AssetSchema.readObjects(ss.getSheetByName('交易')).forEach(t => {
+      AssetSchema.readTrades(ss, { includeVoid: true }).forEach(t => {
         var note = _str(t['備註']);
         var k = note.match(/stm:[^\s|]+/);
         if (k) seenKeys[k[0]] = true;
+        if (AssetSchema.isVoid(t)) return;
 
         var act = _str(t['動作']);
         if (act !== '買進' && act !== '賣出') return;

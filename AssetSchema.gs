@@ -64,6 +64,25 @@ var AssetSchema = (() => {
   // 外幣戶會整整差一個匯率而且不會報錯。
   s.ACTIONS = ['買進', '賣出', '股利', '存入', '提出', '費用', '利息', '轉出', '轉入', '期初', '調整'];
 
+  // ─── 作廢 ────────────────────────────────────────────────────
+  //
+  // 記錯了怎麼辦？帳本是 append-only，但 append-only 需要的是「撤銷的方法」，
+  // 不是「不准動」。這裡用**墓碑**：那一列留著、數字留著，只在「狀態」打一個
+  // 記號，所有算數字的地方跳過它。
+  //
+  // 為什麼不是反向沖銷列：現金那邊可以（現金流一路 SUMIF，加一列負的就抵掉），
+  // **股票那邊不行** —— 記錯的買進反手記一筆賣出，加權平均重放會把它當成真的
+  // 處分，憑空生出一筆已實現損益。錯的沒消失，只是多了一筆假的。
+  //
+  // ⚠️ 現金流那一欄也必須跟著失效，否則列跳過了、錢還在帳戶餘額裡
+  //    （`現金!交易淨流` 是 `SUMIF(交易!$L:$L, …, 交易!$J:$J)`，讀的是儲存格，
+  //    不是 JS 這邊的過濾結果）。所以公式本身帶著 `狀態="作廢"` 的守門，
+  //    見 TRADE_FORMULAS。
+  s.VOID = '作廢';
+
+  /** 這一列被作廢了嗎？所有讀「交易」的地方都該問這一句，不要各自比字串 */
+  s.isVoid = (t) => s.str(t && t['狀態']) === s.VOID;
+
   // ─── 分頁定義 ──────────────────────────────────────────────────
   //
   // generated: true 代表整張表由 Position.rebuild() 覆寫，人不要手改。
@@ -90,9 +109,10 @@ var AssetSchema = (() => {
     {
       name: '交易',
       textColumns: ['代號'],
-      note: '唯一的事實來源。每一筆買賣、股利、存提都在這裡。永遠只新增，不修改歷史列。',
+      note: '唯一的事實來源。每一筆買賣、股利、存提都在這裡。只新增，不改歷史數字；' +
+            '記錯了把「狀態」設成「作廢」（voidTrade），不要刪列、不要改金額。',
       headers: ['日期', '動作', '代號', '名稱', '股數', '單價', '手續費', '交易稅',
-                '金額', '現金流', '幣別', '帳戶', '分類', '備註', '來源', '建立時間']
+                '金額', '現金流', '幣別', '帳戶', '分類', '備註', '來源', '建立時間', '狀態']
     },
     {
       name: '持倉',
@@ -162,11 +182,16 @@ var AssetSchema = (() => {
   //   其餘  ±金額欄
   // 轉帳寫成兩列（轉出 / 轉入），不設「對方帳戶」欄 —— 兩列版本讓每個帳戶的
   // 餘額都只是一次 SUMIF，不必處理雙向扣抵。
+  //
+  // $Q 是「狀態」欄。作廢的列現金流要是**空字串**，那筆錢才會從帳戶餘額裡退出去
+  // —— `現金!交易淨流` 是整欄 SUMIF，它不知道 JS 那邊過濾掉了什麼。
+  // 欄位字母寫死是這張表既有的慣例（$B/$E/$I 都是），靠 build() 的標題列逐格
+  // 比對守住：對不上會直接丟例外，不會靜默寫到隔壁欄。
 
   s.TRADE_FORMULAS = {
     '名稱': '=IF($C{r}="","",IFERROR(VLOOKUP($C{r},標的!$A:$B,2,FALSE),""))',
     '現金流':
-      '=IF($B{r}="","",' +
+      '=IF(OR($B{r}="",$Q{r}="' + s.VOID + '"),"",' +
       'IFS(' +
       '$B{r}="買進",-(N($E{r})*N($F{r})+N($G{r})),' +
       '$B{r}="賣出",N($E{r})*N($F{r})-N($G{r})-N($H{r}),' +
@@ -261,6 +286,42 @@ var AssetSchema = (() => {
         header.forEach((h, i) => { if (h) o[h] = r[i]; });
         return o;
       });
+  };
+
+  /**
+   * 讀「交易」表，**預設不含作廢的列**。
+   *
+   * 每一個算數字的地方都該走這裡而不是 `readObjects(交易)` —— 漏掉一個，那條路
+   * 上的作廢列就會復活，而且只在那一個數字上錯（例如持倉對了、股利統計多一筆）。
+   *
+   * 每個物件多帶一個 `__row`：試算表上的實際列號。`readObjects` 會跳過空白列，
+   * 所以「陣列索引 +2」不保證等於列號，而作廢要指定列號才叫得動。
+   *
+   * @param {object} [ss]
+   * @param {object} [options]
+   * @param {boolean} [options.includeVoid] 連作廢的一起回傳（對帳、去重時用）
+   */
+  s.readTrades = (ss, options) => {
+    options = options || {};
+    ss = ss || s.open();
+    var sheet = ss.getSheetByName('交易');
+    if (!sheet) return [];
+
+    var lastRow = sheet.getLastRow();
+    var lastCol = Math.max(sheet.getLastColumn(), 1);
+    if (lastRow < 2) return [];
+    var header = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => s.str(v));
+
+    var out = [];
+    sheet.getRange(2, 1, lastRow - 1, lastCol).getValues().forEach((r, i) => {
+      if (!r.some(v => v !== '' && v !== null && v !== undefined)) return;
+      var o = {};
+      header.forEach((h, c) => { if (h) o[h] = r[c]; });
+      o.__row = i + 2;
+      if (!options.includeVoid && s.isVoid(o)) return;
+      out.push(o);
+    });
+    return out;
   };
 
   /** TABS 裡某分頁的預期標題列（找不到回 null） */
@@ -440,13 +501,24 @@ var AssetSchema = (() => {
 
     var r = sheet.getLastRow() + 1;
     sheet.getRange(r, 1, 1, row.length).setValues([row]);
+    s.writeRowFormulas(sheet, r, map);
+    return r;
+  };
 
+  /**
+   * 把公式欄重寫到單獨一列。
+   *
+   * 新增一筆交易與作廢一筆交易都需要它：作廢改的是「狀態」，而現金流的守門
+   * 條件寫在**公式裡** —— 既有的列可能還帶著沒有守門的舊版公式（那時候還沒有
+   * 狀態欄），不重寫的話狀態設了、錢卻還留在帳戶餘額裡。
+   */
+  s.writeRowFormulas = (sheet, r, map) => {
+    map = map || s.headerMap(sheet);
     Object.keys(s.TRADE_FORMULAS).forEach(colName => {
       var idx = map[colName];
-      if (idx === undefined) return;
+      if (idx === undefined || idx < 0) return;
       sheet.getRange(r, idx + 1).setFormula(s.TRADE_FORMULAS[colName].replace(/\{r\}/g, r));
     });
-    return r;
   };
 
   /** 新試算表預設會有一張空的「工作表1」，建完就移除 */

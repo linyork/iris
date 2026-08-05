@@ -9,7 +9,7 @@
 > | 目前手刻 | 對應的 LangChain / LangGraph 概念 |
 > |---|---|
 > | `ChatBot.gs` 的 ReAct 迴圈 | `LangGraph` StateGraph + ToolNode |
-> | `Tools.gs` 的 15 個工具 | `@tool` decorator / `StructuredTool` |
+> | `Tools.gs` 的 21 個工具 | `@tool` decorator / `StructuredTool` |
 > | `AIServiceFactory` + `AIAdapter` | `BaseChatModel` 抽象 + provider 子類 |
 > | `GoogleSheet` 的 chat 讀寫 + STM 注入 | `Memory` / `Checkpointer` |
 > | `searchKnowledge` 關鍵字查 Sheet | `VectorStore` retriever |
@@ -95,12 +95,15 @@ Telegram Bot API ───┤        │
                  │
                  ▼
 ┌──────────────────────────────────────────────┐
-│  Tools.gs · 15 個工具                         │
+│  Tools.gs · 21 個工具                         │
 │   ├─ 資產查詢：getHoldings / getDashboard /    │
 │   │           getHistory / getPrice           │
 │   ├─ 股利：getDividendHistory / recordDividend │
 │   ├─ 記帳：addAccount / recordTrade /          │
-│   │       setCashBalance                      │
+│   │       setCashBalance / voidTrade          │
+│   ├─ 主檔：listTrades / listAccounts /         │
+│   │       listInstruments /                   │
+│   │       updateAccount / updateInstrument    │
 │   ├─ 記憶：rememberShortTerm / saveKnowledge / │
 │   │       searchKnowledge / listMemories /    │
 │   │       deleteMemory                        │
@@ -150,7 +153,7 @@ Telegram Bot API ───┤        │
 | `WebSearch.gs` | Google Custom Search 包裝 |
 | `Utils.gs` | 文字格式化、`stripToolCallXml`、`formatForLine` |
 | `Logger.gs` | 寫入 `consolelog` 工作表 |
-| `AssetTools.gs` | 新表的寫入用例層：`recordTrade` 驗證後 append 一列並重算 |
+| `AssetTools.gs` | 新表**輸入層**的用例層：`recordTrade` 驗證後 append 一列並重算；`voidTrade` 作廢記錯的列；`updateInstrument` / `updateAccount` 改主檔；`listTrades` / `listAccounts` / `listInstruments` 讀主檔（計算層的讀取在 `Snapshot`） |
 | `Panel.gs` | 「面板」分頁的排版：整張都是指向持倉／現金／實體資產的公式，由 `Position.rebuild()` 最後呼叫。程式讀的數字在「指標」那張，不在這裡 |
 | `AssetImport.gs` | 券商已實現損益 CSV 匯入（Telegram 傳檔進來），**只記賣出**、內容去重 |
 | `DevTools.gs` | **所有在 GAS 編輯器手動執行的進入點**：建表、重算、dry run、診斷。編輯器的函式下拉選單不顯示檔案來源，所以集中在這裡；trigger 與 web 進入點因為綁定名稱，仍留在各自的檔案。遷移相關的進入點已移除 —— 遷移做完了，留在選單裡只會被誤觸 |
@@ -224,18 +227,72 @@ Telegram Bot API ───┤        │
 - **`balance` 一律填該帳戶的原幣** —— 國泰外幣戶(美) 填美金，不要換算台幣
 - 餘額本來就對得上時不寫任何一列，直接回「不用校正」
 
-帳戶本身由 `addAccount()` 建立（那是唯一會寫「帳戶」主檔的地方）。`期初餘額` 的語意是
-**期初日期那天的餘額**，建完就不該再動 —— 之後的水位一律由交易推導。
+帳戶本身由 `addAccount()` 建立、`updateAccount()` 修改 —— 只有這兩個地方會寫「帳戶」主檔。
+`期初餘額` 的語意是**期初日期那天的餘額**，建完就不該再動 —— 之後的水位一律由交易推導。
 
-> 這個工具是補回來的：在它之前「帳戶」只能手改，模型被要求開新戶頭時無路可走，
+> `addAccount` 是補回來的：在它之前「帳戶」只能手改，模型被要求開新戶頭時無路可走，
 > 於是回了一句「已建立完成」而實際上什麼都沒發生（2026-08-05）。所以提示詞裡另外
 > 加了一條硬規則：**寫入類的事沒收到工具回傳結果之前，不准說已完成。**
+
+### 記錯了怎麼撤
+
+「交易」是 append-only，但 append-only 需要的是**撤銷的方法**，不是「不准動」。
+`voidTrade(row, reason)` 打的是墓碑：那一列留著、原始數字留著，只在 `狀態` 欄寫上
+「作廢」，備註接上原因與時間戳。所有算數字的地方（`AssetSchema.readTrades`）跳過它。
+
+> ⚠️ **不要改用「反手記一筆相反的交易」來抵銷。** 現金那邊可以（現金流一路 SUMIF，
+> 加一列負的就抵掉了），**股票那邊不行**：記錯的買進反手記一筆賣出，加權平均重放會把
+> 它當成真的處分，憑空生出一筆已實現損益 —— 錯的沒消失，只是多了一筆假的。
+
+三件必須同時成立的事：
+
+- **現金流那一欄要一起失效。** `現金!交易淨流` 是 `SUMIF(交易!$L:$L, 帳戶, 交易!$J:$J)`
+  —— 整欄加總，它不知道 JS 那邊過濾掉了什麼。所以守門條件寫在**公式裡**
+  （`IF(OR($B="",$Q="作廢"),"",…)`），而且作廢時會重寫那一列的公式：既有的列可能還帶著
+  加「狀態」欄之前的舊版公式，不重寫就會變成「列跳過了、錢還在」
+- **「期初」不給作廢。** 那是遷移建倉的起點，拿掉之後所有後續賣出都會變成「當下無持股」
+  而整批被跳過，持倉直接歸零
+- **匯入去重仍然認得它。** 作廢的列**內容鍵照算、數量不算**：作廢是刻意的動作，重送同一份
+  券商檔案不該讓它悄悄復活；但它已經不是真實部位，不能再抵掉新資料的股數
+
+要作廢哪一列用 `listTrades` 查 —— 它每一筆前面的「第 N 列」就是 `voidTrade` 要的列號。
+
+⚠️ **兩種「只撤一半」的情況，程度不一樣：**
+
+| 情況 | 會怎樣 | 有沒有人講 |
+|---|---|---|
+| 作廢 `買進`、`賣出` 還在 | 賣出被判定「當下無持股」而跳過，但它的現金流仍入帳 | ✅ `Position.replay` 警告 → `voidTrade` 回覆＋`指標` 的 `⚠️ 待修正` |
+| 作廢 `轉出`／`轉入` 的其中一腿 | 總資產憑空多出或少掉那筆錢 | ⚠️ 只有 `voidTrade` 自己提醒 |
+
+轉帳的兩列**沒有欄位把彼此綁在一起**（刻意的，見「現金餘額怎麼改」），而且轉帳不碰持倉，
+所以 `replay` 沒有東西可以警告。`voidTrade` 因此在作廢 `轉出`／`轉入` 時會直接把金額講出來，
+但配對哪一列仍然要人自己找。
+
+### 主檔怎麼改
+
+`標的` 與 `帳戶` 是**被不可變資料用字串引用的參考資料**，和交易的規則正好相反：
+交易禁止修改、只能作廢；主檔沒有「再記一筆」可以退，**更新是唯一的修正路徑**。
+
+- `交易!名稱`、`持倉!目標配置%` 都是 VLOOKUP 回主檔，新建一列正確的並不會讓舊的失效
+- **改帳戶名是跨兩張表的事**：`現金!交易淨流` 按帳戶名 SUMIF，只改主檔那一格、不改
+  「交易」裡的每一列，那個帳戶的餘額會靜靜地掉回期初值，而且不會有任何錯誤。
+  `updateAccount({newName})` 會一起改寫（「每日快照」的歷史列保持舊名，那是當時的紀錄）
+- **帳戶不提供刪除，只有停用**，而且**停用前餘額必須是 0** —— 停用的帳戶會被
+  `Position` 從「現金」表整列濾掉，裡面還有錢的話那筆錢會直接從總資產上消失
+- **已經有交易的帳戶不給改幣別**：那些列的金額是用舊幣別記的，改了之後餘額會變成
+  兩種貨幣加在一起再乘新匯率
+- `updateInstrument` 的 `target` **一律填 0..1 的比例**，15% 要填 0.15。填 15 會被擋下來，
+  程式不做 `/100` 的自動換算 —— 12.5 是「12.5%」還是手滑多打一位，猜錯就是一百倍的偏離
+
+> `updateInstrument` 存在的直接原因是 `recordTrade` 的自動建立只生得出**半個**標的：
+> 買進新代號時會自動登記一列，但 `區域` / `類型` / `目標配置%` 一律留空，而「配置」就是
+> 按區域與類型分組的。`listInstruments` 會直接點名哪幾檔還缺。
 
 ---
 
 ## AI 工具集
 
-`Tools.gs` 共定義 15 個工具，呼叫者為 LLM。
+`Tools.gs` 共定義 21 個工具，呼叫者為 LLM。
 工具以 `definitions` 陣列（給模型看的 schema）加上 `execute()` 內的 `switch` 分派實作，
 **新增工具時兩處都要改**，只加 definitions 會讓模型叫得出來卻一律收到「未知的工具」。
 
@@ -250,6 +307,12 @@ Telegram Bot API ───┤        │
 | `recordTrade(action, symbol, shares, price, fee, tax, amount, account, date, note)` | **寫進新的「資產管理」表**：買進／賣出／股利／存入／提出／費用／利息／轉出／轉入，記完自動 `Position.rebuild()` 重算持倉與餘額 |
 | `setCashBalance(account, balance, note, date)` | 把某個現金帳戶**校正成指定的餘額**（主人講絕對值時用）。差額由程式重讀「現金」表當場算，寫成一列「調整」交易 —— 見[現金餘額怎麼改](#現金餘額怎麼改) |
 | `addAccount(name, type, currency, institution, balance, date, note)` | 開新帳戶，往「帳戶」主檔加一列後重算。**唯一能新增帳戶的途徑**；同名（含停用）一律擋下 |
+| `voidTrade(row, reason)` | 作廢一筆記錯的交易：列與原始數字留著，只在「狀態」打記號並讓現金流失效 —— 見[記錯了怎麼撤](#記錯了怎麼撤) |
+| `listTrades(limit, symbol, account, action, includeVoid)` | 列出逐筆交易，**每筆都帶「第 N 列」**（`voidTrade` 要的列號）。與 `getHistory`（每日快照）不同 |
+| `listAccounts` | 列出所有帳戶（含停用）與**原幣**餘額。`getDashboard` 只給換算後的台幣值 |
+| `listInstruments` | 列出「標的」主檔，含已出清與尚未買進的，並點名區域／類型還沒填的 |
+| `updateInstrument(symbol, name, market, currency, quoteSource, region, category, target, status, note)` | 改「標的」主檔。代號不能改；`target` 一律 0..1 的比例，填百分比會被擋下 |
+| `updateAccount(name, newName, type, currency, institution, status, note)` | 改「帳戶」主檔。改名會**連「交易」的每一列一起改寫**；不提供刪除，只有停用，且停用前餘額必須是 0 |
 | `rememberShortTerm(key, content, hours)` | 寫入短期記憶（預設 24h，最長 168h） |
 | `saveKnowledge(tags, content)` | 寫入長期知識（含結構化 tag） |
 | `searchKnowledge(query)` | 關鍵字搜尋長期知識 |

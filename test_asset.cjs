@@ -1372,6 +1372,222 @@ console.log('\nT22  開新帳戶');
       action: '買進', symbol: H0.code, shares: 1000, price: 50 })), '');
 }
 
+// ─── T23  作廢記錯的交易 ──────────────────────────────────────────
+// 帳本是 append-only，但 append-only 需要的是「撤銷的方法」而不是「不准動」。
+// 作廢打的是墓碑：列留著、原始數字留著，只是不再計入任何統計。
+// ⚠️ 不能用「反手記一筆相反的交易」代替 —— 那在股票上會被算成真的處分。
+console.log('\nT23  作廢記錯的交易');
+{
+  const tradeSheet = target.getSheetByName('交易');
+  const cashSheet  = target.getSheetByName('現金');
+  const posSheet   = target.getSheetByName('持倉');
+  const realSheet  = target.getSheetByName('已實現損益');
+  const ACC  = '國泰證券戶';
+  const code = H0.code;
+
+  const countRows  = () => AssetSchema.readObjects(tradeSheet).length;
+  const posOf      = (c) => AssetSchema.readObjects(posSheet).find(x => String(x['代號']) === c) || {};
+  const balanceOf  = (n) => {
+    const r = AssetSchema.readObjects(cashSheet).find(x => String(x['帳戶']) === n);
+    return r ? num(r['餘額']) : null;
+  };
+  const rowOf      = (r) => AssetSchema.readTrades(target, { includeVoid: true }).find(x => x.__row === r);
+  const rowNumOf   = (out) => { const m = out.match(/已記錄第 (\d+) 列/); return m ? +m[1] : 0; };
+  const divTotal   = () => Snapshot.dividendSeries(target).byYear.reduce((s, y) => s + y.total, 0);
+
+  // ── 買進記錯：持倉與餘額都必須回到原點 ──
+  const shares0 = num(posOf(code)['股數']);
+  const cost0   = num(posOf(code)['總成本']);
+  const bal0    = balanceOf(ACC);
+  const rows0   = countRows();
+
+  const BUY_QTY = 1000, BUY_PRICE = 20, BUY_FEE = 30;
+  const buyRow = rowNumOf(AssetTools.recordTrade({
+    action: '買進', symbol: code, shares: BUY_QTY, price: BUY_PRICE, fee: BUY_FEE, account: ACC }));
+  check('買進有回報列號', buyRow >= 2, buyRow);
+  check('買進後股數增加', num(posOf(code)['股數']) === shares0 + BUY_QTY, num(posOf(code)['股數']));
+  check('買進後餘額減少',
+    near(balanceOf(ACC), bal0 - (BUY_QTY * BUY_PRICE + BUY_FEE), 0.01), balanceOf(ACC));
+
+  const v1 = AssetTools.voidTrade({ row: buyRow, reason: '股數打錯' });
+  check('作廢後股數回到原本', num(posOf(code)['股數']) === shares0, num(posOf(code)['股數']));
+  check('作廢後總成本回到原本', near(num(posOf(code)['總成本']), cost0, 0.01), num(posOf(code)['總成本']));
+  check('作廢後餘額回到原本', near(balanceOf(ACC), bal0, 0.01), balanceOf(ACC));
+  check('回覆帶回列號與原因', /已作廢第 \d+ 列/.test(v1) && /股數打錯/.test(v1), v1.split('\n')[0]);
+
+  // ── 墓碑：列還在，數字也還在 ──
+  const dead = rowOf(buyRow);
+  check('那一列沒有被刪掉', countRows() === rows0 + 1, countRows() + ' vs ' + (rows0 + 1));
+  check('原始股數仍留在表上', num(dead['股數']) === BUY_QTY, dead['股數']);
+  check('狀態標成作廢', String(dead['狀態']) === AssetSchema.VOID, dead['狀態']);
+  // ⚠️ 這一格是整個作廢機制的關鍵：現金表的「交易淨流」是整欄 SUMIF，
+  //    它不知道 JS 那邊過濾掉了什麼 —— 公式沒失效就會變成「列跳過了、錢還在」
+  check('現金流失效成空字串（不是留著死值）', String(dead['現金流']) === '', JSON.stringify(dead['現金流']));
+  check('備註保留原因', /股數打錯/.test(String(dead['備註'])), dead['備註']);
+  check('readTrades 預設讀不到作廢的列',
+    !AssetSchema.readTrades(target).some(x => x.__row === buyRow), '');
+
+  // ── 股利：Snapshot 的統計也要跟著退回去 ──
+  const div0 = num(posOf(code)['累計股利']);
+  const divSum0 = divTotal();
+  const DIV = 1234;
+  const divRow = rowNumOf(AssetTools.recordTrade({
+    action: '股利', symbol: code, amount: DIV, account: ACC }));
+  check('股利入帳', near(num(posOf(code)['累計股利']), div0 + DIV, 0.01), num(posOf(code)['累計股利']));
+  AssetTools.voidTrade({ row: divRow, reason: '重複登記' });
+  check('作廢股利後累計股利回到原本', near(num(posOf(code)['累計股利']), div0, 0.01), num(posOf(code)['累計股利']));
+  check('股利統計（Snapshot）也不再算它', near(divTotal(), divSum0, 0.01), divTotal() + ' vs ' + divSum0);
+
+  // ── 賣出：已實現損益整列消失，不是多一筆反向的 ──
+  const real0 = num(posOf(code)['已實現損益']);
+  const realRows0 = AssetSchema.readObjects(realSheet).length;
+  const sellRow = rowNumOf(AssetTools.recordTrade({
+    action: '賣出', symbol: code, shares: 100, price: SELL_PRICE, fee: 20, tax: 5, account: ACC }));
+  check('賣出產生一列已實現損益',
+    AssetSchema.readObjects(realSheet).length === realRows0 + 1, AssetSchema.readObjects(realSheet).length);
+  AssetTools.voidTrade({ row: sellRow, reason: '根本沒賣' });
+  check('作廢賣出後已實現損益回到原本', near(num(posOf(code)['已實現損益']), real0, 0.01), num(posOf(code)['已實現損益']));
+  check('已實現損益表也退回原本的列數（不是多一筆反向的）',
+    AssetSchema.readObjects(realSheet).length === realRows0, AssetSchema.readObjects(realSheet).length);
+
+  // ── 擋下來的情況 ──
+  const epochRow = (AssetSchema.readTrades(target).find(x => String(x['動作']) === '期初') || {}).__row;
+  check('不存在的列號被擋下', /沒有第 9999 列/.test(AssetTools.voidTrade({ row: 9999, reason: 'x' })), '');
+  check('沒給列號時會問，不會亂猜', /要作廢哪一列/.test(AssetTools.voidTrade({ reason: 'x' })), '');
+  check('已作廢的列不會再作廢一次',
+    /已經是作廢狀態/.test(AssetTools.voidTrade({ row: buyRow, reason: 'x' })), '');
+  check('「期初」列不給作廢（拿掉它後續賣出會整批被跳過）',
+    !!epochRow && /期初/.test(AssetTools.voidTrade({ row: epochRow, reason: 'x' })), epochRow);
+
+  // ── listTrades：作廢要指定列號，列號就得有地方查 ──
+  const lt = AssetTools.listTrades({ symbol: code, limit: 5 });
+  check('listTrades 每筆都帶實際列號', /第 \d+ 列/.test(lt), lt.split('\n')[1]);
+  check('listTrades 預設不列作廢的（但會說有幾筆被藏起來）',
+    !/⛔ 已作廢/.test(lt) && /已作廢未列出/.test(lt), lt.split('\n')[0]);
+  check('includeVoid 才看得到作廢的列',
+    /⛔ 已作廢/.test(AssetTools.listTrades({ symbol: code, limit: 50, includeVoid: true })), '');
+  check('listTrades 認得動作的口語說法',
+    /賣出/.test(AssetTools.listTrades({ symbol: code, action: '賣掉', limit: 5, includeVoid: true })), '');
+
+  // ── 轉帳只作廢一腿：沒有欄位把兩腿綁在一起，也不碰持倉，所以沒有人會發現 ──
+  const legOut = rowNumOf(AssetTools.recordTrade({ action: '轉出', amount: 5000, account: ACC }));
+  const vLeg = AssetTools.voidTrade({ row: legOut, reason: '轉錯帳戶' });
+  check('作廢轉帳的一腿時會警告另一腿還在',
+    /轉帳是兩列/.test(vLeg) && /5,000/.test(vLeg), vLeg.split('\n')[2]);
+
+  // ── 與匯入去重的關係：作廢是刻意的，重送同一份檔案不該讓它復活 ──
+  const H2 = HOLD[2];
+  const STM2 = '股名,日期,成交股數,淨收付,成交單價,成交價金,手續費,交易稅,稅款,委託書號,幣別,備註\n' +
+    H2.name + ',2026/09/01,100,"-1,022",10,"1,000",22,0,0,Z0001,台幣,\n';
+  const n0 = countRows();
+  AssetImport.importStatement(STM2, { account: ACC });    // 有兩個證券戶，要講清楚
+  check('對帳單匯入一列', countRows() === n0 + 1, countRows() + ' vs ' + (n0 + 1));
+  // 用內容鍵找那一列，不要用「最後一列」—— 後者在匯入失敗時會指到別人身上
+  const impRow = (AssetSchema.readTrades(target)
+    .find(x => /Z0001/.test(String(x['備註']))) || {}).__row;
+  check('匯入的列有內容鍵', impRow >= 2, impRow);
+  AssetTools.voidTrade({ row: impRow, reason: '券商重複出帳' });
+  check('作廢後備註裡的匯入鍵還在（去重才認得出來）',
+    /stm:/.test(String(rowOf(impRow)['備註'])), rowOf(impRow)['備註']);
+  const n1 = countRows();
+  AssetImport.importStatement(STM2, { account: ACC });
+  check('重送同一份檔案不會讓作廢的列復活', countRows() === n1, countRows() + ' vs ' + n1);
+}
+
+// ─── T24  主檔的修改：標的與帳戶 ──────────────────────────────────
+// 主檔沒有「再記一筆」可以退：名稱與目標配置% 都是 VLOOKUP 回主檔，
+// 新建一列正確的並不會讓舊的失效。所以「改」是唯一的修正路徑，
+// 而且改名是**跨兩張表**的事 —— 這正是手改試算表最容易漏的一步。
+console.log('\nT24  主檔的修改');
+{
+  const instSheet = target.getSheetByName('標的');
+  const cashSheet = target.getSheetByName('現金');
+  const posSheet  = target.getSheetByName('持倉');
+  const instOf    = (c) => AssetSchema.readObjects(instSheet).find(x => String(x['代號']) === c) || {};
+  const posOf     = (c) => AssetSchema.readObjects(posSheet).find(x => String(x['代號']) === c) || {};
+  const balanceOf = (n) => {
+    const r = AssetSchema.readObjects(cashSheet).find(x => String(x['帳戶']) === n);
+    return r ? num(r['餘額']) : null;
+  };
+  const totalAssets = () => num((AssetSchema.readObjects(target.getSheetByName('指標'))
+    .find(x => String(x['指標']) === '總資產') || {})['數值']);
+  const code = H0.code;
+
+  // ── 目標配置%：比例不是百分比 ──
+  const target0 = num(instOf(code)['目標配置%']);
+  check('填百分比（15）會被擋下並說清楚要填 0.15',
+    /0 到 1/.test(AssetTools.updateInstrument({ symbol: code, target: 15 })), '');
+  check('被擋下時沒有寫進去', num(instOf(code)['目標配置%']) === target0, instOf(code)['目標配置%']);
+
+  AssetTools.updateInstrument({ symbol: code, target: 0.15 });
+  check('比例寫進「標的」', near(num(instOf(code)['目標配置%']), 0.15, 1e-9), instOf(code)['目標配置%']);
+  check('「持倉」的目標配置% 跟著（指回去的公式，不是抄過來的死值）',
+    near(num(posOf(code)['目標配置%']), 0.15, 1e-9), posOf(code)['目標配置%']);
+  check('偏離 = 佔總資產% − 目標配置%',
+    near(num(posOf(code)['偏離']), num(posOf(code)['佔總資產%']) - 0.15, 1e-6), posOf(code)['偏離']);
+
+  check('未知代號被擋下並列出現有的',
+    /沒有 XXXX/.test(AssetTools.updateInstrument({ symbol: 'XXXX', name: 'x' })), '');
+  check('沒給任何要改的欄位時會問', /要改什麼/.test(AssetTools.updateInstrument({ symbol: code })), '');
+
+  // ── 自動建立的標的只生得出半個 ──
+  // recordTrade 買進新代號時會自動登記一列，但區域／類型一律留空，
+  // 而「配置」就是按這兩欄分組的 —— 沒有 updateInstrument 就永遠補不起來。
+  const NEW = '0000T';
+  AssetTools.recordTrade({ action: '買進', symbol: NEW, shares: 100, price: 10, account: '國泰證券戶' });
+  check('自動建立的標的區域與類型是空的',
+    !String(instOf(NEW)['區域']) && !String(instOf(NEW)['類型']), JSON.stringify(instOf(NEW)['區域']));
+  check('listInstruments 會點名缺欄位的標的',
+    new RegExp(NEW + '（缺 區域、類型）').test(AssetTools.listInstruments()), '');
+  AssetTools.updateInstrument({ symbol: NEW, name: '測試標的', region: '測試區', category: '測試類' });
+  check('補上之後「配置」多出那個分組',
+    AssetSchema.readObjects(target.getSheetByName('配置')).some(x => String(x['分組']) === '測試區'), '');
+  check('名稱補上之後交易列的名稱公式也跟著（VLOOKUP 回標的）',
+    AssetSchema.readTrades(target).some(x => String(x['代號']) === NEW && String(x['名稱']) === '測試標的'), '');
+
+  // ── 帳戶改名：主檔改了、交易沒改，餘額會靜靜掉回期初 ──
+  const OLD = '台新銀行', RENAMED = '台新銀行(數位)';
+  const bal0 = balanceOf(OLD);
+  const r1 = AssetTools.updateAccount({ name: OLD, newName: RENAMED });
+  check('改名後舊名字不在「現金」表了', balanceOf(OLD) === null, balanceOf(OLD));
+  check('改名後餘額原封不動（交易列一起改寫了）',
+    near(balanceOf(RENAMED), bal0, 0.01), balanceOf(RENAMED) + ' vs ' + bal0);
+  check('回覆說明改寫了幾列交易', /「交易」裡 \d+ 列/.test(r1), r1);
+  check('交易列真的指向新名字',
+    AssetSchema.readTrades(target).filter(x => String(x['帳戶']) === RENAMED).length >= 2, '');
+  check('改成已存在的名字會被擋下',
+    /已經是另一個帳戶的名字/.test(AssetTools.updateAccount({ name: RENAMED, newName: '國泰證券戶' })), '');
+
+  // ── 幣別：有交易之後不給改 ──
+  check('已經有交易的帳戶不給改幣別',
+    /不能改幣別/.test(AssetTools.updateAccount({ name: '國泰證券戶', currency: 'USD' })), '');
+
+  // ── 停用：帳戶不能刪，只能停用；而且錢要先清乾淨 ──
+  check('還有錢就不給停用（那筆錢會從總資產上消失）',
+    /不能直接停用/.test(AssetTools.updateAccount({ name: RENAMED, status: '停用' })), '');
+  AssetTools.setCashBalance({ account: RENAMED, balance: 0 });
+  const total0 = totalAssets();
+  const r2 = AssetTools.updateAccount({ name: RENAMED, status: '停用' });
+  check('餘額歸零後可以停用', /狀態：啟用 → 停用/.test(r2), r2);
+  check('停用後從「現金」表消失', balanceOf(RENAMED) === null, balanceOf(RENAMED));
+  check('停用沒有動到總資產（因為餘額本來就是 0）',
+    near(totalAssets(), total0, 1), totalAssets() + ' vs ' + total0);
+
+  // ── listAccounts：停用的帳戶從「現金」表消失，但主檔還在，得看得見 ──
+  const la = AssetTools.listAccounts();
+  check('listAccounts 連停用的帳戶都列出來',
+    new RegExp('\\[停用\\] ' + RENAMED.replace(/[()]/g, '\\$&')).test(la),
+    la.split('\n').filter(x => /停用/.test(x))[0]);
+  check('listAccounts 給的是原幣，並且講明了', /原幣/.test(la), la.split('\n').pop());
+  check('外幣戶同時給原幣與台幣值', /USD（台幣值/.test(la), '');
+
+  check('可以重新啟用', /停用 → 啟用/.test(AssetTools.updateAccount({ name: RENAMED, status: '啟用' })), '');
+  check('不存在的帳戶被擋下並列出現有的',
+    /沒有這個帳戶/.test(AssetTools.updateAccount({ name: '火星銀行', note: 'x' })), '');
+  check('不合法的狀態被擋下',
+    /狀態只能/.test(AssetTools.updateAccount({ name: RENAMED, status: '關閉' })), '');
+}
+
 // 選用：拿真實的券商匯出檔跑一次解析，只印不斷言（檔案不進版控）
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {

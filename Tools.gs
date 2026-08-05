@@ -155,6 +155,95 @@ var Tools = (() => {
       }
     },
     {
+      name: 'voidTrade',
+      description: '把一筆記錯的交易作廢。當主人說「剛剛那筆記錯了」「取消／刪掉那筆交易」「股數打錯」時使用。' +
+        '⚠️ 不要改用「反手記一筆相反的交易」來抵銷 —— 那在股票上會被算成真的處分，憑空生出一筆已實現損益。' +
+        '要作廢哪一列不確定的話，先用 listTrades 查列號，不要猜。' +
+        '原始數字會留在表上，只是不再計入任何統計。',
+      parameters: {
+        type: 'object',
+        properties: {
+          row:    { type: 'number', description: '「交易」表上的列號，即 listTrades 每筆前面的「第 N 列」' },
+          reason: { type: 'string', description: '作廢原因，會寫進備註留存，例如「股數打錯」「重複記錄」' }
+        },
+        required: ['row', 'reason']
+      }
+    },
+    {
+      name: 'listTrades',
+      description: '列出「交易」表的紀錄（買賣、股利、存提、校正），每一筆都帶列號。' +
+        '用於回答「我上個月買了什麼」「這檔我進出過幾次」，以及**作廢前先確認要作廢哪一列**。' +
+        '注意這查的是逐筆交易；要看每日資產走勢請用 getHistory。',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit:       { type: 'number',  description: '最多幾筆（預設 15，上限 50），依日期新到舊' },
+          symbol:      { type: 'string',  description: '只看某一檔的交易（可選）' },
+          account:     { type: 'string',  description: '只看某一個帳戶的交易（可選）' },
+          action:      { type: 'string',  description: '只看某一種動作：買進／賣出／股利／存入／提出…（可選）' },
+          includeVoid: { type: 'boolean', description: '連已作廢的一起列出（可選，預設不列）' }
+        },
+        required: []
+      }
+    },
+    {
+      name: 'listAccounts',
+      description: '列出所有帳戶（含已停用），帶類型、幣別、機構與**原幣餘額**。' +
+        '用於回答「我有哪些帳戶」「那個美金戶現在有多少美金」，以及記交易或校正餘額前確認帳戶名稱。' +
+        '⚠️ getDashboard 的現金只有換算後的台幣值；要原幣就用這個。',
+      parameters: { type: 'object', properties: {}, required: [] }
+    },
+    {
+      name: 'listInstruments',
+      description: '列出「標的」主檔：代號、名稱、市場、區域、類型、目標配置%、目前股數。' +
+        '和 getHoldings 不同 —— 這裡連已出清、以及登記了還沒買的標的都看得到，' +
+        '也會點名哪幾檔的區域／類型還沒填（沒填就不會進「配置」的分組統計）。',
+      parameters: { type: 'object', properties: {}, required: [] }
+    },
+    {
+      name: 'updateInstrument',
+      description: '修改「標的」主檔的欄位：名稱、市場、幣別、報價來源、區域、類型、目標配置%、狀態、備註。' +
+        '當主人說「00878 的類型是高股息」「把 0056 的目標配置設成 15%」時使用。' +
+        '⚠️ 代號不能改（它是各表共用的比對鍵）。' +
+        '⚠️ 目標配置% 一律填 0 到 1 的比例：15% 要填 0.15，填 15 會被擋下來。',
+      parameters: {
+        type: 'object',
+        properties: {
+          symbol:      { type: 'string', description: '要修改的標的代號（必填）' },
+          name:        { type: 'string', description: '名稱（可選）' },
+          market:      { type: 'string', description: '市場，例如 TPE / NASDAQ（可選）。只有 TPE 的市價有 TWSE 備援' },
+          currency:    { type: 'string', description: '三碼幣別（可選）' },
+          quoteSource: { type: 'string', description: '報價來源，例如 GOOGLEFINANCE（可選）' },
+          region:      { type: 'string', description: '區域，配置分組用，例如 台股／美股／全球（可選）' },
+          category:    { type: 'string', description: '類型，配置分組用，例如 高息／市值型／債券（可選）' },
+          target:      { type: 'number', description: '目標配置%，⚠️ 0..1 的比例，15% 填 0.15（可選）' },
+          status:      { type: 'string', description: '狀態，例如 持有中／已出清／觀察中（可選）' },
+          note:        { type: 'string', description: '備註（可選）' }
+        },
+        required: ['symbol']
+      }
+    },
+    {
+      name: 'updateAccount',
+      description: '修改帳戶主檔：改名、改類型／機構／幣別、停用或重新啟用。' +
+        '當主人說「那個帳戶改叫 XXX」「郵局那個戶頭我關了」時使用。' +
+        '⚠️ 這不是改餘額 —— 餘額是交易推導出來的，要改請用 setCashBalance 或 recordTrade。' +
+        '⚠️ 帳戶不能刪除，只能停用；而且停用前餘額必須是 0，否則那筆錢會從總資產上消失。',
+      parameters: {
+        type: 'object',
+        properties: {
+          name:        { type: 'string', description: '現在的帳戶名稱（必填，用來定位）' },
+          newName:     { type: 'string', description: '改成這個名字（可選）。「交易」裡的每一列會一起改寫' },
+          type:        { type: 'string', description: '帳戶類型：證券 / 現金 / 外幣（可選）' },
+          currency:    { type: 'string', description: '三碼幣別（可選）。已經有交易的帳戶不給改，會被擋下' },
+          institution: { type: 'string', description: '機構名稱（可選）' },
+          status:      { type: 'string', description: '啟用 / 停用（可選）' },
+          note:        { type: 'string', description: '備註（可選）' }
+        },
+        required: ['name']
+      }
+    },
+    {
       name: 'getPrice',
       description: '查詢台灣上市股票或 ETF 的即時（或最新收盤）股價，包含漲跌幅、開高低。用於查詢目前未持有但考慮買入的標的，或快速確認某檔股票當前價格。',
       parameters: {
@@ -255,6 +344,29 @@ var Tools = (() => {
             return '缺少必要參數：account 與 balance 皆為必填。';
           }
           return AssetTools.setCashBalance(args);
+
+        case 'voidTrade':
+          if (args.row === undefined || args.row === null) {
+            return '缺少必要參數：row（「交易」表上的列號，用 listTrades 查）。';
+          }
+          return AssetTools.voidTrade(args);
+
+        case 'listTrades':
+          return AssetTools.listTrades(args);
+
+        case 'listAccounts':
+          return AssetTools.listAccounts();
+
+        case 'listInstruments':
+          return AssetTools.listInstruments(args);
+
+        case 'updateInstrument':
+          if (!args.symbol) return '缺少必要參數：symbol。';
+          return AssetTools.updateInstrument(args);
+
+        case 'updateAccount':
+          if (!args.name) return '缺少必要參數：name。';
+          return AssetTools.updateAccount(args);
 
         case 'getPrice':
           if (!args.symbols) return '缺少必要參數：symbols。';

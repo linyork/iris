@@ -243,10 +243,9 @@ var Snapshot = (() => {
    *   本月、今年、去年同期、最近 3 筆
    */
   snap._dividends = (ss) => {
-    var sheet = ss.getSheetByName('交易');
-    if (!sheet) return null;
+    if (!ss.getSheetByName('交易')) return null;
 
-    var data = AssetSchema.readObjects(sheet)
+    var data = AssetSchema.readTrades(ss)
       .filter(r => _str(r['動作']) === '股利')
       .map(r => ({
         date: r['日期'] instanceof Date ? r['日期'] : new Date(_str(r['日期'])),
@@ -348,10 +347,9 @@ var Snapshot = (() => {
     var empty = { byYear: [], currentYear: new Date().getFullYear(), byMonth: [] };
     try {
       ss = ss || snap._open();
-      var sheet = ss.getSheetByName('交易');
-      if (!sheet) return empty;
+      if (!ss.getSheetByName('交易')) return empty;
 
-      var rows = AssetSchema.readObjects(sheet)
+      var rows = AssetSchema.readTrades(ss)
         .filter(r => String(r['動作'] || '').trim() === '股利')
         .map(r => ({
           date:   r['日期'] instanceof Date ? r['日期'] : new Date(String(r['日期'])),

@@ -246,7 +246,7 @@ var GoogleSheet = (() => {
   gs.getDividendHistory = (year) => {
     try {
       var ss = Snapshot._open();
-      var rows = AssetSchema.readObjects(ss.getSheetByName('交易'))
+      var rows = AssetSchema.readTrades(ss)
         .filter(r => String(r['動作'] || '').trim() === '股利')
         .map(r => ({
           date: r['日期'] instanceof Date ? r['日期'] : new Date(String(r['日期'])),

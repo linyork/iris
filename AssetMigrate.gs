@@ -175,7 +175,7 @@ var AssetMigrate = (() => {
     // 期初列同時是成本基礎的起點與 XIRR 的起算日。重跑遷移時若把它改成「今天」，
     // 它就可能排到你已經記錄的真實交易**之後** —— replay 會判定那些賣出
     // 「當下無持股」而整筆跳過。所以已經有期初列就沿用原本的日期。
-    var existingTrades = AssetSchema.readObjects(ss.getSheetByName('交易'));
+    var existingTrades = AssetSchema.readTrades(ss);
     var epochStr = _existingEpoch(existingTrades, tz) || todayStr;
 
     // 已經有非遷移的真實交易、而期初日又比它們晚 —— 這種狀態沒有正確解，擋下來

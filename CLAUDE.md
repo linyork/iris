@@ -76,7 +76,12 @@ renaming or relocating them fails silently:
 1. `Main.gs` — `doPost()` receives the LINE **or** Telegram webhook, normalizes it into a single LINE-shaped event object, deduplicates via `CacheService` (6h TTL), silently drops non-master events, calls `ChatBot.reply()`
 2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 3 turns). Injects short-term memory + relevant knowledge into system context before each call. Caches tool results within a single turn to prevent duplicate calls.
 3. `AIServiceFactory.gs` — Routes to `GeminiService` or `NvidiaService` based on `env!B3`. NVIDIA path goes through `AIAdapter` (Gemini ↔ OpenAI format conversion) so the rest of the codebase always speaks Gemini format.
-4. `Tools.gs` — Defines and executes **15** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. Asset reads (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, reading the 資產管理 sheet — writes (`recordTrade`, `recordDividend`, `setCashBalance` — all three land in the 交易 tab via `AssetTools.gs`, since a dividend and a balance correction are each just a row with a different 動作; plus `addAccount`, the only writer of the 帳戶 master), memory (`rememberShortTerm`, `saveKnowledge`, `searchKnowledge`, `listMemories`, `deleteMemory`), external (`searchWeb`).
+4. `Tools.gs` — Defines and executes **21** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. Grouped by which layer they touch:
+   - **Computed-layer reads** (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, answering "what do I have now".
+   - **Input-layer reads** (`listTrades`, `listAccounts`, `listInstruments`) — the 交易/帳戶/標的 tabs themselves, answering "how did this get recorded, which row do I change". They live in `AssetTools.gs`, not `Snapshot`, because each one is the precondition for a write: `listTrades` hands out the row number `voidTrade` needs, `listAccounts` is the only surface exposing **原幣** balances (`Snapshot._cash` gives TWD-converted only), `listInstruments` names the instruments whose 區域/類型 are still blank.
+   - **Ledger writes** (`recordTrade`, `recordDividend`, `setCashBalance`, `voidTrade`) — all four land in the 交易 tab via `AssetTools.gs`; a dividend, a balance correction and a void are each just one row with a different 動作 or 狀態.
+   - **Master writes** (`addAccount`, `updateAccount`, `updateInstrument`) — the only code that writes 帳戶 and 標的.
+   - **Memory** (`rememberShortTerm`, `saveKnowledge`, `searchKnowledge`, `listMemories`, `deleteMemory`), **external** (`searchWeb`).
 5. `GoogleSheet.gs` — All data access. Single spreadsheet instance cached per execution.
 
 ### AI Provider Switching
@@ -274,8 +279,8 @@ relying on it.
 
 ### 目標配置%
 
-只有一個地方填：**`標的` 的 `目標配置%`**，手動維護，沒有任何程式碼寫值進去
-（遷移與自動登記新標的都留空）。`持倉` 同名那一欄是
+只有一個地方填：**`標的` 的 `目標配置%`**。寫得進去的只有兩條路 —— 人手改，或
+`AssetTools.updateInstrument()`；遷移與自動登記新標的一律留空。`持倉` 同名那一欄是
 `=IFERROR(VLOOKUP($A{r},標的!$A:$H,8,FALSE),0)` —— 指回去，不是重算當下抄過來的
 死值，所以改完目標不必等下一次 `Position.rebuild()`，`偏離` 當場就跟著動。
 
@@ -287,6 +292,8 @@ relying on it.
 
 ⚠️ **填比例不是百分比。** `佔總資產%`、`配置` 的 `實際%` 都是 0..1 的比例，
 `偏離` = `佔總資產%` − `目標配置%`。填 12.5 而不是 0.125，偏離會差一百倍。
+`updateInstrument` 因此**擋下所有 > 1 的值而不是自己 ÷100** —— 12.5 到底是 12.5%
+還是有人手滑多打一位，程式分不出來，猜錯不會報錯。
 
 ⚠️ 留空讀到 0，而 `配置` 用 `target > 0` 判斷「有沒有設目標」—— 所以某個
 區域／類型分組全部留空時，`目標%` / `偏離%` / `偏離金額` 三欄寫成空字串，
@@ -311,11 +318,85 @@ LLM do the arithmetic and every foreign-currency account is off by one exchange 
 silently. That is also why `recordTrade` rejects `調整` outright, the same way it rejects
 `期初`.
 
-The accounts themselves come from `AssetTools.addAccount()` — the only code that writes the
-`帳戶` master. It exists because of what the gap did rather than what it blocked: with no
-tool for "I opened a new account", the model answered **"已建立完成"** and called nothing
-(2026-08-05). A missing write surface doesn't make it refuse, it makes it lie. Hence the
-matching rule in `Prompt.gs`: no "已記錄 / 已建立 / 已完成" before an actual tool result.
+The accounts themselves come from `AssetTools.addAccount()` and `AssetTools.updateAccount()` —
+the only code that writes the `帳戶` master. `addAccount` exists because of what the gap did
+rather than what it blocked: with no tool for "I opened a new account", the model answered
+**"已建立完成"** and called nothing (2026-08-05). A missing write surface doesn't make it
+refuse, it makes it lie. Hence the matching rule in `Prompt.gs`: no "已記錄 / 已建立 / 已完成"
+before an actual tool result.
+
+### 記錯了怎麼撤：作廢，不是刪、也不是反手記一筆
+
+`交易` is append-only, but append-only needs a way to **undo**, not a rule that nothing may
+move. `AssetTools.voidTrade(row, reason)` writes a tombstone: the row and its original numbers
+stay, `狀態` becomes `作廢`, and every consumer skips it.
+
+> `狀態` is the 17th column of `交易` and was added after the sheet already existed.
+> **Run `setupAssetSheet()` once after deploying** — `build()` appends the header (tail-only,
+> so no existing column moves) and `applyTradeFormulas()` refills every row's 現金流 with the
+> guarded version. `voidTrade` refuses to run while the column is missing rather than writing
+> a mark nothing reads.
+
+⚠️ **Do not "just record the opposite trade" instead.** On the cash side that works (現金流 is
+one long SUMIF, a negative row cancels out). **On the stock side it is wrong**: a mirror 賣出 is
+replayed as a real disposal and books a realised P&L that never happened. The mistake doesn't
+disappear, it gains a fake sibling.
+
+Three things that must stay true:
+
+- **The 現金流 cell has to die with the row.** `現金!交易淨流` is
+  `SUMIF(交易!$L:$L, 帳戶, 交易!$J:$J)` — a whole-column sum that knows nothing about what JS
+  filtered out. So the guard lives **in the formula** (`IF(OR($B="",$Q="作廢"),"",…)`), and
+  `voidTrade` rewrites that row's formulas via `AssetSchema.writeRowFormulas` — rows written
+  before the 狀態 column existed still carry the unguarded version, and skipping that rewrite
+  gives you "row ignored, money still there".
+- **`期初` cannot be voided.** It is the migration's cost basis and the XIRR start date; remove
+  it and every later 賣出 replays as "當下無持股" and is skipped wholesale.
+- **Import dedup still counts it.** Voided rows keep their content key (`imp:` / `stm:`) in the
+  dedup set so re-sending the same broker file does not resurrect them, but they no longer count
+  toward the *quantity already recorded*. Voiding is deliberate; silent resurrection would not be.
+
+⚠️ **Voiding one leg of a transfer is the one case nothing can catch for you.** 轉出/轉入 are two
+rows with no field binding them (deliberately — see `TRADE_FORMULAS`), and unlike a dangling 賣出,
+a transfer never touches 持倉, so `Position.replay` has nothing to warn about. Total assets simply
+moves. `voidTrade` therefore prints an explicit warning naming the amount whenever the voided row
+is 轉出/轉入; the pairing itself is still the human's job.
+
+A dangling **賣出** (its 買進 voided) *is* caught: `replay` skips the sale as 「當下無持股」, pushes a
+warning that surfaces in `voidTrade`'s reply and as a `⚠️ 待修正` row in 指標 — but the sale's 現金流
+still lands in the account. The money is wrong until the sale is voided too; the difference is that
+you are told.
+
+**Every reader of 交易 must go through `AssetSchema.readTrades(ss)`**, which filters voids by
+default and attaches `__row` (the real sheet row — `readObjects` skips blanks, so index+2 is not
+a row number). Miss one reader and that void comes back to life in exactly one number:
+`Position` (持倉/現金/XIRR), `Snapshot._dividends` / `dividendSeries`,
+`GoogleSheet.getDividendHistory`, both `AssetImport` dedup loops (those pass
+`{includeVoid: true}` on purpose), `AssetMigrate`.
+
+### 主檔改得動，帳本改不動
+
+`標的` / `帳戶` are **reference data referenced by string from immutable data**, so the rule
+inverts: the ledger forbids updates and offers voiding; the masters have no "record another one"
+escape, which makes **update the only correction path** — and delete the dangerous one.
+
+- `交易!名稱` and `持倉!目標配置%` are VLOOKUPs into the masters. Adding a corrected row does
+  not retire the wrong one.
+- **Renaming an account is a two-table transaction.** `現金!交易淨流` matches by account *name*;
+  change the master cell alone and that account's balance silently falls back to 期初 with no
+  error. `updateAccount({newName})` rewrites every matching row in `交易` (voided ones included —
+  they are historical records). `每日快照` keeps the old name: that is what was true that day.
+- **No delete for accounts, only `狀態=停用` — and only at zero balance.** `Position` filters
+  停用 accounts out of `現金` entirely, so disabling a funded account makes that money vanish
+  from 總資產 without a word.
+- **Currency cannot change once the account has trades.** Those rows' amounts were recorded in
+  the old currency; the balance would become two currencies added together and multiplied by the
+  new FX rate.
+- **代號 cannot be changed at all** — it is the join key shared by 交易 / 持倉 / 每日快照.
+
+⚠️ `recordTrade` 的自動登記只生得出**半個標的**：買進沒見過的代號時會補一列 `標的`，但
+`區域` / `類型` / `目標配置%` 全留空，而 `配置` 正是按 `區域` 與 `類型` 分組的。也就是說
+那個 C **保證**後面需要一次 `updateInstrument`；`listInstruments` 會直接點名缺哪一欄。
 
 ### 面板 vs 指標
 
