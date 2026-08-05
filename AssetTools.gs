@@ -233,6 +233,122 @@ var AssetTools = (() => {
     }
   };
 
+  /** 帳戶類型。只有「證券」有語意：買賣沒指定帳戶時會自動採用唯一的證券戶 */
+  var ACCOUNT_TYPES = ['證券', '現金', '外幣'];
+
+  /**
+   * 開一個新帳戶（往「帳戶」主檔加一列）。
+   *
+   * 「帳戶」跟「標的」一樣是輸入層，`現金` 是它加上交易推導出來的結果。這裡是
+   * 全部程式碼裡**唯一**會寫它的地方 —— 在此之前它只能手改，於是模型被要求
+   * 「開一個新戶頭」時無路可走，就自己編了一句「已建立完成」出來（2026-08-05）。
+   * 缺工具的代價不是它拒絕，是它說謊。
+   *
+   * ⚠️ 期初餘額的語意是「期初日期那天的餘額」，建完就不該再動：之後的水位一律
+   *    由交易推導，要修正請用 setCashBalance。
+   *
+   * @param {object} a
+   * @param {string} a.name          帳戶名稱，之後記交易、查餘額都用這個名字
+   * @param {string} [a.type]        證券 / 現金 / 外幣，沒給就照名稱與幣別推
+   * @param {string} [a.currency]    三碼幣別，預設 TWD
+   * @param {string} [a.institution] 機構名稱
+   * @param {number} [a.balance]     期初餘額，預設 0
+   * @param {string} [a.date]        期初日期，預設今天
+   * @param {string} [a.note]        備註
+   * @returns {string} 給 LLM 轉述用的結果文字
+   */
+  t.addAccount = (a) => {
+    a = a || {};
+    try {
+      var ss = AssetSchema.open();
+      var tz = ss.getSpreadsheetTimeZone();
+      var sheet = ss.getSheetByName('帳戶');
+      if (!sheet) return '找不到「帳戶」分頁，請先執行 setupAssetSheet()。';
+
+      var name = _str(a.name);
+      if (!name) {
+        return '新帳戶要叫什麼名字？之後記交易、查餘額都是用這個名字比對，' +
+               '取跟你平常講法一致的稱呼最好認。';
+      }
+
+      // 重複要連停用的一起比：只看啟用中的會長出第二列同名帳戶，而現金表是
+      // SUMIF(帳戶) 出來的 —— 兩列同名會各自把同一筆錢算一次
+      var exist = AssetSchema.readObjects(sheet).filter(x => _str(x['帳戶']) === name)[0];
+      if (exist) {
+        return '「' + name + '」已經在「帳戶」表裡了（狀態：' + (_str(exist['狀態']) || '啟用') +
+               '），不用再建一次。要改它的水位請用 setCashBalance。';
+      }
+
+      var currency = _str(a.currency).toUpperCase() || 'TWD';
+      if (!/^[A-Z]{3}$/.test(currency)) {
+        return '看不懂的幣別：「' + _str(a.currency) + '」。請用三碼代碼，例如 TWD / USD / JPY。';
+      }
+
+      var type = _str(a.type);
+      if (type && ACCOUNT_TYPES.indexOf(type) < 0) {
+        return '帳戶類型只能是：' + ACCOUNT_TYPES.join('、') + '。';
+      }
+      // 沒講就推，規則與 AssetMigrate 當初分類舊帳戶的一致；推錯只影響
+      // 「買賣沒指定帳戶時自動採用唯一證券戶」這件事，而且回覆會講明是推的
+      var inferred = !type;
+      if (!type) type = /證券|券商/.test(name) ? '證券' : (currency === 'TWD' ? '現金' : '外幣');
+
+      var dateStr = _normalizeDate(a.date, tz);
+      if (!dateStr) return '看不懂的日期：' + _str(a.date) + '（請用 yyyy-MM-dd）';
+
+      var balance = _num(a.balance);
+
+      // 欄位靠標題文字對位，不寫死欄號 —— 「帳戶」是人會去動的表
+      var map = AssetSchema.headerMap(sheet);
+      var row = new Array(map.__header.filter(h => h !== '').length).fill('');
+      var put = (col, v) => { if (map[col] !== undefined && map[col] >= 0) row[map[col]] = v; };
+      put('帳戶', name);
+      put('類型', type);
+      put('幣別', currency);
+      put('機構', _str(a.institution));
+      put('期初餘額', balance);
+      put('期初日期', dateStr);
+      put('狀態', '啟用');
+      put('備註', _str(a.note) || '由 Iris 於 ' + dateStr + ' 建立');
+      sheet.getRange(sheet.getLastRow() + 1, 1, 1, row.length).setValues([row]);
+
+      var rebuilt = Position.rebuild();
+
+      var lines = [];
+      lines.push('已建立帳戶：' + name + '（' + type + '／' + currency + '）' +
+        '，期初餘額 ' + _amt(balance) + '，期初日期 ' + dateStr);
+      if (inferred) {
+        lines.push('▸ 類型是照名稱與幣別推的，不對的話直接在「帳戶」分頁改');
+      }
+      if (rebuilt && rebuilt.ok) {
+        var cash = AssetSchema.readObjects(ss.getSheetByName('現金'))
+          .filter(x => _str(x['帳戶']) === name)[0];
+        if (cash) {
+          lines.push('▸ ' + name + ' 餘額 ' + _amt(cash['餘額']) + ' ' + _str(cash['幣別']) +
+            '，已計入總資產');
+        }
+        if (rebuilt.warnings && rebuilt.warnings.length) {
+          lines.push('⚠️ ' + rebuilt.warnings.join('；'));
+        }
+      } else {
+        lines.push('⚠️ 帳戶已建立，但重算失敗：' +
+          (rebuilt && rebuilt.reason ? rebuilt.reason : '未知原因') + '。數字暫時不準。');
+      }
+      lines.push('▸ 期初餘額指的是 ' + dateStr + ' 那天的餘額，之後的水位一律由交易推導 ——' +
+        '要修正請用 setCashBalance，不要回頭改期初');
+
+      Logger.info('AssetTools.addAccount', '建立帳戶', {
+        name: name, type: type, currency: currency,
+        balance: balance, date: dateStr, rebuilt: rebuilt && rebuilt.ok
+      });
+      return lines.join('\n');
+
+    } catch (ex) {
+      Logger.error('AssetTools.addAccount', '建立帳戶失敗', ex);
+      return '建立帳戶時發生錯誤：' + (ex && ex.message ? ex.message : String(ex));
+    }
+  };
+
   /**
    * 把某個現金帳戶的餘額校正成指定的數字。
    *

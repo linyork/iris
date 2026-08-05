@@ -1314,6 +1314,64 @@ console.log('\nT21  講絕對值也能改餘額');
   check('校正不會碰到持倉', sharesOf(H0.code) === heldShares, sharesOf(H0.code) + ' vs ' + heldShares);
 }
 
+// ─── T22  開新帳戶 ───────────────────────────────────────────────
+// 「帳戶」是輸入層，在 addAccount 之前只能手改 —— 模型碰到「我開了一個新戶頭」
+// 無路可走，於是編了一句「已建立完成」。缺工具的代價是它說謊，不是它拒絕。
+console.log('\nT22  開新帳戶');
+{
+  const acctSheet = target.getSheetByName('帳戶');
+  const cashSheet = target.getSheetByName('現金');
+  const countAccounts = () => AssetSchema.readObjects(acctSheet).length;
+  const cashRowOf = (name) =>
+    AssetSchema.readObjects(cashSheet).find(x => String(x['帳戶']) === name);
+
+  const n0 = countAccounts();
+  check('沒給名字時會問，不會建一列空的',
+    /要叫什麼名字/.test(AssetTools.addAccount({})), '');
+  check('重複的帳戶名被擋下',
+    /已經在/.test(AssetTools.addAccount({ name: '國泰證券戶' })), '');
+  check('看不懂的幣別被擋下',
+    /幣別/.test(AssetTools.addAccount({ name: '測試戶A', currency: '美金' })), '');
+  check('不合法的類型被擋下',
+    /類型只能/.test(AssetTools.addAccount({ name: '測試戶A', type: '定存' })), '');
+  check('被擋下的都沒有寫進帳戶表', countAccounts() === n0, countAccounts() + ' vs ' + n0);
+
+  // 台幣戶
+  const r1 = AssetTools.addAccount({ name: '台新銀行', balance: 2131, institution: '台新銀行' });
+  check('建立成功並回報類型與幣別', /已建立帳戶/.test(r1) && /現金／TWD/.test(r1), r1.split('\n')[0]);
+  check('帳戶表多一列', countAccounts() === n0 + 1, countAccounts() + ' vs ' + (n0 + 1));
+  const newAcct = AssetSchema.readObjects(acctSheet).find(x => x['帳戶'] === '台新銀行') || {};
+  check('狀態預設啟用', String(newAcct['狀態']) === '啟用', newAcct['狀態']);
+  check('期初日期有填', /^\d{4}-\d{2}-\d{2}$/.test(String(newAcct['期初日期'])), newAcct['期初日期']);
+  check('重算後「現金」跟著多一列', !!cashRowOf('台新銀行'), '');
+  check('新帳戶餘額 = 期初餘額', near(num(cashRowOf('台新銀行')['餘額']), 2131, 0.01),
+    cashRowOf('台新銀行')['餘額']);
+  check('回覆提醒期初餘額之後不要再改', /setCashBalance/.test(r1), r1);
+
+  // 建完就能直接記帳與校正
+  AssetTools.recordTrade({ action: '存入', amount: 869, account: '台新銀行' });
+  check('新帳戶馬上可以記交易', near(num(cashRowOf('台新銀行')['餘額']), 3000, 0.01),
+    cashRowOf('台新銀行')['餘額']);
+  AssetTools.setCashBalance({ account: '台新銀行', balance: 2500 });
+  check('新帳戶馬上可以校正餘額', near(num(cashRowOf('台新銀行')['餘額']), 2500, 0.01),
+    cashRowOf('台新銀行')['餘額']);
+
+  // 外幣戶：幣別轉大寫、類型跟著推成「外幣」、台幣值走匯率
+  const r2 = AssetTools.addAccount({ name: '測試外幣戶', currency: 'usd', balance: 100 });
+  check('幣別轉成大寫', /外幣／USD/.test(r2), r2.split('\n')[0]);
+  check('外幣戶的台幣值 = 餘額 × 匯率',
+    near(num(cashRowOf('測試外幣戶')['台幣值']), 100 * FX.USDTWD, 1),
+    cashRowOf('測試外幣戶')['台幣值']);
+  check('推出來的類型有講明是推的', /照名稱與幣別推/.test(r2), r2);
+
+  // 名稱含「證券」→ 類型推成證券（買賣自動選戶就是看這個）
+  const r3 = AssetTools.addAccount({ name: '測試證券戶' });
+  check('名稱含證券時類型推成證券', /證券／TWD/.test(r3), r3.split('\n')[0]);
+  check('多了第二個證券戶之後，買賣就必須講清楚記在哪',
+    /要記在哪個帳戶/.test(AssetTools.recordTrade({
+      action: '買進', symbol: H0.code, shares: 1000, price: 50 })), '');
+}
+
 // 選用：拿真實的券商匯出檔跑一次解析，只印不斷言（檔案不進版控）
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {

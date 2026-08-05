@@ -9,7 +9,7 @@
 > | 目前手刻 | 對應的 LangChain / LangGraph 概念 |
 > |---|---|
 > | `ChatBot.gs` 的 ReAct 迴圈 | `LangGraph` StateGraph + ToolNode |
-> | `Tools.gs` 的 14 個工具 | `@tool` decorator / `StructuredTool` |
+> | `Tools.gs` 的 15 個工具 | `@tool` decorator / `StructuredTool` |
 > | `AIServiceFactory` + `AIAdapter` | `BaseChatModel` 抽象 + provider 子類 |
 > | `GoogleSheet` 的 chat 讀寫 + STM 注入 | `Memory` / `Checkpointer` |
 > | `searchKnowledge` 關鍵字查 Sheet | `VectorStore` retriever |
@@ -95,11 +95,12 @@ Telegram Bot API ───┤        │
                  │
                  ▼
 ┌──────────────────────────────────────────────┐
-│  Tools.gs · 14 個工具                         │
+│  Tools.gs · 15 個工具                         │
 │   ├─ 資產查詢：getHoldings / getDashboard /    │
 │   │           getHistory / getPrice           │
 │   ├─ 股利：getDividendHistory / recordDividend │
-│   ├─ 記帳：recordTrade / setCashBalance        │
+│   ├─ 記帳：addAccount / recordTrade /          │
+│   │       setCashBalance                      │
 │   ├─ 記憶：rememberShortTerm / saveKnowledge / │
 │   │       searchKnowledge / listMemories /    │
 │   │       deleteMemory                        │
@@ -223,11 +224,18 @@ Telegram Bot API ───┤        │
 - **`balance` 一律填該帳戶的原幣** —— 國泰外幣戶(美) 填美金，不要換算台幣
 - 餘額本來就對得上時不寫任何一列，直接回「不用校正」
 
+帳戶本身由 `addAccount()` 建立（那是唯一會寫「帳戶」主檔的地方）。`期初餘額` 的語意是
+**期初日期那天的餘額**，建完就不該再動 —— 之後的水位一律由交易推導。
+
+> 這個工具是補回來的：在它之前「帳戶」只能手改，模型被要求開新戶頭時無路可走，
+> 於是回了一句「已建立完成」而實際上什麼都沒發生（2026-08-05）。所以提示詞裡另外
+> 加了一條硬規則：**寫入類的事沒收到工具回傳結果之前，不准說已完成。**
+
 ---
 
 ## AI 工具集
 
-`Tools.gs` 共定義 14 個工具，呼叫者為 LLM。
+`Tools.gs` 共定義 15 個工具，呼叫者為 LLM。
 工具以 `definitions` 陣列（給模型看的 schema）加上 `execute()` 內的 `switch` 分派實作，
 **新增工具時兩處都要改**，只加 definitions 會讓模型叫得出來卻一律收到「未知的工具」。
 
@@ -241,6 +249,7 @@ Telegram Bot API ───┤        │
 | `recordDividend(symbol, amount, date)` | 登記股利入帳（內部走 `recordTrade`，寫進「交易」表後自動重算） |
 | `recordTrade(action, symbol, shares, price, fee, tax, amount, account, date, note)` | **寫進新的「資產管理」表**：買進／賣出／股利／存入／提出／費用／利息／轉出／轉入，記完自動 `Position.rebuild()` 重算持倉與餘額 |
 | `setCashBalance(account, balance, note, date)` | 把某個現金帳戶**校正成指定的餘額**（主人講絕對值時用）。差額由程式重讀「現金」表當場算，寫成一列「調整」交易 —— 見[現金餘額怎麼改](#現金餘額怎麼改) |
+| `addAccount(name, type, currency, institution, balance, date, note)` | 開新帳戶，往「帳戶」主檔加一列後重算。**唯一能新增帳戶的途徑**；同名（含停用）一律擋下 |
 | `rememberShortTerm(key, content, hours)` | 寫入短期記憶（預設 24h，最長 168h） |
 | `saveKnowledge(tags, content)` | 寫入長期知識（含結構化 tag） |
 | `searchKnowledge(query)` | 關鍵字搜尋長期知識 |

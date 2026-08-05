@@ -76,7 +76,7 @@ renaming or relocating them fails silently:
 1. `Main.gs` — `doPost()` receives the LINE **or** Telegram webhook, normalizes it into a single LINE-shaped event object, deduplicates via `CacheService` (6h TTL), silently drops non-master events, calls `ChatBot.reply()`
 2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 3 turns). Injects short-term memory + relevant knowledge into system context before each call. Caches tool results within a single turn to prevent duplicate calls.
 3. `AIServiceFactory.gs` — Routes to `GeminiService` or `NvidiaService` based on `env!B3`. NVIDIA path goes through `AIAdapter` (Gemini ↔ OpenAI format conversion) so the rest of the codebase always speaks Gemini format.
-4. `Tools.gs` — Defines and executes **14** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. Asset reads (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, reading the 資產管理 sheet — writes (`recordTrade`, `recordDividend`, `setCashBalance` — all three land in the 交易 tab via `AssetTools.gs`, since a dividend and a balance correction are each just a row with a different 動作), memory (`rememberShortTerm`, `saveKnowledge`, `searchKnowledge`, `listMemories`, `deleteMemory`), external (`searchWeb`).
+4. `Tools.gs` — Defines and executes **15** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. Asset reads (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, reading the 資產管理 sheet — writes (`recordTrade`, `recordDividend`, `setCashBalance` — all three land in the 交易 tab via `AssetTools.gs`, since a dividend and a balance correction are each just a row with a different 動作; plus `addAccount`, the only writer of the 帳戶 master), memory (`rememberShortTerm`, `saveKnowledge`, `searchKnowledge`, `listMemories`, `deleteMemory`), external (`searchWeb`).
 5. `GoogleSheet.gs` — All data access. Single spreadsheet instance cached per execution.
 
 ### AI Provider Switching
@@ -310,6 +310,12 @@ That is why "the balance is now X" is not a write but a **translation**:
 LLM do the arithmetic and every foreign-currency account is off by one exchange rate,
 silently. That is also why `recordTrade` rejects `調整` outright, the same way it rejects
 `期初`.
+
+The accounts themselves come from `AssetTools.addAccount()` — the only code that writes the
+`帳戶` master. It exists because of what the gap did rather than what it blocked: with no
+tool for "I opened a new account", the model answered **"已建立完成"** and called nothing
+(2026-08-05). A missing write surface doesn't make it refuse, it makes it lie. Hence the
+matching rule in `Prompt.gs`: no "已記錄 / 已建立 / 已完成" before an actual tool result.
 
 ### 面板 vs 指標
 

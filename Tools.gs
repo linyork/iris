@@ -116,6 +116,27 @@ var Tools = (() => {
       }
     },
     {
+      name: 'addAccount',
+      description: '開一個新的帳戶（券商戶、銀行戶、外幣戶、郵局…），寫進「帳戶」主檔。' +
+        '當主人說「我有一個新帳戶」「我開了一個新戶頭」「新增一個帳戶叫 XXX」時使用。' +
+        '⚠️ 這是唯一能新增帳戶的方法 —— 沒有呼叫這個工具就等於沒有建立，' +
+        '在收到它的回傳結果之前絕對不能說已經建好了。' +
+        '幣別與類型沒講就問，不要自己猜外幣戶。',
+      parameters: {
+        type: 'object',
+        properties: {
+          name:        { type: 'string', description: '帳戶名稱，之後記交易、查餘額都用這個名字比對' },
+          type:        { type: 'string', description: '帳戶類型：證券 / 現金 / 外幣（可選，沒給就照名稱與幣別推）' },
+          currency:    { type: 'string', description: '三碼幣別，例如 TWD / USD / JPY（可選，預設 TWD）' },
+          institution: { type: 'string', description: '機構名稱，例如 國泰世華、台新銀行（可選）' },
+          balance:     { type: 'number', description: '期初餘額，即「期初日期」那天帳戶裡的錢（可選，預設 0）' },
+          date:        { type: 'string', description: '期初日期，格式 yyyy-MM-dd（可選，預設今天）' },
+          note:        { type: 'string', description: '備註（可選）' }
+        },
+        required: ['name']
+      }
+    },
+    {
       name: 'setCashBalance',
       description: '把某個現金帳戶的餘額直接校正成指定的數字。當主人講的是**絕對值**時使用：' +
         '「郵局現在是 12000」「國泰現金戶剩 8 萬」「餘額改成 X」。' +
@@ -223,6 +244,10 @@ var Tools = (() => {
         case 'recordTrade':
           if (!args.action) return '缺少必要參數：action。';
           return AssetTools.recordTrade(args);
+
+        case 'addAccount':
+          if (!args.name) return '缺少必要參數：name。';
+          return AssetTools.addAccount(args);
 
         case 'setCashBalance':
           // balance 可以是 0（把戶頭清空），所以只能擋 undefined/null
