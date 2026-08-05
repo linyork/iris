@@ -4,13 +4,18 @@
  * 接收 OpenAI 格式 messages，回傳 OpenAI 格式 response。
  * 格式轉換由 AIAdapter 負責，此層純 I/O。
  *
- * 思考模式依模型廠商分流：
+ * 思考模式依模型廠商分流。**NIM 沒有統一開關，每家形狀都不一樣**：
  *   deepseek-ai/deepseek-v4* → chat_template_kwargs.{thinking(bool)[, reasoning_effort]}（現役預設）
  *   z-ai/glm*                → chat_template_kwargs.{enable_thinking, clear_thinking}
+ *   openai/gpt-oss*          → **top-level** reasoning_effort（現役備援）
  *   minimaxai/*              → 無開關，恆為 reasoning 模式（該模型已退役，保留說明備查）
  *
  * ⚠️ DeepSeek V4 系列必須明確送出 chat_template_kwargs，否則 NIM 端會 hang（不是回錯，是不回）。
  *    因此該分支無論開或關思考都一定送出這個欄位，不可因 thinking=false 就省略。
+ *
+ * ⚠️ gpt-oss 的 reasoning_effort 只有放在 **top-level** 才生效。2026-08-05 實測，
+ *    放進 chat_template_kwargs、或改用 system 訊息 `Reasoning: low`，推理量都不降反升
+ *    （1036 → 1063 字元）；改成 top-level 後才真的降下來（→ 68 字元）。
  */
 var NvidiaService = (() => {
     var service = {};
@@ -55,6 +60,11 @@ var NvidiaService = (() => {
                     enable_thinking: glmThinking,
                     clear_thinking:  !glmThinking
                 };
+            } else if (modelName.indexOf('openai/gpt-oss') === 0) {
+                // gpt-oss 沒有 on/off，只有強度；沿用各 tier 的 enableThinking 語意
+                // （FAST 求快 → low，SMART 求質 → high），保持與主模型一致的分流。
+                // 位置必須是 top-level，見檔頭警告。
+                payload.reasoning_effort = options.enableThinking === true ? 'high' : 'low';
             }
 
             // Function Calling（OpenAI Tools 格式）

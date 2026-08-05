@@ -92,7 +92,19 @@ Switch provider by setting `env!B3` in the Google Sheet to `GEMINI` or `NVIDIA`.
 
 Control goes out as `chat_template_kwargs: {thinking, reasoning_effort}` from the `deepseek-ai/deepseek-v4` branch in `NvidiaService.gs`. ⚠️ **That field must always be sent for V4 models — omitting it makes NIM hang rather than error.** Reasoning text comes back in `reasoning_content` (separated by `AIAdapter.fromOpenAIResponse`) and consumes the `max_tokens` budget, which is why `SMART` gets a much larger budget than `FAST`.
 
-**Resilience.** deepseek-v4-flash is popular on NIM and overloads often (503 `ResourceExhausted`, 504, and dropped connections). Two layers cover this: `NvidiaService.callAPI` retries 3× with 2s→4s backoff, counting **both** bad status codes and thrown connection exceptions as retryable; if it still returns null, `AIServiceFactory` falls back once to `Config.NVIDIA_FALLBACK_MODEL` (`mistralai/ministral-14b-instruct-2512`, non-thinking, native function calling). When changing the primary model, verify the fallback is still alive too.
+⚠️ **Every model family shapes that switch differently — NIM has no common flag.** `NvidiaService.gs`
+branches per family: deepseek uses `chat_template_kwargs.thinking`, glm uses
+`chat_template_kwargs.{enable_thinking, clear_thinking}`, gpt-oss uses a **top-level**
+`reasoning_effort` (nothing else works for it). Adding a model means adding a branch; miss it and
+thinking silently stays on, which mostly shows up as latency rather than an error.
+
+**Resilience.** deepseek-v4-flash is popular on NIM and overloads often (503 `ResourceExhausted`, 504, 529, and dropped connections). Two layers cover this: `NvidiaService.callAPI` retries 3× with 2s→4s backoff, counting **both** bad status codes and thrown connection exceptions as retryable; if it still returns null, `AIServiceFactory` falls back once to `Config.NVIDIA_FALLBACK_MODEL` (`openai/gpt-oss-20b`, 21B MoE, native function calling, thinking dialled down to `low`).
+
+⚠️ **The fallback never announces its own death.** The previous one was delisted by NVIDIA on
+2026-07-27 and that only surfaced on 08-05, when the primary happened to overload and the report
+failed with both layers dead. Verify the fallback when changing the primary — and whenever a report
+fails. The `find-nim-model` skill drives the search-and-test loop; `testNimCandidateModels()` /
+`testNimModelCapability()` in `DevTools.gs` are its entry points.
 
 ### Slash Commands
 

@@ -86,12 +86,21 @@ var Config = (() => {
     NVIDIA_API_BASE:     'https://integrate.api.nvidia.com/v1',
     NVIDIA_DEFAULT_MODEL: 'deepseek-ai/deepseek-v4-flash',
 
-    // 可用性保底（N-1）：主模型呼叫失敗（下架 404/410、過載 503/504、重試耗盡回 null）時，
+    // 可用性保底（N-1）：主模型呼叫失敗（下架 404/410、過載 503/504/529、重試耗盡回 null）時，
     // AIServiceFactory 會自動改用這個備援模型重試一次。deepseek-v4-flash 在 NIM 上很熱門、
-    // 過載機率高，這道保底就是為它準備的。ministral-14b 為非思考的 dense 模型、原生
-    // Function Calling、含繁中，christina 同樣用它當備援。換主模型時記得確認備援還活著。
+    // 過載機率高，這道保底就是為它準備的。
+    //
+    // gpt-oss-20b：21B MoE（3.6B active）、原生 Function Calling、思考可關。
+    // 2026-08-05 從 10 顆候選實測選出（見 find-nim-model skill），四關全過：
+    // 打得到、工具參數型別正確、思考關得掉、給定數字能忠實轉述，單輪約 3 秒。
+    // ⚠️ 它的關思考只吃 **top-level `reasoning_effort`**，與 deepseek / glm 都不同 ——
+    //    NvidiaService 有專屬分支，換掉這顆時記得一併處理那裡。
+    //
+    // ⚠️ 前一顆備援 ministral-14b 於 2026-07-27 被 NVIDIA 下架，直到 8/5 主模型過載時
+    //    才被發現 —— 那段期間保底等於不存在。備援不會自己報平安，換主模型時、
+    //    或發現早報失敗時，都要順手確認備援還活著。
     AI_FALLBACK_ENABLED:   true,
-    NVIDIA_FALLBACK_MODEL: 'mistralai/ministral-14b-instruct-2512',
+    NVIDIA_FALLBACK_MODEL: 'openai/gpt-oss-20b',
 
     // 全檔次使用 DeepSeek-V4-Flash（前代 minimaxai/minimax-m2.7 將於 NIM 下架）
     // 規格：284B MoE（13B active）、1M context、原生 Function Calling

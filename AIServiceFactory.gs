@@ -67,7 +67,8 @@ var AIServiceFactory = (() => {
                 // 走到 null 多半代表主模型持續過載或已下架（deepseek-v4-flash 在 NIM 上很熱門）。
                 // 此時改用備援模型重試一次，上游只吃 Gemini shape，完全無感。
                 // openaiOptions 是 options 的複本，改 model 不影響呼叫端；
-                // 備援模型不支援思考，NvidiaService 的 deepseek 分支不會觸發，enableThinking 自然失效。
+                // enableThinking 沿用原 tier 的值，由 NvidiaService 依新模型的形狀重新詮釋
+                // （備援 gpt-oss 走 top-level reasoning_effort，high/low 對應同一組語意）。
                 if (!openaiResponse && Config.AI_FALLBACK_ENABLED &&
                     Config.NVIDIA_FALLBACK_MODEL &&
                     openaiOptions.model !== Config.NVIDIA_FALLBACK_MODEL) {
