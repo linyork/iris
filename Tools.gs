@@ -116,6 +116,24 @@ var Tools = (() => {
       }
     },
     {
+      name: 'setCashBalance',
+      description: '把某個現金帳戶的餘額直接校正成指定的數字。當主人講的是**絕對值**時使用：' +
+        '「郵局現在是 12000」「國泰現金戶剩 8 萬」「餘額改成 X」。' +
+        '講的是增減（「收到 5000」「花了 200」）請改用 recordTrade 的存入／提出。' +
+        '差額由程式重讀帳戶餘額當場算，你不要自己減、也不要先查餘額再算 —— ' +
+        '你看到的現金數字是換算過的台幣值，拿去減外幣戶會差一個匯率。',
+      parameters: {
+        type: 'object',
+        properties: {
+          account: { type: 'string', description: '帳戶名稱，需與「帳戶」表完全一致' },
+          balance: { type: 'number', description: '校正後的餘額，⚠️ 一律填該帳戶的原幣：外幣帳戶就填美金／日圓金額，不要換算成台幣' },
+          note:    { type: 'string', description: '校正原因（可選），例如「對帳後補差額」' },
+          date:    { type: 'string', description: '日期，格式 yyyy-MM-dd（可選，預設今天）' }
+        },
+        required: ['account', 'balance']
+      }
+    },
+    {
       name: 'getPrice',
       description: '查詢台灣上市股票或 ETF 的即時（或最新收盤）股價，包含漲跌幅、開高低。用於查詢目前未持有但考慮買入的標的，或快速確認某檔股票當前價格。',
       parameters: {
@@ -205,6 +223,13 @@ var Tools = (() => {
         case 'recordTrade':
           if (!args.action) return '缺少必要參數：action。';
           return AssetTools.recordTrade(args);
+
+        case 'setCashBalance':
+          // balance 可以是 0（把戶頭清空），所以只能擋 undefined/null
+          if (!args.account || args.balance === undefined || args.balance === null) {
+            return '缺少必要參數：account 與 balance 皆為必填。';
+          }
+          return AssetTools.setCashBalance(args);
 
         case 'getPrice':
           if (!args.symbols) return '缺少必要參數：symbols。';

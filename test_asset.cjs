@@ -1234,6 +1234,86 @@ console.log('\nT20  目標配置% 跟著「標的」走');
     String(posSheet.raw(at, TARGET_COL)));
 }
 
+// ─── T21  現金餘額校正（絕對值 → 一列差額）────────────────────────
+// 主人講的是「現在是多少」，帳本能記的只有「差多少」。所以校正不是去改「現金」
+// 那一格（generated，下一次 rebuild 就蓋掉），而是往「交易」加一列「調整」。
+// 減法必須在 AssetTools 裡做：模型看到的現金是換算過的台幣值，外幣戶差一個匯率。
+console.log('\nT21  講絕對值也能改餘額');
+{
+  const cashSheet   = target.getSheetByName('現金');
+  const tradeSheet  = target.getSheetByName('交易');
+  const countTrades = () => AssetSchema.readObjects(tradeSheet).length;
+  const lastTrade   = () => AssetSchema.readObjects(tradeSheet).slice(-1)[0] || {};
+  const balanceOf   = (name) => {
+    const r = AssetSchema.readObjects(cashSheet).find(x => String(x['帳戶']) === name);
+    return r ? num(r['餘額']) : null;
+  };
+  const sharesOf = (code) => {
+    const p = AssetSchema.readObjects(target.getSheetByName('持倉'))
+      .find(x => String(x['代號']) === code);
+    return p ? num(p['股數']) : 0;
+  };
+
+  const TWD = '國泰證券戶';
+  const USD = '國泰外幣戶(美)';
+  const heldShares = sharesOf(H0.code);
+
+  // 擋下的情況都不可以寫進表裡
+  const n0 = countTrades();
+  check('未知帳戶會列出可用的帳戶',
+    /沒有這個帳戶/.test(AssetTools.setCashBalance({ account: '火星銀行', balance: 1 })), '');
+  check('沒給餘額時會問，不會當成 0',
+    /要校正成多少/.test(AssetTools.setCashBalance({ account: TWD })), '');
+  check('被擋下的都沒有寫進交易表', countTrades() === n0, countTrades() + ' vs ' + n0);
+
+  // 往上校正（差額是合成數字，不是真實餘額）
+  const before = balanceOf(TWD);
+  const up = Math.round(before) + 12345;
+  const r1 = AssetTools.setCashBalance({ account: TWD, balance: up, note: '對帳後補差額' });
+  check('校正後餘額就是指定的數字', near(balanceOf(TWD), up, 0.01), balanceOf(TWD) + ' vs ' + up);
+  const t1 = lastTrade();
+  check('帳本記的是差額，不是絕對值', near(num(t1['金額']), up - before, 0.01), t1['金額']);
+  check('動作是「調整」', String(t1['動作']) === '調整', t1['動作']);
+  check('現金流公式認得「調整」', near(num(t1['現金流']), up - before, 0.01), t1['現金流']);
+  check('備註留下校正前後的數字與原因',
+    /餘額校正/.test(String(t1['備註'])) && /對帳後補差額/.test(String(t1['備註'])), t1['備註']);
+  check('回覆帶回列號與校正後的餘額', /已記錄第 \d+ 列/.test(r1) && /餘額/.test(r1), r1.split('\n')[0]);
+
+  // 往下校正 —— 「調整」是全表唯一允許負金額的動作
+  const down = up - 20000;
+  AssetTools.setCashBalance({ account: TWD, balance: down });
+  check('往下校正寫成負的金額', num(lastTrade()['金額']) < 0, lastTrade()['金額']);
+  check('往下校正後餘額仍等於指定的數字', near(balanceOf(TWD), down, 0.01), balanceOf(TWD));
+
+  // 已經對上就不該再寫一列
+  const n1 = countTrades();
+  check('餘額已經對了就不寫任何一列',
+    /不用校正/.test(AssetTools.setCashBalance({ account: TWD, balance: balanceOf(TWD) })) &&
+    countTrades() === n1, countTrades() + ' vs ' + n1);
+
+  // 外幣戶：填的是原幣，不是模型看得到的台幣值
+  const usdBefore = balanceOf(USD);
+  AssetTools.setCashBalance({ account: USD, balance: usdBefore + 100 });
+  const usdRow = AssetSchema.readObjects(cashSheet).find(x => String(x['帳戶']) === USD);
+  check('外幣戶校正的是原幣餘額', near(num(usdRow['餘額']), usdBefore + 100, 0.01), usdRow['餘額']);
+  check('台幣值仍然是餘額 × 匯率',
+    near(num(usdRow['台幣值']), (usdBefore + 100) * FX.USDTWD, 1), usdRow['台幣值']);
+  check('校正列的幣別跟著帳戶走', String(lastTrade()['幣別']) === 'USD', lastTrade()['幣別']);
+
+  // 差額只能由 setCashBalance 算出來，不能讓呼叫端自己填
+  const n2 = countTrades();
+  check('recordTrade 拒絕「調整」並指路到 setCashBalance',
+    /setCashBalance/.test(AssetTools.recordTrade({ action: '調整', amount: 100, account: TWD })) &&
+    countTrades() === n2, countTrades() + ' vs ' + n2);
+
+  // 順手修的：存提的幣別也該跟著帳戶，寫死 TWD 會讓外幣戶的每一列都在說謊
+  AssetTools.recordTrade({ action: '存入', amount: 50, account: USD });
+  check('存入外幣戶時幣別是 USD', String(lastTrade()['幣別']) === 'USD', lastTrade()['幣別']);
+
+  // 校正只動現金
+  check('校正不會碰到持倉', sharesOf(H0.code) === heldShares, sharesOf(H0.code) + ' vs ' + heldShares);
+}
+
 // 選用：拿真實的券商匯出檔跑一次解析，只印不斷言（檔案不進版控）
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {

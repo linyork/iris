@@ -9,7 +9,7 @@
 > | 目前手刻 | 對應的 LangChain / LangGraph 概念 |
 > |---|---|
 > | `ChatBot.gs` 的 ReAct 迴圈 | `LangGraph` StateGraph + ToolNode |
-> | `Tools.gs` 的 13 個工具 | `@tool` decorator / `StructuredTool` |
+> | `Tools.gs` 的 14 個工具 | `@tool` decorator / `StructuredTool` |
 > | `AIServiceFactory` + `AIAdapter` | `BaseChatModel` 抽象 + provider 子類 |
 > | `GoogleSheet` 的 chat 讀寫 + STM 注入 | `Memory` / `Checkpointer` |
 > | `searchKnowledge` 關鍵字查 Sheet | `VectorStore` retriever |
@@ -95,10 +95,11 @@ Telegram Bot API ───┤        │
                  │
                  ▼
 ┌──────────────────────────────────────────────┐
-│  Tools.gs · 13 個工具                         │
+│  Tools.gs · 14 個工具                         │
 │   ├─ 資產查詢：getHoldings / getDashboard /    │
 │   │           getHistory / getPrice           │
 │   ├─ 股利：getDividendHistory / recordDividend │
+│   ├─ 記帳：recordTrade / setCashBalance        │
 │   ├─ 記憶：rememberShortTerm / saveKnowledge / │
 │   │       searchKnowledge / listMemories /    │
 │   │       deleteMemory                        │
@@ -197,11 +198,36 @@ Telegram Bot API ───┤        │
 
 在 GAS 編輯器跑 `verifySnapshot()` 或 `dryRunSetData()` 可以看今天會寫什麼，不寫入。
 
+### 現金餘額怎麼改
+
+現金帳戶的餘額**沒有任何地方可以直接寫**，只有兩個入口：
+
+```
+帳戶!期初餘額（人填一次，期初日期當天的餘額）  ┐
+                                              ├→ 現金!餘額 → 台幣值 → 指標!總資產 → …
+交易!現金流（每一列一筆，SUMIF(帳戶) 彙總）    ┘
+```
+
+「現金」整張表是 `Position.rebuild()` 覆寫出來的，手改那一格活不過下一次重算
+（記一筆交易、`setData`、日報、`/refresh` 都會重算）。改「帳戶」的期初餘額則是
+竄改歷史起點，跟期初日期對不起來，而且不留痕跡。
+
+所以主人講絕對值（「郵局現在是 X」）時，`setCashBalance()` 做的是**把絕對值翻譯回差額**：
+重讀「現金」表的當下餘額，往「交易」加一列 `動作=調整`、`分類=校正`，備註寫下校正前後的
+數字。餘額因此仍然只是交易的推導結果，校正本身也留下可稽核的一列。
+
+- **「調整」是全表唯一允許「金額」為負的動作**，往下校正就是負數
+- **差額只能由 `setCashBalance` 算**，`recordTrade({action:'調整'})` 會被擋下並指路。
+  因為 LLM 看到的現金數字是 `Snapshot._cash` 換算過的**台幣值**，拿去減外幣戶的目標餘額
+  會整整差一個匯率，兩邊都不會報錯
+- **`balance` 一律填該帳戶的原幣** —— 國泰外幣戶(美) 填美金，不要換算台幣
+- 餘額本來就對得上時不寫任何一列，直接回「不用校正」
+
 ---
 
 ## AI 工具集
 
-`Tools.gs` 共定義 13 個工具，呼叫者為 LLM。
+`Tools.gs` 共定義 14 個工具，呼叫者為 LLM。
 工具以 `definitions` 陣列（給模型看的 schema）加上 `execute()` 內的 `switch` 分派實作，
 **新增工具時兩處都要改**，只加 definitions 會讓模型叫得出來卻一律收到「未知的工具」。
 
@@ -214,6 +240,7 @@ Telegram Bot API ───┤        │
 | `getDividendHistory(year)` | 股利收入統計 |
 | `recordDividend(symbol, amount, date)` | 登記股利入帳（內部走 `recordTrade`，寫進「交易」表後自動重算） |
 | `recordTrade(action, symbol, shares, price, fee, tax, amount, account, date, note)` | **寫進新的「資產管理」表**：買進／賣出／股利／存入／提出／費用／利息／轉出／轉入，記完自動 `Position.rebuild()` 重算持倉與餘額 |
+| `setCashBalance(account, balance, note, date)` | 把某個現金帳戶**校正成指定的餘額**（主人講絕對值時用）。差額由程式重讀「現金」表當場算，寫成一列「調整」交易 —— 見[現金餘額怎麼改](#現金餘額怎麼改) |
 | `rememberShortTerm(key, content, hours)` | 寫入短期記憶（預設 24h，最長 168h） |
 | `saveKnowledge(tags, content)` | 寫入長期知識（含結構化 tag） |
 | `searchKnowledge(query)` | 關鍵字搜尋長期知識 |

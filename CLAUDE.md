@@ -76,7 +76,7 @@ renaming or relocating them fails silently:
 1. `Main.gs` — `doPost()` receives the LINE **or** Telegram webhook, normalizes it into a single LINE-shaped event object, deduplicates via `CacheService` (6h TTL), silently drops non-master events, calls `ChatBot.reply()`
 2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 3 turns). Injects short-term memory + relevant knowledge into system context before each call. Caches tool results within a single turn to prevent duplicate calls.
 3. `AIServiceFactory.gs` — Routes to `GeminiService` or `NvidiaService` based on `env!B3`. NVIDIA path goes through `AIAdapter` (Gemini ↔ OpenAI format conversion) so the rest of the codebase always speaks Gemini format.
-4. `Tools.gs` — Defines and executes **13** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. Asset reads (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, reading the 資產管理 sheet — writes (`recordTrade`, `recordDividend` — both land in the 交易 tab via `AssetTools.gs`, since a dividend is just a row with a different 動作), memory (`rememberShortTerm`, `saveKnowledge`, `searchKnowledge`, `listMemories`, `deleteMemory`), external (`searchWeb`).
+4. `Tools.gs` — Defines and executes **14** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. Asset reads (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, reading the 資產管理 sheet — writes (`recordTrade`, `recordDividend`, `setCashBalance` — all three land in the 交易 tab via `AssetTools.gs`, since a dividend and a balance correction are each just a row with a different 動作), memory (`rememberShortTerm`, `saveKnowledge`, `searchKnowledge`, `listMemories`, `deleteMemory`), external (`searchWeb`).
 5. `GoogleSheet.gs` — All data access. Single spreadsheet instance cached per execution.
 
 ### AI Provider Switching
@@ -291,6 +291,25 @@ relying on it.
 ⚠️ 留空讀到 0，而 `配置` 用 `target > 0` 判斷「有沒有設目標」—— 所以某個
 區域／類型分組全部留空時，`目標%` / `偏離%` / `偏離金額` 三欄寫成空字串，
 「沒設目標」和「目標是 0」在畫面上長得一樣。
+
+### 現金餘額只有兩個入口
+
+`現金` is generated — `Position.rebuild()` overwrites all eight columns, and `餘額` is
+`帳戶!期初餘額` + `SUMIF(交易!帳戶, 交易!現金流)`. So a balance can only be moved by
+editing `帳戶!期初餘額` (which rewrites the starting point, contradicts `期初日期`, and
+leaves no trace) or by adding a row to `交易`. Hand-editing the `現金` cell survives until
+the next rebuild — minutes, since every recordTrade / `setData` / daily report / `/refresh`
+rebuilds.
+
+That is why "the balance is now X" is not a write but a **translation**:
+`AssetTools.setCashBalance()` re-reads the current balance and appends one `動作=調整`,
+`分類=校正` row for the difference. `調整` is the only action where `金額` may be negative.
+
+⚠️ **The subtraction must stay inside `AssetTools`.** `Snapshot._cash` hands the model
+`台幣值` (TWD-converted), while the delta is computed against `現金!餘額` (原幣) — let the
+LLM do the arithmetic and every foreign-currency account is off by one exchange rate,
+silently. That is also why `recordTrade` rejects `調整` outright, the same way it rejects
+`期初`.
 
 ### 面板 vs 指標
 
