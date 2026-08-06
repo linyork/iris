@@ -20,6 +20,13 @@
       --accent:    #3b6ef0;
       --grid:      rgba(0,0,0,.07);
       --shadow:    0 1px 2px rgba(0,0,0,.04), 0 4px 12px rgba(0,0,0,.04);
+      /* 偏離用的中性色。刻意不共用 --up / --down：紅漲綠跌是「賺賠」的語意，
+         超配一檔好標的並不是賠錢，借去表示配置會把兩件事讀成同一件。 */
+      --over:      #e8843c;
+      --under:     #3b6ef0;
+      --alert-bg:  #fff4e5;
+      --alert-bd:  #f0c48a;
+      --alert-fg:  #8a4b00;
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -33,6 +40,11 @@
         --accent:   #6d92ff;
         --grid:     rgba(255,255,255,.07);
         --shadow:   none;
+        --over:     #f0a05a;
+        --under:    #6d92ff;
+        --alert-bg: #2a2114;
+        --alert-bd: #5c4423;
+        --alert-fg: #f0c48a;
       }
     }
 
@@ -107,6 +119,34 @@
 
     .chart-box { position: relative; height: 260px; }
     .chart-box.short { height: 220px; }
+    /* 橫條圖的高度隨列數而定，由 JS 寫 inline style */
+    .chart-box.auto { height: auto; }
+
+    /* ── 警示條 ─────────────────────────────────────── */
+    .alert {
+      background: var(--alert-bg); border: 1px solid var(--alert-bd);
+      color: var(--alert-fg); border-radius: 12px;
+      padding: 12px 16px; margin-bottom: 16px; font-size: 14px;
+    }
+    .alert b { display: block; margin-bottom: 4px; font-size: 13px; letter-spacing: .04em; }
+    .alert ul { margin: 0; padding-left: 18px; }
+    .alert li { margin: 2px 0; }
+
+    /* ── 績效 KPI ───────────────────────────────────── */
+    /* 欄數寫死成 2 / 3，不用 auto-fit：格線是靠 1px gap 露出容器底色做的，
+       最後一列沒填滿時那塊底色會變成一片突兀的空板。2 與 3 都整除 6 格。
+       ⚠️ 改 KPI 格數的話這裡要跟著看。 */
+    .kpis {
+      display: grid; gap: 1px; background: var(--border);
+      grid-template-columns: repeat(2, 1fr);
+      border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    }
+    @media (min-width: 640px) { .kpis { grid-template-columns: repeat(3, 1fr); } }
+    .kpi { background: var(--surface); padding: 12px 14px; }
+    .kpi .k { font-size: 11px; color: var(--text-dim); letter-spacing: .04em; }
+    .kpi .v { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums;
+              letter-spacing: -.01em; line-height: 1.3; }
+    .kpi .s { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 
     /* ── Cash list ──────────────────────────────────── */
     .rows { display: flex; flex-direction: column; gap: 2px; }
@@ -168,10 +208,17 @@
   <div id="state" class="state">讀取資料中…</div>
   <div id="content" hidden>
 
+    <div class="alert" id="alerts" hidden></div>
+
     <div class="card">
       <div class="hero-value" id="netTotal">—</div>
       <div class="hero-date" id="netDate"></div>
       <div class="chips" id="chips"></div>
+    </div>
+
+    <div class="card">
+      <h2>投資績效</h2>
+      <div class="kpis" id="kpis"></div>
     </div>
 
     <div class="card">
@@ -197,21 +244,29 @@
       </div>
     </div>
 
+    <div class="card" id="devCard">
+      <div class="card-head">
+        <h2>目標配置偏離</h2>
+        <span class="muted" id="devHint"></span>
+      </div>
+      <div class="chart-box auto"><canvas id="devChart"></canvas></div>
+      <div class="muted" id="devEmpty" hidden>
+        還沒有任何分組設定目標 —— 目標填在「標的」的 <b>目標配置%</b>，
+        填的是 0..1 的比例（12.5% 要寫 0.125）。
+      </div>
+    </div>
+
     <div class="card">
       <h2>持倉明細</h2>
       <div id="holdingsBox"></div>
     </div>
 
-    <div class="grid2">
-      <div class="card">
-        <h2>股利 — 年度</h2>
-        <div class="chart-box short"><canvas id="divYearChart"></canvas></div>
+    <div class="card">
+      <div class="card-head">
+        <h2>個股累計貢獻</h2>
+        <span class="muted">未實現 + 已實現 + 累計股利</span>
       </div>
-      <div class="card">
-        <h2>股利 — <span id="divYearLabel"></span> 月分佈</h2>
-        <div class="chart-box short"><canvas id="divMonthChart"></canvas></div>
-        <div class="muted" id="divSummary" style="margin-top:10px"></div>
-      </div>
+      <div class="chart-box auto"><canvas id="contribChart"></canvas></div>
     </div>
 
   </div>
@@ -453,60 +508,236 @@ function renderHoldings(d) {
   box.innerHTML = '<table>' + head + '<tbody>' + body + '</tbody></table>';
 }
 
-// ── 股利 ───────────────────────────────────────────────
-function renderDividends(d) {
-  var ds = d.dividendSeries || { byYear: [], byMonth: [] };
-  document.getElementById('divYearLabel').textContent = ds.currentYear || '';
+// ── 警示條 ─────────────────────────────────────────────
+//
+// 三個來源，時間點不同，所以分開講而不是合成一句：
+//   1. 指標的「⚠️ 待修正」——  Position.replay 的警告，凍結在上次重算那一刻
+//   2. 現在讀到的 priceMissing —— 即時，重算之後才壞掉的會只出現在這裡
+//   3. 最新一天快照的狀態 —— 走勢圖那條線為什麼是平的
+//
+// 沒有這條，畫面會把少算過的數字照樣畫成漂亮的圖，而且一聲不吭。
+function renderAlerts(d) {
+  var box = document.getElementById('alerts');
+  var m = d.metrics;
+  var items = [];
 
-  if (charts.divYear) charts.divYear.destroy();
-  if (ds.byYear && ds.byYear.length) {
-    var o1 = baseOpts();
-    o1.plugins.tooltip.callbacks = { label: function (c) { return 'NT$ ' + fmtMoney(c.parsed.y); } };
-    charts.divYear = new Chart(document.getElementById('divYearChart'), {
-      type: 'bar',
-      data: {
-        labels: ds.byYear.map(function (y) { return y.year; }),
-        datasets: [{
-          data: ds.byYear.map(function (y) { return y.total; }),
-          backgroundColor: cssVar('--accent'),
-          borderRadius: 5,
-          maxBarThickness: 44
-        }]
-      },
-      options: o1
-    });
+  var warns = (m && m.warnings) ? m.warnings : [];
+  warns.forEach(function (w) {
+    items.push(w + (m.lastRebuild ? '（重算於 ' + m.lastRebuild + '）' : ''));
+  });
+
+  // 上面那些警告已經點名的代號就不重複講，只在「重算後才壞掉」時才補一句
+  var missing = (d.holdings || []).filter(function (h) { return h.priceMissing; })
+                                  .map(function (h) { return h.code; });
+  var warnText = warns.join('');
+  var unheard = missing.filter(function (c) { return warnText.indexOf(c) < 0; });
+  if (unheard.length) {
+    items.push('現在讀不到市價：' + unheard.join('、') +
+               '　—— 這幾檔的市值以 0 計入，總資產與佔比都偏低');
   }
 
-  if (charts.divMonth) charts.divMonth.destroy();
-  if (ds.byMonth && ds.byMonth.length) {
-    var o2 = baseOpts();
-    o2.plugins.tooltip.callbacks = { label: function (c) { return 'NT$ ' + fmtMoney(c.parsed.y); } };
-    charts.divMonth = new Chart(document.getElementById('divMonthChart'), {
-      type: 'bar',
-      data: {
-        labels: ['1','2','3','4','5','6','7','8','9','10','11','12'],
-        datasets: [{
-          data: ds.byMonth,
-          backgroundColor: cssVar('--down'),
-          borderRadius: 5,
-          maxBarThickness: 28
-        }]
-      },
-      options: o2
-    });
+  var series = d.series || [];
+  var last = series.length ? series[series.length - 1] : null;
+  if (last && last.status) {
+    items.push('最新快照（' + last.date + '）狀態為「' + last.status +
+               '」，走勢圖末端持平不一定代表行情沒動');
+  }
+
+  if (!items.length) { box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = '<b>需要注意</b><ul>' +
+    items.map(function (t) { return '<li>' + t + '</li>'; }).join('') + '</ul>';
+}
+
+// ── 投資績效 ───────────────────────────────────────────
+function renderMetrics(d) {
+  var box = document.getElementById('kpis');
+  var m = d.metrics;
+  if (!m) {
+    box.innerHTML = '<div class="kpi"><div class="k">投資績效</div>' +
+                    '<div class="s">讀不到「指標」分頁</div></div>';
+    return;
   }
 
   var dv = d.dividends;
-  if (dv) {
-    var parts = [
-      '今年累計 NT$ ' + fmtMoney(dv.thisYear.total) + '（' + dv.thisYear.count + ' 筆）',
-      '本月 NT$ ' + fmtMoney(dv.thisMonth.total)
-    ];
-    if (dv.yoyChangePct !== null && dv.yoyChangePct !== undefined) {
-      parts.push('年增 ' + fmtPct(dv.yoyChangePct));
+  var cells = [
+    {
+      k: '未實現損益', v: fmtSigned(m.unrealized), cls: dirClass(m.unrealized),
+      s: '報酬率 ' + fmtPct(m.unrealizedPct) +
+         (m.stockCost ? '　成本 ' + fmtMoney(m.stockCost) : '')
+    },
+    { k: '已實現損益', v: fmtSigned(m.realized), cls: dirClass(m.realized),
+      s: '賣出沖銷後的實際損益' },
+    {
+      k: '累計股利', v: fmtMoney(m.dividendTotal), cls: '',
+      // 股利那兩張圖拿掉之後，年度趨勢就靠這一行的 YoY 撐著
+      s: dv ? ('今年 ' + fmtMoney(dv.thisYear.total) +
+               (dv.yoyChangePct !== null && dv.yoyChangePct !== undefined
+                 ? '　年增 ' + fmtPct(dv.yoyChangePct) : '　（無去年同期）'))
+            : ''
+    },
+    { k: '淨損益', v: fmtSigned(m.netPnl), cls: dirClass(m.netPnl),
+      s: '未實現 + 已實現 + 股利' },
+    {
+      k: 'XIRR（年化）',
+      v: m.xirr === null ? '—' : fmtPct(m.xirr),
+      cls: dirClass(m.xirr),
+      // 這個數字只從遷移日起算，不是真實持有全期 —— 不寫出來會被當成一輩子的績效
+      s: m.xirr === null ? '現金流跨度不足' : '自期初建倉日起算'
+    },
+    {
+      k: '部位', v: (m.positionCount === null ? '—' : m.positionCount + ' 檔'), cls: '',
+      s: (m.tradeCount === null ? '' : m.tradeCount + ' 筆交易') +
+         (m.lastRebuild ? '　重算於 ' + m.lastRebuild.slice(5, 16) : '')
     }
-    document.getElementById('divSummary').textContent = parts.join('　·　');
+  ];
+
+  box.innerHTML = cells.map(function (c) {
+    return '<div class="kpi"><div class="k">' + c.k + '</div>' +
+           '<div class="v ' + c.cls + '">' + c.v + '</div>' +
+           '<div class="s">' + (c.s || '') + '</div></div>';
+  }).join('');
+}
+
+// ── 橫條圖共用設定 ─────────────────────────────────────
+// baseOpts 把金額格式掛在 y 軸；橫條圖的數值軸是 x，所以另外開一份。
+function barhOpts() {
+  return {
+    indexAxis: 'y',
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: cssVar('--surface'),
+        titleColor: cssVar('--text'),
+        bodyColor: cssVar('--text'),
+        borderColor: cssVar('--border'),
+        borderWidth: 1,
+        padding: 10,
+        displayColors: false
+      }
+    },
+    scales: {
+      x: { grid: { color: cssVar('--grid'), drawBorder: false },
+           ticks: { color: cssVar('--text-dim') } },
+      y: { grid: { display: false }, ticks: { color: cssVar('--text-dim') } }
+    }
+  };
+}
+
+/** 橫條圖的高度由列數決定，交給 CSS 會壓成一團 */
+function sizeBarh(canvasId, count) {
+  var box = document.getElementById(canvasId).parentNode;
+  box.style.height = Math.max(120, count * 30 + 44) + 'px';
+}
+
+// ── 目標配置偏離 ───────────────────────────────────────
+//
+// 這裡是全站唯一「看了會去做事」的一塊：偏離金額就是下一筆錢該往哪放。
+// 資料讀「配置」sheet（Position.rebuild 算好的），不是從 holdings 現推 ——
+// 目標只有那張表知道，甜甜圈那張圖跟目標完全無關。
+//
+// ⚠️ 沒設目標的分組，配置表寫的是空字串而不是 0（「沒設」與「目標是 0」在
+// 畫面上長得一樣是原本就有的坑），所以這裡用「有沒有偏離% 這個 key」來濾。
+function renderDeviation(d) {
+  var rows = (d.allocation || []).filter(function (a) {
+    return (a['維度'] === '區域' || a['維度'] === '類型') &&
+           a['偏離%'] !== undefined && a['偏離%'] !== null;
+  }).sort(function (a, b) { return b['偏離%'] - a['偏離%']; });
+
+  if (charts.dev) charts.dev.destroy();
+  document.getElementById('devEmpty').hidden = rows.length > 0;
+  document.getElementById('devHint').textContent =
+    rows.length ? '正 = 超配　負 = 低配' : '';
+  if (!rows.length) {
+    document.getElementById('devChart').parentNode.style.height = '0px';
+    return;
   }
+
+  sizeBarh('devChart', rows.length);
+
+  var opts = barhOpts();
+  opts.scales.x.ticks.callback = function (v) { return (v * 100).toFixed(0) + '%'; };
+  opts.plugins.tooltip.callbacks = {
+    label: function (c) {
+      var r = rows[c.dataIndex];
+      var amt = r['偏離金額'];
+      var line = '實際 ' + ((r['實際%'] || 0) * 100).toFixed(1) + '%' +
+                 '　目標 ' + ((r['目標%'] || 0) * 100).toFixed(1) + '%';
+      if (amt === undefined || amt === null) return line;
+      return [line, (amt > 0 ? '超出 ' : '不足 ') + fmtMoney(Math.abs(amt))];
+    }
+  };
+
+  charts.dev = new Chart(document.getElementById('devChart'), {
+    type: 'bar',
+    data: {
+      labels: rows.map(function (r) { return r['維度'] + '·' + r['分組']; }),
+      datasets: [{
+        data: rows.map(function (r) { return r['偏離%']; }),
+        backgroundColor: rows.map(function (r) {
+          return r['偏離%'] >= 0 ? cssVar('--over') : cssVar('--under');
+        }),
+        borderRadius: 4,
+        maxBarThickness: 22
+      }]
+    },
+    options: opts
+  });
+}
+
+// ── 個股累計貢獻 ───────────────────────────────────────
+// 未實現 + 已實現 + 累計股利。持倉明細那張表要一列一列讀才看得出誰在拖。
+function renderContribution(d) {
+  var rows = (d.holdings || []).map(function (h) {
+    var un  = h.pnl || 0;
+    var re  = h.realizedPnl || 0;
+    var div = h.totalDividendReceived || 0;
+    return { code: h.code, name: h.name, un: un, re: re, div: div, total: un + re + div };
+  }).filter(function (r) { return r.total !== 0; })
+    .sort(function (a, b) { return b.total - a.total; });
+
+  if (charts.contrib) charts.contrib.destroy();
+  if (!rows.length) {
+    document.getElementById('contribChart').parentNode.style.height = '0px';
+    return;
+  }
+
+  sizeBarh('contribChart', rows.length);
+
+  var opts = barhOpts();
+  opts.scales.x.ticks.callback = function (v) {
+    if (Math.abs(v) < 10000) return v.toLocaleString('zh-TW');
+    var w = v / 10000;
+    return (Number.isInteger(w) ? w : w.toFixed(1)) + '萬';
+  };
+  opts.plugins.tooltip.callbacks = {
+    label: function (c) {
+      var r = rows[c.dataIndex];
+      return ['合計 ' + fmtSigned(r.total),
+              '未實現 ' + fmtSigned(r.un),
+              '已實現 ' + fmtSigned(r.re),
+              '股利 ' + fmtMoney(r.div)];
+    }
+  };
+
+  charts.contrib = new Chart(document.getElementById('contribChart'), {
+    type: 'bar',
+    data: {
+      labels: rows.map(function (r) { return r.code + ' ' + (r.name || ''); }),
+      datasets: [{
+        data: rows.map(function (r) { return r.total; }),
+        // 這裡是損益，紅漲綠跌照用
+        backgroundColor: rows.map(function (r) {
+          return r.total >= 0 ? cssVar('--up') : cssVar('--down');
+        }),
+        borderRadius: 4,
+        maxBarThickness: 22
+      }]
+    },
+    options: opts
+  });
 }
 
 // ── 載入 ───────────────────────────────────────────────
@@ -517,11 +748,14 @@ function render(d) {
   document.getElementById('stamp').textContent =
     d.generatedAt + (d.fromCache ? '（快取）' : '');
 
+  renderAlerts(d);
   renderHero(d);
+  renderMetrics(d);
   renderAlloc(d);
   renderCash(d);
+  renderDeviation(d);
   renderHoldings(d);
-  renderDividends(d);
+  renderContribution(d);
 
   var pressed = document.querySelector('#ranges button[aria-pressed="true"]');
   renderTrend(parseInt(pressed.dataset.days, 10));

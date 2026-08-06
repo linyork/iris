@@ -143,12 +143,39 @@ Read-only asset dashboard on the **same** script project, served by `doGet()` in
 | `DashboardPage.html` | Single page — Chart.js 4 via CDN, RWD, light/dark, red-up/green-down (TW convention) |
 
 Data is **reused from `Snapshot.gs`**, not re-read: `_holdings` / `_cash` / `_totals` / `_dividends`
-already return structured JSON for `AdvisorCheck`. The dashboard added only `Snapshot.totalSeries()`
-and `Snapshot.dividendSeries()` for the charts. ⚠️ **Keep those two out of `Snapshot.collectAll()`** —
-that payload is serialized into the LLM prompt, and a year of daily points would just burn context.
+already return structured JSON for `AdvisorCheck`. The dashboard added `Snapshot.totalSeries()`
+(charts) and `Snapshot._metrics()` (the 指標 key-value table). ⚠️ **Keep the series readers out of
+`Snapshot.collectAll()`** — that payload is serialized into the LLM prompt, and a year of daily points
+would just burn context. `_metrics` is small enough not to be a context problem, but it stays out too:
+changing `collectAll`'s shape means re-reading `AdvisorCheck` and all three reports at the same time.
 
-The allocation donut is derived from `holdings` + `cash`, **not** from the `配置` sheet, because that
-sheet's columns are read dynamically by header name and have changed before.
+`Snapshot.dividendSeries()` is no longer wired to any page — the browser dashboard's two dividend
+charts were replaced by 累計股利 + 今年 YoY in the performance row, which `_dividends` already
+provides. The function stays (covered by `test_asset.cjs`) for whoever wants those charts back.
+
+**The dashboard is not a page of pretty numbers — three of its blocks exist to be acted on:**
+
+| Block | Source | Why it's there |
+|---|---|---|
+| 警示條 | `metrics.warnings` + live `priceMissing` + latest `series[].status` | `Position.replay`'s warnings had **no reader on this page**. A dangling 賣出 or a missing quote used to be drawn as a perfectly clean chart. |
+| 投資績效 | `metrics` (指標) | 未實現／已實現／累計股利／淨損益／XIRR were computed at every rebuild and displayed nowhere. The page could say how much you have, never how much you made. |
+| 目標配置偏離 | `allocation` (配置) | The only block that answers "where does the next dollar go". |
+
+Two things that must stay true there:
+
+- **The 偏離 bars do not use `--up` / `--down`.** Red-up/green-down is the *P&L* convention; over-
+  weighting a good holding is not a loss. Deviation gets its own neutral `--over` / `--under` pair.
+- **"No target set" is not "target is 0".** `配置` writes an empty string for a group with no target
+  (see 目標配置%), so `renderDeviation` filters on **whether the `偏離%` key exists**, not on its value —
+  `_allocation` drops empty cells, which is exactly what makes that distinction survive.
+
+The allocation **donut** is still derived from `holdings` + `cash`, **not** from the `配置` sheet,
+because that sheet's columns are read dynamically by header name and have changed before. The
+deviation chart does read `配置` — it has to, since targets exist nowhere else.
+
+`totalSeries()` points carry `status` **only when the day was not a normal 交易日**. A year of
+`"交易日"` strings would eat the 90KB single-key cache limit for nothing, and the only days that change
+how you read a flat line are the abnormal ones.
 
 **Access control.** The webhook deployment is `ANYONE_ANONYMOUS`, so `doGet` is publicly reachable and
 must gate itself: `Dashboard.isAuthorized()` compares `Session.getActiveUser()` against
@@ -191,9 +218,15 @@ the signature, rejects `auth_date` older than 24h (replay), and then still runs 
 `Utils.checkMaster`. A valid signature proves *who* opened it, not that they are allowed in.
 
 `MiniAppPage.html` is intentionally **not** a copy of `DashboardPage.html` — it is phone-first and
-narrower (total, trend, tappable holdings, cash, preset questions). Colours come from Telegram's
-`--tg-theme-*` variables so the panel matches the user's theme; red-up/green-down stays fixed because
-it is semantics, not decoration.
+narrower (total, 投資績效, trend, tappable holdings, 累計貢獻, cash, preset questions). Colours come
+from Telegram's `--tg-theme-*` variables so the panel matches the user's theme; red-up/green-down
+stays fixed because it is semantics, not decoration.
+
+Both faces eat the **same** `Dashboard.getPayload()`, so a block that needs no new field costs only
+front-end work — that is how 投資績效 (`metrics`) and 累計貢獻 (`holdings`) landed on both. The three
+blocks the panel deliberately does **not** carry are the warning banner, 目標配置偏離 and 持倉明細:
+the first two are wide diverging charts that stop being readable at 375px, and the table is what the
+tappable holdings list replaces. The browser dashboard stays the place to go when something looks wrong.
 
 Tapping a holding calls `miniAppAsk()`, which builds a `doPost`-shaped synthetic event and runs it
 through `ChatBot.reply()` — so tools, memory and chat history all follow the normal path. The answer

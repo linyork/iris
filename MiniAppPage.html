@@ -79,6 +79,20 @@
       background: var(--accent); border-color: var(--accent); color: var(--onAccent); font-weight: 600;
     }
     .chart { position: relative; height: 170px; }
+    /* 橫條圖高度隨列數而定，由 JS 寫 inline style */
+    .chart.auto { height: auto; }
+
+    /* 績效格。欄數寫死 2 不用 auto-fit：格線是 1px gap 露出容器底色做的，
+       最後一列沒填滿時那塊底色會變成一片突兀的空板。2 整除 6 格。 */
+    .kpis {
+      display: grid; grid-template-columns: repeat(2, 1fr);
+      gap: 1px; background: var(--line); border-radius: 10px; overflow: hidden;
+    }
+    .kpi { background: var(--card); padding: 10px 12px; }
+    .kpi .k { font-size: 10px; color: var(--hint); letter-spacing: .04em; }
+    .kpi .v { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums;
+              line-height: 1.35; }
+    .kpi .s { font-size: 10px; color: var(--hint); font-variant-numeric: tabular-nums; }
 
     /* 持倉整列可點 —— 這是 Mini App 相對於獨立網頁真正多出來的能力 */
     .hold {
@@ -150,6 +164,11 @@
   </div>
 
   <div class="card">
+    <h2>投資績效</h2>
+    <div class="kpis" id="kpis"></div>
+  </div>
+
+  <div class="card">
     <div class="head">
       <h2>總資產走勢</h2>
       <div class="ranges" id="ranges">
@@ -164,6 +183,14 @@
   <div class="card">
     <h2>持倉 · 點選可問 Iris</h2>
     <div id="holdings"></div>
+  </div>
+
+  <div class="card" id="contribCard">
+    <div class="head">
+      <h2>累計貢獻</h2>
+      <span style="font-size:11px;color:var(--hint)">未實現+已實現+股利</span>
+    </div>
+    <div class="chart auto"><canvas id="contrib"></canvas></div>
   </div>
 
   <div class="card">
@@ -197,7 +224,8 @@
 <script>
 var tg = window.Telegram && window.Telegram.WebApp;
 var DATA = null;
-var chart = null;
+var chart = null;          // 總資產走勢
+var contribChart = null;   // 個股累計貢獻。兩張圖各自持有，重畫時只砍自己那張
 var INIT_DATA = '';   // 驗簽用，開機時從父層 hash 取得
 
 // ⚠️ GAS 的 HtmlService 一定會把頁面包進一層 iframe（不同 origin），
@@ -395,6 +423,98 @@ function renderHoldings(d) {
   });
 }
 
+// 「指標」那張表算好的績效數字。手機版只放六格：面板一次看得完才有意義，
+// 想追問細節本來就有下面的快速提問。
+function renderMetrics(d) {
+  var box = document.getElementById('kpis');
+  var m = d.metrics;
+  if (!m) { box.innerHTML = '<div class="kpi"><div class="s">讀不到「指標」分頁</div></div>'; return; }
+
+  var dv = d.dividends;
+  var cells = [
+    { k: '未實現損益', v: signed(m.unrealized), c: dir(m.unrealized), s: '報酬率 ' + pct(m.unrealizedPct) },
+    { k: '已實現損益', v: signed(m.realized),   c: dir(m.realized),   s: '賣出沖銷後' },
+    { k: '累計股利',   v: fmt(m.dividendTotal), c: '',
+      s: dv ? '今年 ' + fmt(dv.thisYear.total) : '' },
+    { k: '淨損益',     v: signed(m.netPnl),     c: dir(m.netPnl),     s: '未實現+已實現+股利' },
+    // XIRR 只從遷移日起算 —— 不寫出來會被當成一輩子的績效
+    { k: 'XIRR（年化）', v: m.xirr === null ? '—' : pct(m.xirr), c: dir(m.xirr),
+      s: m.xirr === null ? '現金流跨度不足' : '自期初建倉日起算' },
+    { k: '部位', v: (m.positionCount === null ? '—' : m.positionCount + ' 檔'), c: '',
+      s: m.lastRebuild ? '重算於 ' + m.lastRebuild.slice(5, 16) : '' }
+  ];
+
+  box.innerHTML = cells.map(function (x) {
+    return '<div class="kpi"><div class="k">' + x.k + '</div>' +
+           '<div class="v ' + x.c + '">' + x.v + '</div>' +
+           '<div class="s">' + (x.s || '') + '</div></div>';
+  }).join('');
+}
+
+// 個股累計貢獻。持倉那張清單是「現在值多少」，這張是「這檔到底幫我賺了多少」——
+// 賣掉的損益與領過的股利都在裡面，看清單看不出來。
+function renderContrib(d) {
+  var rows = (d.holdings || []).map(function (h) {
+    var un = h.pnl || 0, re = h.realizedPnl || 0, dv = h.totalDividendReceived || 0;
+    return { code: h.code, name: h.name, un: un, re: re, dv: dv, total: un + re + dv };
+  }).filter(function (r) { return r.total !== 0; })
+    .sort(function (a, b) { return b.total - a.total; });
+
+  if (contribChart) contribChart.destroy();
+  document.getElementById('contribCard').hidden = !rows.length;
+  if (!rows.length) return;
+
+  // 手機寬度有限，軸標只放代號；名稱與拆解留在 tooltip
+  var box = document.getElementById('contrib').parentNode;
+  box.style.height = Math.max(110, rows.length * 28 + 34) + 'px';
+
+  contribChart = new Chart(document.getElementById('contrib'), {
+    type: 'bar',
+    data: {
+      labels: rows.map(function (r) { return r.code; }),
+      datasets: [{
+        data: rows.map(function (r) { return r.total; }),
+        // 這裡是損益，紅漲綠跌照用
+        backgroundColor: rows.map(function (r) {
+          return r.total >= 0 ? cssVar('--up') : cssVar('--down');
+        }),
+        borderRadius: 4, maxBarThickness: 18
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          displayColors: false, padding: 8,
+          callbacks: {
+            title: function (c) {
+              var r = rows[c[0].dataIndex];
+              return r.code + ' ' + (r.name || '');
+            },
+            label: function (c) {
+              var r = rows[c.dataIndex];
+              return ['合計 ' + signed(r.total), '未實現 ' + signed(r.un),
+                      '已實現 ' + signed(r.re), '股利 ' + fmt(r.dv)];
+            }
+          }
+        }
+      },
+      scales: {
+        x: { grid: { color: cssVar('--line') },
+             ticks: { color: cssVar('--hint'), font: { size: 10 },
+               callback: function (v) {
+                 if (Math.abs(v) < 10000) return v;
+                 var w = v / 10000;
+                 return (Number.isInteger(w) ? w : w.toFixed(1)) + '萬';
+               } } },
+        y: { grid: { display: false }, ticks: { color: cssVar('--hint'), font: { size: 11 } } }
+      }
+    }
+  });
+}
+
 function renderCash(d) {
   var box = document.getElementById('cash');
   if (!d.cash || !d.cash.accounts || !d.cash.accounts.length) {
@@ -413,7 +533,9 @@ function render(d) {
   document.getElementById('state').hidden = true;
   document.getElementById('app').hidden = false;
   renderTotals(d);
+  renderMetrics(d);
   renderHoldings(d);
+  renderContrib(d);
   renderCash(d);
   renderTrend(30);
 }

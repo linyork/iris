@@ -898,6 +898,35 @@ console.log('\nT13  Snapshot 改讀新表');
     series.length);
   const ds = Snapshot.dividendSeries(ss);
   check('dividendSeries 有年度分佈', ds.byYear.length > 0, JSON.stringify(ds.byYear.map(x => x.year)));
+
+  // ── _metrics：儀表板的績效條靠這支把「指標」接出來 ──
+  const panelSheet = target.getSheetByName('指標');
+  const panelVal = (k) => num((AssetSchema.readObjects(panelSheet)
+    .find(x => x['指標'] === k) || {})['數值']);
+
+  const mt = Snapshot._metrics(ss);
+  check('_metrics 讀得到績效欄位', !!mt && Array.isArray(mt.warnings), mt && Object.keys(mt).length);
+  check('_metrics 的未實現損益就是指標那一列',
+    near(mt.unrealized, panelVal('未實現損益'), 2), mt.unrealized);
+  check('_metrics 淨損益 = 未實現 + 已實現 + 股利',
+    near(mt.netPnl, mt.unrealized + mt.realized + mt.dividendTotal, 2), mt.netPnl);
+  check('_metrics 不把分隔列與警告列當成指標',
+    mt.lastRebuild !== '' && !('——' in mt), mt.lastRebuild);
+
+  // 空字串必須讀成 null。XIRR 算不出來時「指標」寫的就是空字串，
+  // 直接 _num 會變成 0 —— 畫面上會顯示「年化 0%」而不是「還算不出來」。
+  {
+    const colA = panelSheet.getRange(1, 1, panelSheet.getLastRow(), 1)
+      .getValues().map(r => String(r[0]).trim());
+    const rowNo = colA.indexOf('XIRR（年化）') + 1;
+    check('指標表上找得到 XIRR 那一列', rowNo > 0, rowNo);
+    const cell = panelSheet.getRange(rowNo, 2);
+    const keep = cell.getValue();
+    cell.setValue('');
+    check('_metrics 把空字串讀成 null 而不是 0', Snapshot._metrics(ss).xirr === null,
+      String(Snapshot._metrics(ss).xirr));
+    cell.setValue(keep);
+  }
 }
 
 // ─── T14  每日快照改寫長表 ────────────────────────────────────────

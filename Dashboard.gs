@@ -67,14 +67,17 @@ var Dashboard = (() => {
     var cash     = Snapshot._cash(ss);
     var series   = Snapshot.totalSeries(365, ss);
 
+    // dividendSeries（年度／月分佈）刻意不放進來：網頁版的兩張股利圖已經拿掉，
+    // 改成績效條裡的「累計股利 + 今年 YoY」兩格，那兩個數字 _dividends 就有。
+    // 一份沒有人畫的逐年逐月序列只會佔掉下面那 90KB 的快取額度。
     var payload = {
       generatedAt: Utilities.formatDate(new Date(), 'GMT+8', 'yyyy-MM-dd HH:mm'),
       totals:      Snapshot._totals(ss),
+      metrics:     Snapshot._metrics(ss),
       series:      series,
       holdings:    holdings,
       cash:        cash,
       dividends:   Snapshot._dividends(ss),
-      dividendSeries: Snapshot.dividendSeries(ss),
       allocation:  Snapshot._allocation(ss),
       fromCache:   false
     };

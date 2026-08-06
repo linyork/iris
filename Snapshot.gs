@@ -59,14 +59,22 @@ var Snapshot = (() => {
     // 一天 18 列左右，往回抓足夠的量就好，不要整張讀
     var span = Math.min(lastRow - 1, (limit || 40) * 40);
     var startRow = Math.max(2, lastRow - span + 1);
-    var data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 7).getValues();
+    var data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 9).getValues();
 
     return data
       .filter(r => r[0] && _str(r[1]) === '合計' && _str(r[2]) === '總資產')
-      .map(r => ({
-        date:  r[0] instanceof Date ? _ymd(r[0]) : _str(r[0]),
-        total: _num(r[6])
-      }))
+      .map(r => {
+        var o = {
+          date:  r[0] instanceof Date ? _ymd(r[0]) : _str(r[0]),
+          total: _num(r[6])
+        };
+        // 狀態只在「不是正常交易日」時才帶出去（休市／資料未更新／報價異常）。
+        // 一年 365 個 "交易日" 字串會白白吃掉 Dashboard 那 90KB 的快取額度，
+        // 而會影響判讀的本來就只有異常的那幾天 —— 平的那一段是假日還是抓取失敗。
+        var st = _str(r[8]);
+        if (st && st !== '交易日') o.status = st;
+        return o;
+      })
       .filter(r => r.total > 0)
       .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   };
@@ -290,6 +298,67 @@ var Snapshot = (() => {
         date: _ymd(r.date), code: r.code, amount: _round(r.amount)
       }))
     };
+  };
+
+  /**
+   * 投資績效指標（讀「指標」那張 key-value 表）
+   *
+   * `Position.rebuild()` 早就把未實現／已實現／累計股利／淨損益／XIRR 都算好寫在那裡了，
+   * 只是沒有人把它接出來 —— 儀表板因此只講得出「有多少」，講不出「賺多少」。
+   *
+   * ⚠️ 一併帶出最上面的「⚠️ 待修正」列。那是 `Position.replay` 的警告（懸空的賣出、
+   * 抓不到市價的檔）唯一的出口；少了它，畫面會把少算過的數字照樣畫成圖，一聲不吭。
+   *
+   * 分隔列（`—— 投資績效 ——` 這種）與空字串都會被濾掉：XIRR 算不出來時寫的是空字串，
+   * 直接 _num 會變成 0，看起來像「年化報酬率 0%」而不是「還算不出來」。
+   *
+   * 刻意不併進 `collectAll()`：那份會整包序列化進 LLM prompt，形狀一改就得同時看
+   * AdvisorCheck 與三份報告，不是這裡該順手做的事。
+   */
+  snap._metrics = (ss) => {
+    var sheet = ss.getSheetByName('指標');
+    if (!sheet) return null;
+    try {
+      var kv = {}, warnings = [];
+      AssetSchema.readObjects(sheet).forEach(r => {
+        var k = _str(r['指標']);
+        if (!k) return;
+        if (k.indexOf('⚠️') === 0) {
+          var w = _str(r['說明']);
+          if (w) warnings.push(w);
+          return;
+        }
+        if (k.indexOf('——') === 0) return;      // 分隔列
+        kv[k] = r['數值'];
+      });
+
+      // 空字串 = 算不出來，要傳 null 而不是 0
+      var n = (key) => {
+        var v = kv[key];
+        if (v === '' || v === null || v === undefined) return null;
+        return _num(v);
+      };
+
+      return {
+        stockCost:     n('股票投入成本'),
+        unrealized:    n('未實現損益'),
+        unrealizedPct: n('未實現報酬率'),
+        realized:      n('已實現損益'),
+        dividendTotal: n('累計股利'),
+        netPnl:        n('淨損益'),
+        xirr:          n('XIRR（年化）'),
+        stockRatio:    n('股票佔比'),
+        cashRatio:     n('現金佔比'),
+        physicalRatio: n('實體佔比'),
+        tradeCount:    n('交易筆數'),
+        positionCount: n('持倉檔數'),
+        lastRebuild:   _str(kv['最後重算']),
+        warnings:      warnings
+      };
+    } catch (e) {
+      Logger.warning('Snapshot._metrics', '讀取指標失敗', e.message);
+      return null;
+    }
   };
 
   /**
