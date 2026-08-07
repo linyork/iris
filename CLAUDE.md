@@ -547,6 +547,59 @@ has to shrink. `renderPanel()` in `DevTools.gs` redraws it without recomputing a
 ⚠️ `面板` is `freeform: true` in `AssetSchema.TABS`: no header contract, and `build()` skips
 the freeze/bold it applies to every other tab (row 1 there is data, not a header).
 
+⚠️ A new 指標 row has **three** readers to update, not one: `Snapshot._metrics` (which maps
+sheet keys to JSON keys by hand) and the 投資績效 block in **both** `DashboardPage.html` and
+`MiniAppPage.html`. Writing the row alone changes nothing anyone can see.
+
+### 期初不是買進，是開帳餘額
+
+`XIRR（年化）` read blank for weeks with the note 「現金流時間跨度不足」, and both of those
+were wrong. There were 35 flows across 4 days with both signs — plenty of span. The real
+problem was the anchor: `期初` rows were fed to XIRR as **purchases at cost**, so a whole
+portfolio's lifetime gain got compressed into the few days since the migration date. The true
+root sits at r ≈ 2×10¹⁵; `p.xirr` searches `[-0.9999, 10]`, finds no sign change, returns null.
+
+`期初` is an **opening balance**, so the opening flow is the **market value on the anchor date**,
+read from `每日快照` (`Position._openingValue`). The lifetime gain then sits inside the opening
+balance where it belongs, and XIRR measures return since Iris started keeping complete books.
+
+Three things that must stay true:
+
+- **The opening snapshot is the last one strictly _before_ the anchor date.** Snapshots are
+  written at 18:00 and already contain that day's trades; anchoring on the anchor date itself
+  double-counts every trade made that day — once inside the opening value, once as a flow.
+  Everything dated `<= opening.date` is therefore skipped when building flows.
+- **No snapshot, no XIRR.** Falling back to cost is exactly the bug above. The note says so.
+- **Under `Position.XIRR_MIN_DAYS` (90) the value stays blank**, because annualizing a short
+  window is meaningless — 5 days at +0.7% annualizes to +107%. The note carries the
+  *un-annualized* period return instead, which is true from day one.
+
+⚠️ The three reasons XIRR can be blank (no snapshot / no root / span too short) are distinct,
+and the note naming which one is written by `Position` and carried through `_metrics().xirrNote`
+to both pages. Both pages used to hard-code 「現金流跨度不足」, which was wrong in two cases out
+of three. Don't re-introduce a front-end guess.
+
+### 現值殖利率 vs 成本殖利率
+
+Same numerator — the trailing 12 months of dividends actually received — over two denominators:
+現在市值 and 投入成本. Their ratio is identically `市值 ÷ 成本` (= 1 + 未實現報酬率), asserted in
+`T25`, so 成本殖利率 carries no information the panel doesn't already show. It is displayed
+because the owner asked for it; 現值殖利率 is the one with a decision attached (opportunity cost
+against what else that money could buy).
+
+Two rules the numerator must keep:
+
+- **Only instruments currently held count.** Cleared positions (2412, 00687B) paid real money in
+  the last year, but they are not in the denominator; counting them inflates the yield, and
+  inflates it in the flattering direction.
+- **Migrated dividends _do_ count**, unlike in XIRR. They carry real dates going back to 2023 and
+  are the only reason these two metrics work without backfilling anything. XIRR excludes
+  pre-anchor flows because the opening balance already contains them; a yield is asking a
+  different question — what these assets pay per year — so the exclusion doesn't apply.
+
+Stored at 6 decimal places, not 4: a yield is a 0.0x quantity, and 4 dp leaves two significant
+figures and breaks the ratio identity above.
+
 ### Daily Snapshot
 
 `setData()` writes one day of state into `每日快照` at 18:00 — a **long table**:

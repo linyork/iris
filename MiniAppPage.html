@@ -437,9 +437,13 @@ function renderMetrics(d) {
     { k: '累計股利',   v: fmt(m.dividendTotal), c: '',
       s: dv ? '今年 ' + fmt(dv.thisYear.total) : '' },
     { k: '淨損益',     v: signed(m.netPnl),     c: dir(m.netPnl),     s: '未實現+已實現+股利' },
-    // XIRR 只從遷移日起算 —— 不寫出來會被當成一輩子的績效
+    // 說明由 Position 寫進「指標」傳上來，不在前端猜原因（算不出來有三種原因）
     { k: 'XIRR（年化）', v: m.xirr === null ? '—' : pct(m.xirr), c: dir(m.xirr),
-      s: m.xirr === null ? '現金流跨度不足' : '自期初建倉日起算' },
+      s: m.xirrNote || (m.xirr === null ? '尚無法計算' : '自開帳市值起算') },
+    { k: '現值殖利率', v: m.currentYield === null ? '—' : pct(m.currentYield), c: '',
+      s: '近12月配息 ÷ 市值' },
+    { k: '成本殖利率', v: m.costYield === null ? '—' : pct(m.costYield), c: '',
+      s: '近12月配息 ÷ 成本' },
     { k: '部位', v: (m.positionCount === null ? '—' : m.positionCount + ' 檔'), c: '',
       s: m.lastRebuild ? '重算於 ' + m.lastRebuild.slice(5, 16) : '' }
   ];

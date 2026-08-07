@@ -319,7 +319,7 @@ var Snapshot = (() => {
     var sheet = ss.getSheetByName('指標');
     if (!sheet) return null;
     try {
-      var kv = {}, warnings = [];
+      var kv = {}, note = {}, warnings = [];
       AssetSchema.readObjects(sheet).forEach(r => {
         var k = _str(r['指標']);
         if (!k) return;
@@ -330,6 +330,7 @@ var Snapshot = (() => {
         }
         if (k.indexOf('——') === 0) return;      // 分隔列
         kv[k] = r['數值'];
+        note[k] = _str(r['說明']);
       });
 
       // 空字串 = 算不出來，要傳 null 而不是 0
@@ -347,6 +348,11 @@ var Snapshot = (() => {
         dividendTotal: n('累計股利'),
         netPnl:        n('淨損益'),
         xirr:          n('XIRR（年化）'),
+        // 兩個頁面以前各自寫死「現金流跨度不足」，而那句話多半是錯的（真正的
+        // 原因有三種）。原因只有 Position 算得出來，就讓它寫進說明欄一路傳上來。
+        xirrNote:      note['XIRR（年化）'] || '',
+        currentYield:  n('現值殖利率'),
+        costYield:     n('成本殖利率'),
         stockRatio:    n('股票佔比'),
         cashRatio:     n('現金佔比'),
         physicalRatio: n('實體佔比'),

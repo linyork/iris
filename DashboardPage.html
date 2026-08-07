@@ -582,8 +582,21 @@ function renderMetrics(d) {
       k: 'XIRR（年化）',
       v: m.xirr === null ? '—' : fmtPct(m.xirr),
       cls: dirClass(m.xirr),
-      // 這個數字只從遷移日起算，不是真實持有全期 —— 不寫出來會被當成一輩子的績效
-      s: m.xirr === null ? '現金流跨度不足' : '自期初建倉日起算'
+      // 說明由 Position 寫進「指標」再一路傳上來 —— 算不出來的原因有三種，
+      // 這裡寫死任何一種都會有兩種是騙人的
+      s: m.xirrNote || (m.xirr === null ? '尚無法計算' : '自開帳市值起算')
+    },
+    {
+      k: '現值殖利率',
+      v: m.currentYield === null ? '—' : fmtPct(m.currentYield),
+      cls: '',
+      s: '近 12 個月配息 ÷ 現在市值'
+    },
+    {
+      k: '成本殖利率',
+      v: m.costYield === null ? '—' : fmtPct(m.costYield),
+      cls: '',
+      s: '近 12 個月配息 ÷ 投入成本'
     },
     {
       k: '部位', v: (m.positionCount === null ? '—' : m.positionCount + ' 檔'), cls: '',

@@ -589,10 +589,13 @@ console.log('\nT6  記一筆賣出（模擬 Telegram 輸入）');
   const panel = AssetSchema.readObjects(target.getSheetByName('指標'));
   const get = k => num((panel.find(x => x['指標'] === k) || {})['數值']);
   check('指標已實現損益跟著出現', near(get('已實現損益'), NET - OUT, 1), money(get('已實現損益')));
-  // 期初、賣出、期末估值全在同一天 → 時間跨度 0，XIRR 無解，這是對的
-  check('同日現金流的 XIRR 仍為空，且說明講清楚原因',
+  // 期初日就是今天，離開帳日只有幾天 → 不年化，但說明要講出真正的原因
+  // （舊版一律寫「時間跨度不足」，那句話在三種情況裡有兩種是騙人的）
+  const xirrNote = String((panel.find(x => x['指標'] === 'XIRR（年化）') || {})['說明']);
+  check('短期間的 XIRR 仍為空，且說明講清楚原因（不年化，但給期間報酬）',
     String((panel.find(x => x['指標'] === 'XIRR（年化）') || {})['數值']) === '' &&
-    /時間跨度不足/.test(String((panel.find(x => x['指標'] === 'XIRR（年化）') || {})['說明'])), '');
+    /年化沒有意義|開帳市值無從取得|無解/.test(xirrNote), xirrNote);
+  check('說明沒有再謊稱「時間跨度不足」', !/時間跨度不足/.test(xirrNote), xirrNote);
   // 賣價比評價用的市價高一點，所以總資產不是原地不動：
   // 股票市值 −股數×市價、現金 +股數×賣價−手續費
   check('總資產守恆：只差在賣價與市價的價差扣掉手續費',
@@ -1635,6 +1638,94 @@ console.log('\nT24  主檔的修改');
 }
 
 // 選用：拿真實的券商匯出檔跑一次解析，只印不斷言（檔案不進版控）
+// ─── T25  XIRR 的錨點與殖利率 ────────────────────────────────────
+//
+// 期初列不是買進，是開帳餘額。舊版拿它的**成本**當第一筆負現金流，等於宣稱
+// 「遷移日花了那筆成本，幾天後值今天的市值」—— 一輩子的獲利被壓進幾天裡年化，
+// 真正的解會跑到 10¹⁵ 那種量級，遠在求解區間外，於是靜靜回 null，而說明欄還
+// 寫著「時間跨度不足」。這裡驗證改用「錨定日前一天的市值」開帳之後有解。
+console.log('\nT25  XIRR 錨點與殖利率');
+{
+  const tradeSheet = target.getSheetByName('交易');
+  const anchorRow = AssetSchema.readObjects(tradeSheet).find(r => String(r['動作']) === '期初');
+  const anchor = anchorRow['日期'] instanceof Date ? anchorRow['日期'] : new Date(String(anchorRow['日期']));
+  const day = (n) => { const d = new Date(anchor); d.setDate(d.getDate() + n); return d; };
+  const ymd = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') +
+                     '-' + String(d.getDate()).padStart(2, '0');
+
+  const snapSheet = target.getSheetByName('每日快照');
+  // 開帳市值刻意用「真實市值的一半」這種合成值：只要 XIRR 有解就算過，
+  // 不能把真實金額寫進這個檔案（見 README「不可進 git 的東西」）
+  const panelBefore = AssetSchema.readObjects(target.getSheetByName('指標'));
+  const MV = num((panelBefore.find(x => x['指標'] === '股票市值') || {})['數值']);
+  const OPEN = Math.round(MV * 0.5);
+
+  // 只留一列：早於錨定日 120 天的股票市值。writeBlock 會把既有列清掉，
+  // 所以 _openingValue 只會挑到它 —— 跨度 120 天 > 90 天門檻，該出數字了
+  AssetSchema.writeBlock(snapSheet,
+    [[ymd(day(-120)), '合計', '股票市值', '', '', '', OPEN, 'TWD', '交易日']], 9);
+
+  const open = Position._openingValue(target, anchor);
+  check('_openingValue 取到早於錨定日的那一天', open !== null && num(open.value) === OPEN,
+    open ? ymd(open.date) + ' / ' + money(open.value) : 'null');
+
+  Position.rebuild();
+  const panel = AssetSchema.readObjects(target.getSheetByName('指標'));
+  const row = k => (panel.find(x => x['指標'] === k) || {});
+  const xv = row('XIRR（年化）')['數值'];
+  check('跨度超過門檻後 XIRR 算得出數字（不再是空白）', String(xv) !== '' && isFinite(num(xv)), String(xv));
+  check('XIRR 說明講明是自開帳市值起算', /開帳市值/.test(String(row('XIRR（年化）')['說明'])),
+    String(row('XIRR（年化）')['說明']));
+  check('開帳市值低於期末市值 → XIRR 為正', num(xv) > 0, String(xv));
+
+  // ── 殖利率 ────────────────────────────────────────────────────
+  //
+  // 用**差分**驗證，不重算一份絕對值：這張表上的近 12 個月股利來自遷移進來的
+  // 真實配息，把它在測試裡重算一遍等於把同一段邏輯抄第二份，抄錯了兩邊一起錯。
+  // 「多記一筆該算的就多多少、多記一筆不該算的就不動」才是真正要守的規則。
+  const held = AssetSchema.readObjects(target.getSheetByName('持倉'))
+    .filter(x => num(x['股數']) > 0).map(x => String(x['代號']));
+  const metric = () => {
+    const t = AssetSchema.readObjects(target.getSheetByName('指標'));
+    const g = k => num((t.find(x => x['指標'] === k) || {})['數值']);
+    return { cur: g('現值殖利率'), cost: g('成本殖利率'), mv: g('股票市值'), amt: g('股票投入成本'),
+             note: String((t.find(x => x['指標'] === '現值殖利率') || {})['說明']) };
+  };
+  const addDiv = (code, amount, daysAgo, memo) => AssetSchema.appendTrade({
+    日期: ymd(day(-daysAgo)), 動作: '股利', 代號: code, 金額: amount,
+    幣別: 'TWD', 帳戶: '國泰證券戶', 分類: '投資', 備註: memo,
+    來源: 'test', 建立時間: ymd(day(-daysAgo)) + ' 18:00:00'
+  }, target);
+
+  const m0 = metric();
+  check('殖利率一開始就有值（遷移進來的配息本來就有真實日期）', m0.cur > 0 && m0.cost > 0,
+    m0.cur + ' / ' + m0.cost);
+
+  const DIV = 12345;                                   // 合成金額
+  addDiv(held[0], DIV, 30, 'T25 現有持股、12 個月內');
+  Position.rebuild();
+  const m1 = metric();
+  check('現有持股的新配息讓現值殖利率剛好增加 配息÷市值',
+    near(m1.cur - m0.cur, DIV / m1.mv, 3e-6), (m1.cur - m0.cur) + ' vs ' + (DIV / m1.mv));
+  check('成本殖利率同步增加 配息÷成本',
+    near(m1.cost - m0.cost, DIV / m1.amt, 3e-6), (m1.cost - m0.cost) + ' vs ' + (DIV / m1.amt));
+
+  addDiv('ZZ9999', 99999, 30, 'T25 已出清標的');
+  Position.rebuild();
+  check('已出清標的的配息完全不進分子', near(metric().cur, m1.cur, 1e-9), String(metric().cur));
+
+  addDiv(held[0], 88888, 400, 'T25 一年以前');
+  Position.rebuild();
+  const m2 = metric();
+  check('一年以前的配息完全不進分子', near(m2.cur, m1.cur, 1e-9), String(m2.cur));
+
+  // 兩個指標的比值恆等於 市值÷成本（= 1 + 未實現報酬率）——
+  // 這正是「成本殖利率沒有帶來新資訊」的證明，寫成斷言留著
+  check('成本殖利率 ÷ 現值殖利率 = 市值 ÷ 成本',
+    near(m2.cost / m2.cur, m2.mv / m2.amt, 1e-3), (m2.cost / m2.cur) + ' vs ' + (m2.mv / m2.amt));
+  check('說明欄講明分子只算現有持股', /僅計現有持股/.test(m2.note), m2.note);
+}
+
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);

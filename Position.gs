@@ -39,6 +39,16 @@ var Position = (() => {
     return Math.round((n + Number.EPSILON) * f) / f;
   };
 
+  // 說明欄要寫給人看的日期。不用 Utilities.formatDate 是為了不綁時區設定 ——
+  // 這些日期本來就是從試算表的日期欄讀出來的本地日。
+  // 用鴨子型別而不是 instanceof：試算表讀回來的日期在 GAS 與本機測試裡都可能
+  // 來自另一個 realm，instanceof Date 會是 false，日期就靜靜變成空字串。
+  var _ymd = (d) => {
+    if (!d || typeof d.getFullYear !== 'function') return '';
+    var p2 = (n) => (n < 10 ? '0' : '') + n;
+    return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate());
+  };
+
   /**
    * 市價公式。GOOGLEFINANCE 抓不到時（額度用完、標的剛掛牌、Google 那邊短暫沒資料）
    * 退到 TWSE 官方的 STOCK_DAY_AVG 端點硬解析收盤價。只在 TPE 市場退這一步 ——
@@ -172,6 +182,45 @@ var Position = (() => {
   };
 
   // ─── XIRR ──────────────────────────────────────────────────────
+
+  // 年化一段太短的期間毫無意義：5 天賺 0.7% 年化就是 107%，市場多動一天就翻倍。
+  // 未滿這個天數時「數值」留空，說明欄改寫未年化的期間報酬 —— 那個數字現在就是真的。
+  p.XIRR_MIN_DAYS = 90;
+
+  /**
+   * XIRR 的開帳市值：早於錨定日的最後一天，「每日快照」記的股票市值。
+   *
+   * 為什麼是**早於**而不是當天：錨定日（遷移日）當天通常已經有真實買賣，而快照
+   * 是當天 18:00 收盤後寫的，已經含進那些交易。拿當天的快照當開帳，那幾筆就會
+   * 被算兩次 —— 一次在開帳餘額裡，一次又當成流量。前一天的收盤市值才乾淨對應
+   * 期初列的持股。
+   *
+   * 讀不到就回 null，由呼叫端把 XIRR 留空並說明原因；這裡不猜、也不用成本代替
+   * （用成本就退回原本那個 10¹⁵ 的坑）。
+   *
+   * @param {object} ss
+   * @param {Date} anchorDate 期初列的日期
+   * @returns {{date: Date, value: number}|null}
+   */
+  p._openingValue = (ss, anchorDate) => {
+    try {
+      var sheet = ss.getSheetByName('每日快照');
+      if (!sheet || !anchorDate) return null;
+      var best = null;
+      AssetSchema.readObjects(sheet).forEach(r => {
+        if (_str(r['類型']) !== '合計' || _str(r['鍵']) !== '股票市值') return;
+        var d = _date(r['日期']);
+        if (!d || d >= anchorDate) return;
+        var v = _num(r['市值']);
+        if (v <= 0) return;
+        if (!best || d > best.date) best = { date: d, value: v };
+      });
+      return best;
+    } catch (e) {
+      Logger.warning('Position._openingValue', '讀不到每日快照的開帳市值', e.message);
+      return null;
+    }
+  };
 
   /**
    * 用 Newton-Raphson 解年化報酬率，收斂失敗才退回二分法。
@@ -405,29 +454,96 @@ var Position = (() => {
       Logger.error('Position.rebuild', '有持股讀不到市價', { codes: codes });
     }
 
-    // ── XIRR：只看投資相關現金流，最後補一筆「今天全部變現」 ──
+    // ── XIRR ──────────────────────────────────────────────────
     //
-    // ⚠️ 遷移進來的歷史股利要排除。期初建倉的日期是遷移日，若把遷移日「之前」
-    //    的股利算進去，就會出現一堆沒有對應投入的正現金流，XIRR 會噴出天文數字。
-    //    也就是說 XIRR 是「從遷移日起算」的年化報酬，不是你真實持有全期的。
-    //    等哪天回補了券商歷史成交明細，這個數字才會變成真的。
+    // ⚠️ 「期初」不是買進，是**開帳餘額**，這一行區別就是這個數字有沒有意義。
+    //
+    // 舊版把期初列當成買進，用**成本**當第一筆負現金流。可是那個成本是好幾年
+    // 累積下來的，日期卻是遷移日 —— 等於宣稱「遷移日花 700 萬買，四天後值 951
+    // 萬」。一輩子的獲利被壓進幾天裡年化，真正的解落在 r ≈ 2×10¹⁵，遠在
+    // `p.xirr` 的搜尋上限（hi = 10）之外，於是回 null，而說明欄還寫著
+    // 「現金流跨度不足」——  跨度不是問題，錨點才是。
+    //
+    // 正確做法是拿**錨定日的市值**當開帳：一輩子的獲利留在開帳餘額裡（它本來
+    // 就該在那），XIRR 量的是「自 Iris 開始完整記帳以來」的資金加權報酬。
+    // 開帳市值只有「每日快照」有，所以往前找**早於錨定日**的最後一天；那天
+    // 收盤的市值恰好對應期初列的持股，之後的每一筆買賣才是流量。
+    //
+    // 沒有期初列（整本都是真實交易）就不需要錨點，全部照舊當流量算。
+    var anchor = trades
+      .filter(t => _str(t['動作']) === '期初')
+      .map(t => _date(t['日期']))
+      .filter(d => d)
+      .sort((a, b) => a - b)[0] || null;
+
+    var opening = anchor ? p._openingValue(ss, anchor) : null;
+    var xirrBlocked = anchor && !opening
+      ? '找不到早於期初日（' + _ymd(anchor) + '）的每日快照，開帳市值無從取得'
+      : '';
+
     var flows = [];
+    if (opening) flows.push({ date: opening.date, amount: -opening.value });
+
     trades.forEach(t => {
       var action = _str(t['動作']);
       var d = _date(t['日期']);
       if (!d) return;
-      var migrated = _str(t['來源']) === 'migration';
-      if (action === '買進' || action === '期初') {
+      // 期初已由開帳市值取代；錨點當天（含）以前的一切也都已經包在那個市值裡
+      if (action === '期初') return;
+      if (opening && d <= opening.date) return;
+      if (action === '買進') {
         flows.push({ date: d, amount: -(_num(t['股數']) * _num(t['單價']) + _num(t['手續費'])) });
       } else if (action === '賣出') {
         flows.push({ date: d, amount: _num(t['股數']) * _num(t['單價']) - _num(t['手續費']) - _num(t['交易稅']) });
-      } else if (action === '股利' && !migrated) {
+      } else if (action === '股利') {
         flows.push({ date: d, amount: _num(t['金額']) });
       }
     });
     flows.sort((a, b) => a.date - b.date);
     if (flows.length) flows.push({ date: new Date(), amount: stockValue });
-    var xirr = p.xirr(flows);
+
+    var xirr     = xirrBlocked ? null : p.xirr(flows);
+    var spanDays = flows.length > 1
+      ? Math.round((flows[flows.length - 1].date - flows[0].date) / 86400000) : 0;
+
+    // 期間太短就不年化 —— 但期間報酬本身是真的，寫進說明欄
+    var xirrNote;
+    if (xirrBlocked) {
+      xirrNote = xirrBlocked + '，暫時算不出來';
+    } else if (xirr === null) {
+      xirrNote = '現金流無解（全部同號或找不到報酬率），等有跨期買賣後才算得出來';
+    } else if (spanDays < p.XIRR_MIN_DAYS) {
+      var periodPct = Math.pow(1 + xirr, spanDays / 365) - 1;
+      xirrNote = '起算日 ' + _ymd(flows[0].date) + ' 至今僅 ' + spanDays + ' 天，' +
+        '年化沒有意義（期間報酬 ' + (periodPct >= 0 ? '+' : '') +
+        (periodPct * 100).toFixed(2) + '%）；滿 ' + p.XIRR_MIN_DAYS + ' 天後才顯示';
+      xirr = null;
+    } else {
+      xirrNote = '含時間加權的年化報酬率，自 ' + _ymd(flows[0].date) +
+        ' 的開帳市值起算' + (anchor ? '（遷移前的損益已含在開帳餘額裡，不計入報酬）' : '');
+    }
+
+    // ── 殖利率：近 12 個月實際領到的股利 ÷ 現在的市值／成本 ──
+    //
+    // ⚠️ 分子只算**現在還持有**的標的。已出清的部位（2412、00687B…）過去一年
+    //    照樣發過錢，但它們不在分母裡 —— 拿走掉的東西發的錢除以留著的東西的
+    //    成本，比率會虛高，而且是往好看的方向虛高。
+    //
+    // 遷移進來的股利**要算**：那是有真實日期的歷史配息（可回溯到 2023），
+    // 正是這兩個指標唯一不需要回補就能用的原因。與 XIRR 的排除規則相反，
+    // 因為這裡量的是「這些資產一年吐多少現金」，不是「錨點之後的流量」。
+    var heldCodes = {};
+    positions.forEach(x => { if (_num(x['股數']) > 0) heldCodes[_str(x['代號'])] = true; });
+    var ttmFrom = new Date();
+    ttmFrom.setDate(ttmFrom.getDate() - 365);
+    var ttmDividend = trades.reduce((a, t) => {
+      if (_str(t['動作']) !== '股利') return a;
+      if (!heldCodes[_str(t['代號'])]) return a;
+      var d = _date(t['日期']);
+      return (d && d >= ttmFrom) ? a + _num(t['金額']) : a;
+    }, 0);
+    var yieldNote = '近 12 個月配息 ' + Math.round(ttmDividend).toLocaleString() +
+      '（僅計現有持股，已出清標的不算）';
 
     var pct = (n, d) => (d ? n / d : 0);
 
@@ -460,10 +576,15 @@ var Position = (() => {
       ['累計股利',     _round(totalDividend), ''],
       ['淨損益',       _round(stockValue - stockCost + totalRealized + totalDividend),
                        '未實現 + 已實現 + 股利'],
-      ['XIRR（年化）', xirr === null ? '' : xirr,
-        xirr === null
-          ? '現金流時間跨度不足（或全部同號），等有跨期交易後才算得出來'
-          : '含時間加權的年化報酬率，自期初建倉日起算'],
+      ['XIRR（年化）', xirr === null ? '' : xirr, xirrNote],
+      // 分子相同、分母不同：現值＝今天用市價重買一次的配息率（比得動別的標的），
+      // 成本＝當初投進去的那筆錢現在吐多少。兩者的比值恆等於 1 + 未實現報酬率。
+      // 存 6 位小數（跟 XIRR 一致），不是 4 —— 殖利率本來就是 0.0x 量級，
+      // 砍到 4 位等於只剩兩位有效數字，兩個指標的比值也就對不回市值÷成本了
+      ['現值殖利率', stockValue > 0 ? _round(ttmDividend / stockValue, 6) : '',
+        yieldNote + ' ÷ 現在市值'],
+      ['成本殖利率', stockCost > 0 ? _round(ttmDividend / stockCost, 6) : '',
+        yieldNote + ' ÷ 投入成本'],
       ['—— 實體資產 ——', '', ''],
       ['實體資產成本', _round(physicalCost),  ''],
       ['實體資產損益', _round(physicalValue - physicalCost), ''],
