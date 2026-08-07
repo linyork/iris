@@ -7,17 +7,55 @@
 var StockPrice = (() => {
   var sp = {};
 
+  /**
+   * ⚠️ MIS 端點會擋掉「看起來不像瀏覽器」的請求。沒有 User-Agent 與 Referer 時
+   *    它可能回 403、回空的 HTML，或乾脆讓連線掛著直到 UrlFetchApp 丟例外 ——
+   *    2026-08-06 起連續失敗好幾天就是這個形狀。這兩個標頭不是裝飾。
+   *
+   * ⚠️ 失敗時要把**狀態碼與回應開頭**記下來。舊版只記 `ex`，而例外的 message 是
+   *    不可列舉屬性，JSON.stringify 之後只剩 `{"name":"Exception"}`（見 Logger），
+   *    於是連續壞了好幾天都查不出原因。
+   */
   var _fetch = (list) => {
+    var url = '';
     try {
-      var codes    = list.map(s => 'tse_' + s + '.tw').join('|');
-      var url      = 'https://mis.twse.com.tw/stock/api/getStockInfo.jsp' +
-                     '?ex_ch=' + encodeURIComponent(codes) + '&_=' + Date.now();
-      var response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-      if (response.getResponseCode() !== 200) return [];
-      var data = JSON.parse(response.getContentText());
-      return data.msgArray || [];
+      var codes = list.map(s => 'tse_' + s + '.tw').join('|');
+      url = 'https://mis.twse.com.tw/stock/api/getStockInfo.jsp' +
+            '?ex_ch=' + encodeURIComponent(codes) + '&_=' + Date.now();
+      var response = UrlFetchApp.fetch(url, {
+        muteHttpExceptions: true,
+        followRedirects:    true,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+                        '(KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+          'Referer':    'https://mis.twse.com.tw/stock/fibest.jsp',
+          'Accept':     'application/json, text/javascript, */*; q=0.01'
+        }
+      });
+      var code = response.getResponseCode();
+      var text = response.getContentText();
+      if (code !== 200) {
+        Logger.warning('StockPrice._fetch', 'HTTP ' + code,
+          { codes: list, body: String(text).slice(0, 200) });
+        return [];
+      }
+      var data;
+      try {
+        data = JSON.parse(text);
+      } catch (parseEx) {
+        // 端點改版或被導去登入頁時回的是 HTML，這裡不能讓它偽裝成「查無資料」
+        Logger.error('StockPrice._fetch', '回應不是 JSON',
+          { codes: list, body: String(text).slice(0, 200) });
+        return [];
+      }
+      if (!data.msgArray || !data.msgArray.length) {
+        Logger.warning('StockPrice._fetch', '端點回了空的 msgArray',
+          { codes: list, rtcode: String(data.rtcode || ''), rtmessage: String(data.rtmessage || '') });
+        return [];
+      }
+      return data.msgArray;
     } catch (ex) {
-      Logger.error('StockPrice._fetch', '失敗', ex);
+      Logger.error('StockPrice._fetch', '請求丟出例外', ex);
       return [];
     }
   };
