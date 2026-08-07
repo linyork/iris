@@ -55,6 +55,8 @@ var ChatBot = (() => {
       var finalResponse = '';
       var lastToolResult = null;
       var calledTools = {};
+      var wroteViaTool   = false;  // 這一輪有沒有真的執行過寫入工具（見 Utils.claimsWriteDone）
+      var claimCorrected = false;  // 攔截只做一次，避免模型跟提示詞互相頂到把輪數燒光
       var startTime = new Date().getTime();
       var elapsed   = () => new Date().getTime() - startTime;
       var timedOut  = false;
@@ -122,6 +124,7 @@ var ChatBot = (() => {
 
             var callKey = name + '|' + JSON.stringify(args);
             var result;
+            if (Tools.isWrite(name)) wroteViaTool = true;
             if (calledTools[callKey] !== undefined) {
               result = calledTools[callKey];
               Logger.info('ChatBot.reply', '使用快取工具結果: ' + name);
@@ -158,6 +161,23 @@ var ChatBot = (() => {
 
         // 文字回應
         if (textPart && textPart.text) {
+          // 「說做完了，但一個寫入工具都沒叫過」—— 把話打回去，讓它在還有工具可用的
+          // 這一輪去執行。這裡不直接改寫模型的字：改字只是把那句話藏起來，帳一樣沒記。
+          if (!wroteViaTool && !claimCorrected && !isLastTurn &&
+              Utils.claimsWriteDone(textPart.text)) {
+            claimCorrected = true;
+            Logger.warning('ChatBot.reply', '宣稱已完成但沒有呼叫寫入工具，打回重做',
+              textPart.text.slice(0, 120));
+            contents.push({ role: 'model', parts: parts });
+            contents.push({ role: 'user', parts: [{ text:
+              '（系統攔截）你剛才說已經完成了，但這一輪沒有任何寫入工具被執行 —— ' +
+              '帳本一個字都沒有改到。\n' +
+              '若主人要的是記錄／校正／作廢／建帳戶，現在立刻呼叫對應的工具，不要再問一次確認：' +
+              '參數齊全就直接寫，工具回傳的結果才是確認，寫錯了還能用 voidTrade 撤銷。\n' +
+              '若這件事本來就不需要寫入，請重新回覆一次，並且不要用「已記錄／已校正／已完成」這類說法。'
+            }] });
+            continue;
+          }
           finalResponse = textPart.text;
           break;
         }
@@ -222,6 +242,17 @@ var ChatBot = (() => {
         }
       }
       finalResponse = Utils.formatForLine(cleanedResponse || finalResponse);
+
+      // 打回去之後還是那樣講（或根本沒機會打回去 —— 最後一輪沒有工具可用），
+      // 那就至少不要讓主人以為記好了。這裡用加註而不是整段換掉：萬一是誤判
+      // （模型只是在轉述查詢結果），原本的內容還在，加註本身也仍然是實話。
+      if (!wroteViaTool && Utils.claimsWriteDone(finalResponse)) {
+        Logger.error('ChatBot.reply', '宣稱已完成但整輪都沒有寫入工具，加註警告',
+          finalResponse.slice(0, 200));
+        finalResponse =
+          '⚠️ 底下這段話我沒有真的寫進帳本 —— 這一輪沒有任何寫入工具被執行。\n' +
+          '如果你要的是記錄／校正／作廢，請再講一次，我會實際執行。\n\n' + finalResponse;
+      }
 
       // 儲存對話
       GoogleSheet.saveChatMessage(userId, 'user', message);

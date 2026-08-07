@@ -401,6 +401,38 @@ rather than what it blocked: with no tool for "I opened a new account", the mode
 refuse, it makes it lie. Hence the matching rule in `Prompt.gs`: no "已記錄 / 已建立 / 已完成"
 before an actual tool result.
 
+### 「已記錄」是自由文字，只有工具名字算數
+
+That prompt rule is not enough on its own, and 2026-08-07 is the proof: asked to correct one
+account to an absolute balance, the model asked one confirming question, got 「是的」, and replied
+**「好的，已校正。」** with `toolCallCount: 0`. Nothing was written; the owner stopped chasing it
+because they had been told it was done. **A false success is worse than a refusal** — a refusal
+gets retried.
+
+The claim itself carries no evidence. The only evidence is whether a write tool ran this reply,
+so `ChatBot.reply` checks exactly that: `Tools.isWrite()` marks the ten tools that touch the
+spreadsheet, `Utils.claimsWriteDone()` recognises the claim, and a claim with no write gets
+**pushed back into the loop once** with the tools still attached — that turn is where the write
+finally happens. If it survives that (or the claim lands on the last turn, which has no tools),
+the reply goes out with a banner saying it was not written. Both paths land in `consolelog`.
+
+Three things that make this work rather than merely fire:
+
+- **The push-back is not a rewrite.** Editing the sentence would hide the claim and still leave
+  the ledger untouched; the point is to get the tool called.
+- **It happens once per reply** (`claimCorrected`). A model that disagrees would otherwise burn
+  all three turns arguing.
+- **`第 N 列` lines are stripped before matching.** `listTrades` prints 「…（已作廢）」 as data;
+  transcribing a query result is not claiming to have done something.
+
+The confirming question is itself the trigger — the gap between "I'll do it" and the next turn is
+where the action gets dropped. So `Prompt.gs` also says: parameters complete → call the tool, do
+not ask; the tool's return **is** the confirmation, and `voidTrade` undoes a mistake.
+
+⚠️ Adding a write tool means adding it to `WRITE_TOOLS` in `Tools.gs` as well — a third place
+alongside `definitions` and the `execute()` switch. Missing it doesn't error, it just stops that
+tool's false claims from being caught.
+
 ### 記錯了怎麼撤：作廢，不是刪、也不是反手記一筆
 
 `交易` is append-only, but append-only needs a way to **undo**, not a rule that nothing may

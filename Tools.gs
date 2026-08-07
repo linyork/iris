@@ -292,6 +292,24 @@ var Tools = (() => {
 
   tools.getDefinitions = () => definitions;
 
+  /**
+   * 這個工具會不會真的動到試算表？
+   *
+   * `ChatBot.reply` 用它回答一個它自己無法從文字判斷的問題：模型說「已記錄／已校正」的
+   * 時候，到底有沒有寫過。那句話是自由文字，唯一的證據就是這一輪執行過的工具名字。
+   *
+   * ⚠️ 加寫入工具時要一起加進來 —— 漏了只會讓那個工具的假宣稱不再被攔下，
+   *    不會有任何錯誤。`definitions` 與 `execute()` 的 switch 已經是必須成對修改的兩處，
+   *    這是第三處。
+   */
+  var WRITE_TOOLS = {
+    recordTrade: 1, recordDividend: 1, setCashBalance: 1, voidTrade: 1,
+    addAccount: 1, updateAccount: 1, updateInstrument: 1,
+    rememberShortTerm: 1, saveKnowledge: 1, deleteMemory: 1
+  };
+
+  tools.isWrite = (name) => !!WRITE_TOOLS[name];
+
   tools.execute = (name, args) => {
     try {
       Logger.info('Tools.execute', '執行工具: ' + name, args);
