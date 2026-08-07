@@ -86,6 +86,77 @@ var Position = (() => {
     return '=IFERROR(' + gf + ',' + twse + ')';
   };
 
+  /**
+   * 第三層報價：公式兩層都空手而回時，改由 GAS 自己抓，把數字直接寫進 H。
+   *
+   * 2026-08-07 六檔裡有五檔的 H 是空的，而 `=GOOGLEFINANCE("TPE:00878","price")`
+   * 單獨貼一格也是 #N/A —— 也就是說掛掉的不是某一檔，是 GOOGLEFINANCE 本身。
+   * 這種時候第二層的 `IMPORTDATA` 通常一起死：兩個都是**試算表側**的外部函式，
+   * 受同一份文件層級的節流管制。備援疊在同一層上，等於沒有備援。
+   *
+   * 所以第三層必須跳出試算表：`StockPrice` 走 `UrlFetchApp` 打 TWSE 的 MIS 端點，
+   * 那是伺服器端的請求，完全不受上面那套配額影響。
+   *
+   * ⚠️ 寫進去的是**死值**，不是公式 —— 它不會像公式那樣等報價回來自己更正。
+   *    可接受的原因是每次 `rebuild()` 都會先用 `writeBlock` 把公式整片重寫，
+   *    所以下一次重算一定會再給 GOOGLEFINANCE 一次機會，只有再次失敗才會又落到
+   *    這裡。粒度是「每次重算」而不是「每次重算完的即時更新」，但比空白好得多：
+   *    空白會讓 $I 歸零，接著總資產、佔比、每日快照全部跟著錯。
+   *
+   * ⚠️ MIS 端點只認上市（tse_），跟 `StockPrice` 本來的限制一樣；非 TPE 的標的
+   *    不送出去，省一次註定失敗的請求。
+   *
+   * @returns {{filled: Array<{code, price}>, stillMissing: Array<string>}}
+   */
+  p._fillMissingPrices = (ss, instByCode) => {
+    var out = { filled: [], stillMissing: [] };
+    if (typeof StockPrice === 'undefined' || typeof UrlFetchApp === 'undefined') return out;
+    try {
+      var sheet = ss.getSheetByName('持倉');
+      if (!sheet) return out;
+      var last = sheet.getLastRow();
+      if (last < 2) return out;
+
+      // 直接讀範圍而不是 readObjects：需要的是「第幾列」，而 readObjects 會跳過
+      // 空白列，index+2 不等於列號
+      var values = sheet.getRange(2, 1, last - 1, 8).getValues();   // A..H
+      var want = [];
+      values.forEach((row, i) => {
+        var code   = _str(row[0]);
+        var shares = _num(row[2]);
+        var price  = row[7];
+        if (!code || shares <= 0) return;
+        if (price !== '' && price !== null && _num(price) > 0) return;
+        var market = _str((instByCode[code] || {})['市場']) || 'TPE';
+        if (market !== 'TPE') { out.stillMissing.push(code); return; }
+        want.push({ code: code, row: i + 2 });
+      });
+      if (!want.length) return out;
+
+      Logger.warning('Position._fillMissingPrices', '公式抓不到價，改用 TWSE MIS 端點',
+        { codes: want.map(w => w.code) });
+
+      var quotes = StockPrice.getRawPrices(want.map(w => w.code));
+      var byCode = {};
+      quotes.forEach(q => { if (q && q.code) byCode[String(q.code)] = q; });
+
+      want.forEach(w => {
+        var q = byCode[w.code];
+        if (q && q.current > 0) {
+          sheet.getRange(w.row, 8).setValue(q.current);
+          out.filled.push({ code: w.code, price: q.current });
+        } else {
+          out.stillMissing.push(w.code);
+        }
+      });
+      if (out.filled.length) SpreadsheetApp.flush();   // $I 要跟著重算
+      Logger.info('Position._fillMissingPrices', '備援報價寫入完成', out);
+    } catch (ex) {
+      Logger.error('Position._fillMissingPrices', '備援報價失敗', ex);
+    }
+    return out;
+  };
+
   // ─── 交易重放 ──────────────────────────────────────────────────
 
   /**
@@ -390,6 +461,20 @@ var Position = (() => {
 
     SpreadsheetApp.flush();   // 指標要讀上面幾張表算完的值
 
+    // 公式兩層都沒抓到價的，這裡用 GAS 自己的請求補上；補完再 flush 一次，
+    // 下面的指標才讀得到更新後的市值
+    var priceFix = p._fillMissingPrices(ss, instByCode);
+
+    // ⚠️ 這一句一定要在 _writePanelAndAllocation 之前 —— 「指標」最上面的
+    // 「⚠️ 待修正」列就是從 replayed.warnings 生出來的，寫完之後才 push 就只剩
+    // 回覆看得到，儀表板的警示條完全不知情
+    if (priceFix.filled.length) {
+      replayed.warnings.push(
+        priceFix.filled.map(x => x.code).join('、') +
+        ' 的市價 GOOGLEFINANCE 抓不到，已改用 TWSE 即時 API 補上（寫進去的是死值，' +
+        '不會自己更新；下次重算會再試一次公式）');
+    }
+
     var summary = p._writePanelAndAllocation(ss, trades, replayed);
 
     // 面板純粹是公式排版，只有「畫幾列」會變 —— 擺在最後重畫，
@@ -409,6 +494,7 @@ var Position = (() => {
       totalAssets: summary.totalAssets,
       xirr: summary.xirr
     };
+    if (priceFix.filled.length) result.priceFallback = priceFix.filled.map(x => x.code + '@' + x.price);
     if (replayed.warnings.length) result.warnings = replayed.warnings;
     Logger.info('Position.rebuild', '重算完成', result);
     return result;

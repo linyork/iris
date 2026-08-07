@@ -1726,6 +1726,66 @@ console.log('\nT25  XIRR 錨點與殖利率');
   check('說明欄講明分子只算現有持股', /僅計現有持股/.test(m2.note), m2.note);
 }
 
+// ─── T26  第三層報價：公式死光時由 GAS 自己抓 ────────────────────
+//
+// 2026-08-07 六檔裡五檔沒有市價，而 =GOOGLEFINANCE("TPE:00878","price") 單獨貼
+// 一格也是 #N/A —— 掛的是 GOOGLEFINANCE 本身。這種時候第二層的 IMPORTDATA 通常
+// 一起死（兩個都是試算表側的外部函式，同一份文件層級節流），備援疊在同一層等於
+// 沒有備援。第三層必須跳出試算表，走 UrlFetchApp。
+console.log('\nT26  公式抓不到價時的第三層備援');
+{
+  const posSheet = target.getSheetByName('持倉');
+  const rows = AssetSchema.readObjects(posSheet);
+  const idx = rows.findIndex(x => num(x['股數']) > 0);
+  const victim = idx + 2;
+  const code = String(posSheet.getRange(victim, 1).getValue());
+  const saved = String(posSheet.raw(victim, 8));
+  const FALLBACK_PRICE = 77.7;                       // 合成報價
+
+  // 兩層公式都空手而回 = H 是空字串（那正是 _priceFormula 內層 IFERROR 的產物）
+  posSheet.getRange(victim, 8).setValue('');
+
+  const asked = [];
+  global.UrlFetchApp = global.UrlFetchApp || {};     // 只是讓守門條件過得去
+  global.StockPrice = {
+    getRawPrices: (list) => {
+      list.forEach(c => asked.push(c));
+      return list.map(c => ({ code: c, current: c === code ? FALLBACK_PRICE : 0 }));
+    }
+  };
+
+  const inst = {};
+  AssetSchema.readObjects(target.getSheetByName('標的'))
+    .forEach(i => { inst[String(i['代號'])] = i; });
+
+  const fix = Position._fillMissingPrices(target, inst);
+
+  check('只去問缺價的那一檔，有價的不重抓', asked.indexOf(code) >= 0 && asked.length >= 1,
+    JSON.stringify(asked));
+  check('抓到的價寫進正確的那一列（不是 index+2 錯位）',
+    num(posSheet.getRange(victim, 8).getValue()) === FALLBACK_PRICE,
+    String(posSheet.getRange(victim, 8).getValue()));
+  check('回報補了哪幾檔', fix.filled.some(x => x.code === code), JSON.stringify(fix.filled));
+  check('寫進去的是死值不是公式', String(posSheet.raw(victim, 8)).charAt(0) !== '=',
+    String(posSheet.raw(victim, 8)).slice(0, 20));
+  check('市值跟著算出來（$I 的公式看得到新的 $H）',
+    num(posSheet.getRange(victim, 9).getValue()) > 0,
+    String(posSheet.getRange(victim, 9).getValue()));
+
+  // 端點也回不出價的情況：不能假裝有價，要留在 stillMissing 讓警告點名
+  posSheet.getRange(victim, 8).setValue('');
+  global.StockPrice = { getRawPrices: (list) => list.map(c => ({ code: c, current: 0 })) };
+  const fix2 = Position._fillMissingPrices(target, inst);
+  check('第三層也抓不到就照實留白，不編一個價',
+    fix2.filled.length === 0 && fix2.stillMissing.indexOf(code) >= 0 &&
+    String(posSheet.getRange(victim, 8).getValue()) === '',
+    JSON.stringify(fix2));
+
+  delete global.StockPrice;
+  posSheet.getRange(victim, 8).setValue(saved);
+  Position.rebuild();
+}
+
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);

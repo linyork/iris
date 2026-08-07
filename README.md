@@ -202,6 +202,29 @@ Telegram Bot API ───┤        │
 
 在 GAS 編輯器跑 `verifySnapshot()` 或 `dryRunSetData()` 可以看今天會寫什麼，不寫入。
 
+### 市價有三層，第三層不在試算表裡
+
+`持倉` 的 H 欄由 `Position._priceFormula()` 產生：GOOGLEFINANCE 優先，TPE 標的抓不到時退到
+TWSE 的 `STOCK_DAY_AVG` 端點硬解析收盤價。
+
+**第三層是後來補的，因為前兩層會一起死。** 2026-08-07 六檔裡五檔沒有市價，而
+`=GOOGLEFINANCE("TPE:00878","price")` 單獨貼一格也是 `#N/A` —— 掛的是 GOOGLEFINANCE 本身，
+`IMPORTDATA` 跟著一起。兩者都是**試算表側**的外部函式，受同一份文件層級的節流管制，備援疊在
+同一層等於沒有備援。
+
+所以 `Position._fillMissingPrices()` 在寫完並 flush 之後跑：找出「有股數卻沒有價」的列，改走
+`StockPrice.getRawPrices()` → `UrlFetchApp` → TWSE MIS 端點。那是**伺服器端**的請求，完全不受
+上面那套配額影響。
+
+- **寫進去的是死值不是公式** —— 它不會像 H 欄平常那樣等報價回來自己更正。可以接受是因為每次
+  `rebuild()` 都先把公式整片重寫，下一次重算一定會再給 GOOGLEFINANCE 一次機會，再失敗才會又
+  落到第三層。留白更糟：`$I` 歸零，總資產、所有百分比、當天的快照全部跟著錯
+- **補成功也要出聲**，而且那句警告要在 `_writePanelAndAllocation` **之前**推進
+  `replayed.warnings` —— 「指標」最上面的 `⚠️ 待修正` 列是從那裡生出來的，寫完才推就只剩聊天
+  回覆看得到，儀表板的警示條完全不知情
+- **MIS 也抓不到就照實留白**，不編一個價；原本的「抓不到市價」警告就是正確結果
+- MIS 只認上市（`tse_`），與 `StockPrice` 原本的限制相同，非 TPE 標的不送出去
+
 ### 現金餘額怎麼改
 
 現金帳戶的餘額**沒有任何地方可以直接寫**，只有兩個入口：

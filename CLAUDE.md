@@ -348,10 +348,30 @@ Two things that must stay true when touching this:
   fallback can surface `#N/A` / `#VALUE!` instead of an empty string, I breaks, then
   `SUM($I$2:$I)`, then 指標's 總資產, then everything downstream of it.
 
-⚠️ The regex grabs the **first** matching date row, and STOCK_DAY_AVG returns the whole month
-oldest-first — so the fallback yields an early-in-month close, not today's. Treat it as
-"better than a blank" rather than a live quote; verify against an intraday price before
-relying on it.
+The regex opens with a greedy `.*` to reach the **last** date row: STOCK_DAY_AVG returns the
+whole month oldest-first, and RE2 has no lookbehind, so pushing the cursor to the end is the
+only way to get the newest close rather than the 1st-of-month one.
+
+**A third layer exists because the first two die together.** On 2026-08-07 five of six holdings
+had a blank H, and `=GOOGLEFINANCE("TPE:00878","price")` pasted into an empty cell was `#N/A`
+on its own — GOOGLEFINANCE itself was down, and `IMPORTDATA` went with it. Both are
+**spreadsheet-side** external functions under one document-level quota, so stacking the fallback
+in the same formula is not a fallback at all. `Position._fillMissingPrices()` therefore runs
+after the write-and-flush, finds rows with 股數 > 0 and no price, and fetches them through
+`StockPrice.getRawPrices` → `UrlFetchApp` → TWSE's MIS endpoint, which is a server-side request
+and immune to that quota.
+
+- **What it writes is a dead value, not a formula.** It will not self-correct the way column H
+  normally does. That is acceptable only because `rebuild()` rewrites every formula first, so
+  the next rebuild gives GOOGLEFINANCE another chance and this layer runs again only if it
+  fails again. Blank is worse: `$I` goes to 0 and takes 總資產, every percentage and that day's
+  snapshot with it.
+- **A successful fallback still raises a warning**, pushed into `replayed.warnings` **before**
+  `_writePanelAndAllocation` — that is what puts it in 指標's `⚠️ 待修正` row and on the
+  dashboard banner. Push it afterwards and only the chat reply knows.
+- **If MIS has no price either, the cell stays blank.** Never invent one; the existing
+  "抓不到市價" warning is the correct outcome.
+- MIS is `tse_` only, same limit `StockPrice` already had, so non-TPE rows are not sent.
 
 ### 目標配置%
 
