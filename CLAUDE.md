@@ -111,6 +111,49 @@ failed with both layers dead. Verify the fallback when changing the primary — 
 fails. The `find-nim-model` skill drives the search-and-test loop; `testNimCandidateModels()` /
 `testNimModelCapability()` in `DevTools.gs` are its entry points.
 
+⚠️ **Retrying is gated on remaining time, not remaining attempts.** NIM's gateway gives up around
+**300s**; GAS kills any execution at **360s**. Those are close enough that *one* slow failure spends
+the whole budget, so the retry ladder (3 attempts × 2 models) only ever fits when failures are cheap.
+On 2026-08-07 the 09:00 report sent at 09:41:20, got a 504 at 09:46:23 — 303s in a single call — and
+was terminated mid-retry. The GAS kill is **uncatchable**: no `catch`, no `finally`, no final log
+line. What it leaves behind is a log that simply stops, and none of the failure records you'd expect
+(no attempt-2 warning, no final error, no fallback line — the fallback was never reached).
+
+So `NvidiaService.callAPI` now requires `backoff + as-slow-as-last-time + 45s cleanup` to fit in
+`Utils.execTimeLeftMs()` before spending another attempt, and `AIServiceFactory` requires 90s before
+starting the fallback. `UrlFetchApp` has no timeout parameter — a single call can take arbitrarily
+long and cannot be capped — so the only place to hold the line is the decision to spend another one.
+
+`Utils.execElapsedMs()` / `execTimeLeftMs()` measure from **file load**, which in GAS is the start of
+the execution (every run reloads all `.gs`). That's deliberately not a `startTime` threaded down from
+the entry point: the code that needs the clock sits three layers below it.
+
+Failing gracefully is only half of it — a scheduled report that returns `null` used to `return`
+silently, and "didn't arrive" looks exactly like "wasn't due" (weekend, holiday). `_handleReportFailure()`
+in `DailyReport.gs` is now the single exit for all three reports: it schedules **one** retry 15
+minutes out and pushes a notice saying which of the two situations you're in. `/report` already had
+its own path back to the caller via `Commands.gs`; this is the scheduled equivalent.
+
+Buying more time means **starting a second execution** — 6 minutes is a hard per-execution cap, so
+there is no way to extend the one that just failed. Three things keep that from going wrong:
+
+- **Only one retry.** `dailyReportRetry` raises the `_isReportRetry` global before delegating, and
+  that path won't schedule another. A sustained outage would otherwise mint a trigger every 15
+  minutes against a **20-trigger-per-user quota** — and once it's full, the *real* schedule can't be
+  rebuilt either.
+- **The flag cannot be a parameter.** GAS passes an event object as the first argument to every
+  trigger handler, so `function dailyReport(isRetry)` is always truthy — the 09:00 run would classify
+  itself as a retry and silently stop scheduling them. A global is safe precisely because GAS reloads
+  every `.gs` per execution, so it starts `false` every time.
+- **Each retry deletes its own trigger first, before doing any work.** One-shot triggers don't
+  disappear after firing. Deleting at the end would never run in exactly the case being defended
+  against — the execution getting killed — and the trigger would leak.
+
+The retry entry points are registered in `Cron.ONESHOT`, not `SCHEDULE`: they have no fixed time.
+That registration exists only so `Cron.list()` prints a pending retry as `⏳` instead of reporting it
+as a rogue hand-made trigger. Seeing one briefly is normal; one that never goes away means
+`_deleteTriggersFor` didn't run and it can be deleted by hand.
+
 ### Slash Commands
 
 `Commands.gs` intercepts `/`-prefixed messages in `doPost` **before** `ChatBot.reply()`. Telegram's
@@ -523,6 +566,12 @@ are live formulas, but the total assets figure Snapshot reads is only as fresh a
 Don't restate the schedule here. `Cron.SCHEDULE` is the source of truth and `Cron.list()` diffs it
 against what GAS actually has; a copy in this file can only ever drift out of date, which is
 exactly what happened to the two hand-maintained lists that used to sit here.
+
+`Cron.ONESHOT` is the second, smaller registry: handlers that are bound by name like any other
+trigger but have **no fixed time**, because they're created on demand and delete themselves. Today
+that's the three report retries (see [Resilience](#ai-provider-switching)). They're registered so
+`Cron.list()` can tell "waiting to fire" apart from "someone made this by hand" — a name that GAS
+binds by string still fails silently when renamed, whether or not it's on a schedule.
 
 ## Broker CSV import
 

@@ -73,6 +73,97 @@ function _generateReport(spec) {
 
 // ─── 早報 ─────────────────────────────────────────────────────────
 
+// ─── 失敗處理：排一次重試，並且說一聲 ─────────────────────────────
+
+/** 一次性重試等待的分鐘數 —— NIM 的過載尖峰通常是分鐘級，退得掉 */
+var REPORT_RETRY_MIN = 15;
+
+/**
+ * 「本次執行是不是重試」。
+ *
+ * ⚠️ 這件事不能用參數傳：GAS 呼叫 trigger handler 時會塞一個 event 物件當第一個
+ *    引數，於是 `function dailyReport(isRetry)` 收到的永遠是 truthy 值，排程跑的
+ *    那班會把自己誤認成重試、從此不再排重試 —— 而且完全不報錯。
+ *
+ * 用全域旗標是安全的：GAS 每次執行都重新載入全部 .gs，所以它在每一次新執行的
+ * 起點都是 false，只有重試進入點會把它掀起來。
+ */
+var _isReportRetry = false;
+
+/**
+ * 排一個一次性重試 trigger。
+ *
+ * 為什麼是「開第二次執行」而不是「在這次多等一下」：GAS 單次執行封頂 6 分鐘，
+ * 而失敗的原因正是一次呼叫就吃掉 300s（見 NvidiaService 的時間預算）。同一次
+ * 執行裡再也擠不出時間，要買到更多 wall clock 只有另開一次執行這條路。
+ *
+ * ⚠️ 只重試一次。重試進入點會先掀起 `_isReportRetry`，那條路徑不會再排下一個 ——
+ *    否則過載持續整個上午時，這裡會每 15 分鐘生一個 trigger，而 GAS 每個使用者
+ *    每個腳本只有 20 個 trigger 的額度，塞爆之後連正規排程都建不起來。
+ *
+ * @returns {boolean} 有沒有真的排成功
+ */
+function _scheduleReportRetry(handlerName) {
+  try {
+    _deleteTriggersFor(handlerName); // 清掉可能殘留的上一輪，額度不該累積
+    ScriptApp.newTrigger(handlerName).timeBased()
+      .after(REPORT_RETRY_MIN * 60 * 1000).create();
+    Logger.info('_scheduleReportRetry', '已排一次性重試',
+      { handler: handlerName, afterMin: REPORT_RETRY_MIN });
+    return true;
+  } catch (ex) {
+    Logger.error('_scheduleReportRetry', '排重試失敗', ex);
+    return false;
+  }
+}
+
+/**
+ * 刪掉指向某個 handler 的所有 trigger。
+ * 一次性 trigger 跑完不會自己消失，不清就會一路佔著 20 個的額度。
+ */
+function _deleteTriggersFor(handlerName) {
+  try {
+    ScriptApp.getProjectTriggers().forEach(function (t) {
+      if (t.getHandlerFunction() === handlerName) ScriptApp.deleteTrigger(t);
+    });
+  } catch (ex) {
+    Logger.error('_deleteTriggersFor', '清除 trigger 失敗', ex);
+  }
+}
+
+/**
+ * 排程報告失敗的統一出口：先排重試（如果還能排），再告訴主人現在是什麼狀況。
+ *
+ * 排程沒有人在等回覆，所以失敗的外觀就只是「今天沒有收到」—— 而那和「今天本來就
+ * 不該有」（週末、假日）長得一模一樣。2026-08-07 早報被 GAS 砍掉那次，就是這樣過了
+ * 一個上午才被發現。/report 走的是 Commands，失敗會直接回給發問的人；排程這條路
+ * 以前沒有對應的出口。
+ *
+ * 通知分兩種寫法，因為「再等 15 分鐘」和「今天就這樣了」是兩件不同的事 ——
+ * 寫成同一句話等於要人自己去猜還要不要等。
+ *
+ * ⚠️ 這已經是最後一段，push 自己失敗也不能再往上丟 —— 拋出去只會讓 trigger 記一筆
+ *    紅字，對已經收不到訊息的人沒有任何幫助。
+ *
+ * @param {string} scope        報告名稱，如 '早報'
+ * @param {string} retryHandler 重試進入點的函式名（見 Cron.ONESHOT）
+ * @param {string} [hint]       不再重試時的補救建議
+ */
+function _handleReportFailure(scope, retryHandler, hint) {
+  var scheduled = !_isReportRetry && _scheduleReportRetry(retryHandler);
+
+  var msg = scheduled
+    ? '⚠ ' + scope + '產生失敗（多半是 AI 服務過載）。\n' +
+      '已排定 ' + REPORT_RETRY_MIN + ' 分鐘後自動重試一次。'
+    : '⚠ ' + scope + '產生失敗，不再自動重試。\n' + (hint ? hint + '\n' : '');
+
+  try {
+    MessagingServiceFactory.pushToMasters(msg + '\n詳情見 consolelog。');
+  } catch (ex) {
+    Logger.error('_handleReportFailure', scope + '的失敗通知也送不出去', ex);
+  }
+}
+
 /**
  * 產生今日早報內文（不發送）
  *
@@ -116,7 +207,7 @@ function dailyReport() {
     if (dow === 0 || dow === 6) return; // 週六發週報、週日無報
 
     var result = buildDailyReport();
-    if (!result) return;
+    if (!result) { _handleReportFailure('早報', 'dailyReportRetry', '可用 /report 手動重試。'); return; }
 
     var n = MessagingServiceFactory.pushToMasters(
       '【Iris 早報 ' + result.dateStr + '】\n\n' + result.body);
@@ -153,7 +244,7 @@ function weeklyReport() {
         '4. 下週需關注的重點\n' +
         '5. 一句話操作建議'
     });
-    if (!body) return;
+    if (!body) { _handleReportFailure('週報', 'weeklyReportRetry'); return; }
 
     var n = MessagingServiceFactory.pushToMasters(
       '【Iris 週報 ' + dateStr + '】\n\n' + body);
@@ -195,7 +286,7 @@ function monthlyReport() {
         '4. 上月重大事件回顧\n' +
         '5. 本月操作建議'
     });
-    if (!body) return;
+    if (!body) { _handleReportFailure('月報', 'monthlyReportRetry'); return; }
 
     var n = MessagingServiceFactory.pushToMasters(
       '【Iris 月報 ' + label + '】\n\n' + body);
@@ -203,4 +294,41 @@ function monthlyReport() {
   } catch (ex) {
     Logger.error('monthlyReport', '月報發送失敗', ex);
   }
+}
+
+// ─── 一次性重試進入點 ─────────────────────────────────────────────
+//
+// 這三支不在 `Cron.SCHEDULE` 裡 —— 它們沒有固定時間，是報告失敗當下才被
+// `_scheduleReportRetry()` 排出來的。但名字一樣是 GAS 以**字串**綁定的，
+// 改名同樣會靜默失效，所以登記在 `Cron.ONESHOT`，讓 `Cron.list()` 認得。
+//
+// 每一支都做同樣三件事，順序不能換：
+//   1. 先刪掉自己的 trigger —— 一次性 trigger 跑完不會自己消失，而且必須在
+//      真正開工**之前**刪。萬一這次執行又被 GAS 砍掉（正是我們在防的事），
+//      刪除動作放在後面就永遠跑不到，那個 trigger 會一直佔著額度。
+//   2. 掀起重試旗標，讓失敗處理知道不要再排下一個。
+//   3. 呼叫原本那支排程函式，走完全相同的路徑。
+
+/** 早報的一次性重試 */
+function dailyReportRetry() {
+  _deleteTriggersFor('dailyReportRetry');
+  _isReportRetry = true;
+  Logger.info('dailyReportRetry', '早報自動重試開始');
+  dailyReport();
+}
+
+/** 週報的一次性重試 */
+function weeklyReportRetry() {
+  _deleteTriggersFor('weeklyReportRetry');
+  _isReportRetry = true;
+  Logger.info('weeklyReportRetry', '週報自動重試開始');
+  weeklyReport();
+}
+
+/** 月報的一次性重試 */
+function monthlyReportRetry() {
+  _deleteTriggersFor('monthlyReportRetry');
+  _isReportRetry = true;
+  Logger.info('monthlyReportRetry', '月報自動重試開始');
+  monthlyReport();
 }

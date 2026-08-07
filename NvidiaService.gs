@@ -86,17 +86,31 @@ var NvidiaService = (() => {
                 muteHttpExceptions: true
             };
 
-            // 重試策略：首次 + 2 次退避重試（2s → 4s）。
+            // 重試策略：首次 + 2 次退避重試（2s → 4s），但**每次重試前先看錶**。
             // deepseek-v4-flash 在 NIM 上很熱門，實測會回 503 ResourceExhausted 與 504，
             // 也會直接把連線斷掉 —— 後者讓 UrlFetchApp.fetch 直接丟例外而非回傳狀態碼。
             // 舊版沒有逐次 try/catch，這類連線層失敗會一路衝到最外層 catch，
             // 等於「最該重試的情況反而一次都不重試」。這裡把例外也納入可重試範圍。
+            //
+            // ⚠️ 次數不是重試的前提，**時間**才是。NIM 的 gateway 逾時約 300s，GAS 執行
+            //    上限 360s —— 兩個數字近到「一次慢速失敗就吃光整個執行預算」。2026-08-07
+            //    早報就是這樣沒的：09:41:20 送出、09:46:23 才回 504（單次 303s），退避 2s
+            //    後開第二次，45 秒後整支執行被 GAS 砍掉。第 2 次的重試 log 沒有、最終失敗的
+            //    ERROR 沒有、備援模型一次都沒輪到 —— 因為那個砍攔不到（見 Utils 執行時間預算）。
+            //
+            //    所以重試的條件是「剩餘預算裝得下：退避 + 再一次和剛才一樣慢的呼叫 + 收尾」。
+            //    裝不下就直接回 null，把剩下的時間讓給 AIServiceFactory 的備援模型 ——
+            //    換一顆沒過載的模型，遠比對同一顆過載的再問一次值得。
+            //    UrlFetchApp 沒有 timeout 參數，單次呼叫要多慢就多慢，事前擋不住，
+            //    只能在「要不要再花一次」這個決策點上把關。
             var MAX_ATTEMPTS = 3;
+            var RESERVE_MS   = 45000; // 留給呼叫端收尾：推播、寫 log
             var response = null;
 
             for (var attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
                 var responseCode = 0;
                 var failReason   = '';
+                var attemptStart = Date.now();
 
                 try {
                     response     = UrlFetchApp.fetch(url, fetchOptions);
@@ -117,6 +131,8 @@ var NvidiaService = (() => {
                     failReason = '連線例外: ' + fetchEx;
                 }
 
+                var attemptMs = Date.now() - attemptStart;
+
                 if (attempt === MAX_ATTEMPTS) {
                     Logger.error('NvidiaService.callAPI',
                         'API 呼叫最終失敗（已試 ' + MAX_ATTEMPTS + ' 次）',
@@ -125,9 +141,21 @@ var NvidiaService = (() => {
                 }
 
                 var waitMs = 2000 * Math.pow(2, attempt - 1);
+
+                // 下一次至少會和這次一樣慢 —— 過載不會因為等了 2 秒就變快
+                var needMs = waitMs + attemptMs + RESERVE_MS;
+                var leftMs = Utils.execTimeLeftMs();
+                if (leftMs < needMs) {
+                    Logger.warning('NvidiaService.callAPI',
+                        failReason + '，時間預算不足，放棄重試（讓備援接手）',
+                        'Model=' + modelName + ' | 本次耗時=' + attemptMs +
+                        'ms | 剩餘=' + leftMs + 'ms | 需要≈' + needMs + 'ms');
+                    return null;
+                }
+
                 Logger.warning('NvidiaService.callAPI',
                     failReason + '，第 ' + attempt + '/' + MAX_ATTEMPTS + ' 次後重試（等待 ' + waitMs + 'ms）',
-                    'Model=' + modelName);
+                    'Model=' + modelName + ' | 本次耗時=' + attemptMs + 'ms | 剩餘=' + leftMs + 'ms');
                 Utilities.sleep(waitMs);
             }
 

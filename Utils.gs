@@ -5,6 +5,21 @@
 var Utils = (() => {
   var utils = {};
 
+  // ─── 執行時間預算 ────────────────────────────────────────────────
+  //
+  // GAS 每次執行的硬上限是 6 分鐘，超過會被直接砍掉 —— 而那是一個**攔不到**的終止：
+  // catch 進不去、finally 不會跑、Logger 寫不出最後一行。從 consolelog 看起來就是
+  // 「做到一半突然沒聲音」，2026-08-07 早報消失時留下的正是這個形狀。
+  //
+  // 時間戳在**檔案載入時**取得：GAS 每次執行都重新載入全部 .gs，所以它等同「本次執行
+  // 的起點」，不必由每個進入點自己傳一個 startTime 下來 —— 真正需要看錶的地方
+  // （NvidiaService 的重試迴圈）離進入點有三層遠，傳參數等於要求每一層都記得轉交。
+  var EXEC_START = Date.now();
+
+  utils.EXEC_LIMIT_MS  = 360000;
+  utils.execElapsedMs  = () => Date.now() - EXEC_START;
+  utils.execTimeLeftMs = () => utils.EXEC_LIMIT_MS - utils.execElapsedMs();
+
   utils.isJsonString = (str) => {
     if (typeof str !== 'string') return false;
     try { JSON.parse(str); return true; } catch (e) { return false; }

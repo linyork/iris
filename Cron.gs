@@ -50,8 +50,22 @@ var Cron = (() => {
   ];
 
   /**
+   * 一次性重試的進入點（實作在 `DailyReport.gs`）。
+   *
+   * 這些**不在 SCHEDULE 裡**，因為它們沒有固定時間 —— 是報告產生失敗的當下才被
+   * `_scheduleReportRetry()` 排出來、跑完就自己刪掉的臨時 trigger。登記在這裡只
+   * 為了一件事：讓 `cron.list()` 認得它們。否則一個正在等待的重試會被報成
+   * 「多出來的，可能是手動建的」，而假警報正是排程檔最不該製造的東西。
+   *
+   * 看到它們短暫出現在 list() 裡是正常的；長期賴著不走才代表 `_deleteTriggersFor`
+   * 沒跑到（例如那次重試又被 GAS 砍掉），可以手動刪。
+   */
+  cron.ONESHOT = ['dailyReportRetry', 'weeklyReportRetry', 'monthlyReportRetry'];
+
+  /**
    * 依 SCHEDULE 重建所有 Trigger。
-   * ⚠️ 會先清掉**所有**既有 Trigger，包含你手動在觸發條件頁面建的。
+   * ⚠️ 會先清掉**所有**既有 Trigger，包含你手動在觸發條件頁面建的，
+   *    以及還在等待中的一次性重試（無妨 —— 下次失敗會再排）。
    */
   cron.setup = () => {
     var old = ScriptApp.getProjectTriggers();
@@ -87,6 +101,14 @@ var Cron = (() => {
     var lines = ['【排程比對】實際 ' + actual.length + ' 個 / 登記 ' + wanted.length + ' 個'];
     names.forEach(n => {
       var w = count(wanted, n), a = count(actual, n);
+
+      // 一次性重試不該出現在 SCHEDULE 裡，所以「登記 0 / 實際 1」是它的正常狀態，
+      // 不是缺漏也不是多餘 —— 照一般規則標會變成每次失敗後都跳一個假的 ✗。
+      if (cron.ONESHOT.indexOf(n) !== -1 && w === 0) {
+        lines.push('  ⏳ ' + n + '：一次性重試等待中（' + a + ' 個），跑完會自己刪');
+        return;
+      }
+
       var mark = (w === a) ? '✓' : '✗';
       lines.push('  ' + mark + ' ' + n + '：登記 ' + w + ' / 實際 ' + a +
         (w === a ? '' : (a === 0 ? '  ← 沒註冊，跑 setupAllTriggers()' : '  ← 多出來的，可能是手動建的')));
