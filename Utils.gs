@@ -20,6 +20,34 @@ var Utils = (() => {
   utils.execElapsedMs  = () => Date.now() - EXEC_START;
   utils.execTimeLeftMs = () => utils.EXEC_LIMIT_MS - utils.execElapsedMs();
 
+  // ─── 帳本寫入計數 ────────────────────────────────────────────────
+  //
+  // 「模型說已記錄，到底有沒有寫」的唯一證據。以前 `ChatBot.reply` 是看
+  // **模型叫了哪些工具**（`Tools.isWrite` 名單）—— 但旗子掀在 `Tools.execute` 之前，
+  // 所以工具被業務規則擋下（賣出股數不足）、參數不齊、或整支丟例外時，帳本一個字
+  // 沒改，攔截器卻已經放行。那正好是這道防線最該作聲的場合。
+  //
+  // 所以證據改成取自**寫入本身**：真的動到試算表的地方各叫一次 `noteLedgerWrite`，
+  // `ChatBot` 比對這次回覆前後的數字。字串怎麼寫、模型說了什麼，都不影響它。
+  //
+  // ⚠️ **不可以改成攔截所有試算表寫入。** `Logger` 每一則都往 consolelog 寫、
+  //    `ChatBot` 每次回覆都往 chat 寫兩列 —— 全域計數會恆為真，等於把防線關掉，
+  //    而且看起來像修好了。呼叫點必須是明確的那幾個動作邊界。
+  //
+  // ⚠️ 漏加一個呼叫點的後果是**誤報**（寫成功了卻被加警語），不是漏報。
+  //    誤報看得見、會被抱怨；漏報看不見。這個方向是刻意選的。
+  //
+  // 計數器放模組層級即可：GAS 每次執行都重載全部 .gs，所以它每次執行自動歸零，
+  // 與上面 EXEC_START 同一個道理。
+  var _ledgerWrites = 0;
+
+  utils.noteLedgerWrite = (tag) => {
+    _ledgerWrites++;
+    Logger.info('Utils.noteLedgerWrite', '帳本寫入 #' + _ledgerWrites, tag);
+  };
+
+  utils.ledgerWriteCount = () => _ledgerWrites;
+
   utils.isJsonString = (str) => {
     if (typeof str !== 'string') return false;
     try { JSON.parse(str); return true; } catch (e) { return false; }
@@ -66,8 +94,8 @@ var Utils = (() => {
   // 主人卻以為記好了，於是不會再記。編一句成功回覆比拒絕嚴重得多，正是這個形狀。
   //
   // 系統提示詞早就寫了「收到工具結果前不准說已完成」，但提示詞擋不住的東西要用結構擋：
-  // 這句話是自由文字，沒有任何欄位擔保它為真，**唯一的證據是這一輪有沒有執行過寫入工具**
-  // （`Tools.isWrite`）。所以偵測放在這裡，判定與補救放在 `ChatBot.reply`。
+  // 這句話是自由文字，沒有任何欄位擔保它為真，**唯一的證據是帳本有沒有真的被寫過**
+  // （見上面的 noteLedgerWrite）。所以偵測放在這裡，判定與補救放在 `ChatBot.reply`。
   //
   // ⚠️ 先把「第 N 列」開頭的列丟掉再比對：`listTrades` 的輸出本來就會印出
   //    「…（已作廢）」，那是查詢結果的轉述，不是宣稱自己做了什麼。

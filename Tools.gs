@@ -292,23 +292,12 @@ var Tools = (() => {
 
   tools.getDefinitions = () => definitions;
 
-  /**
-   * 這個工具會不會真的動到試算表？
-   *
-   * `ChatBot.reply` 用它回答一個它自己無法從文字判斷的問題：模型說「已記錄／已校正」的
-   * 時候，到底有沒有寫過。那句話是自由文字，唯一的證據就是這一輪執行過的工具名字。
-   *
-   * ⚠️ 加寫入工具時要一起加進來 —— 漏了只會讓那個工具的假宣稱不再被攔下，
-   *    不會有任何錯誤。`definitions` 與 `execute()` 的 switch 已經是必須成對修改的兩處，
-   *    這是第三處。
-   */
-  var WRITE_TOOLS = {
-    recordTrade: 1, recordDividend: 1, setCashBalance: 1, voidTrade: 1,
-    addAccount: 1, updateAccount: 1, updateInstrument: 1,
-    rememberShortTerm: 1, saveKnowledge: 1, deleteMemory: 1
-  };
-
-  tools.isWrite = (name) => !!WRITE_TOOLS[name];
+  // 這裡以前有一份 WRITE_TOOLS 名單，供 `ChatBot.reply` 判斷「模型說已記錄，
+  // 到底有沒有寫過」。它是**第三處**必須跟著 `definitions` 與 `execute()` 一起改的
+  // 地方，而漏改不會報錯，只會讓那個工具的假宣稱從此不再被攔下。
+  //
+  // 現在證據取自寫入本身（`Utils.noteLedgerWrite`），這份名單就不需要了 ——
+  // 工具只要真的寫進去就一定會被算到，不必有人記得來這裡登記。要改的地方回到兩處。
 
   tools.execute = (name, args) => {
     try {

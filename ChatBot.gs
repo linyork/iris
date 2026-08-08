@@ -55,7 +55,12 @@ var ChatBot = (() => {
       var finalResponse = '';
       var lastToolResult = null;
       var calledTools = {};
-      var wroteViaTool   = false;  // 這一輪有沒有真的執行過寫入工具（見 Utils.claimsWriteDone）
+      // 這次回覆有沒有真的動到帳本。基準取在進迴圈之前，之後一律比對計數器 ——
+      // 不是看模型叫了哪些工具：工具被擋下（賣出股數不足）、參數不齊、或丟例外時，
+      // 帳本一個字沒改，但那次呼叫確實發生過。看呼叫等於在那些場合放行，
+      // 而那正是這道防線最該作聲的時候。詳見 Utils.noteLedgerWrite。
+      var writesAtStart = Utils.ledgerWriteCount();
+      var wroteViaTool  = () => Utils.ledgerWriteCount() > writesAtStart;
       var claimCorrected = false;  // 攔截只做一次，避免模型跟提示詞互相頂到把輪數燒光
       var elapsed  = () => Utils.execElapsedMs();
       var timedOut = false;
@@ -131,7 +136,6 @@ var ChatBot = (() => {
 
             var callKey = name + '|' + JSON.stringify(args);
             var result;
-            if (Tools.isWrite(name)) wroteViaTool = true;
             if (calledTools[callKey] !== undefined) {
               result = calledTools[callKey];
               Logger.info('ChatBot.reply', '使用快取工具結果: ' + name);
@@ -170,7 +174,7 @@ var ChatBot = (() => {
         if (textPart && textPart.text) {
           // 「說做完了，但一個寫入工具都沒叫過」—— 把話打回去，讓它在還有工具可用的
           // 這一輪去執行。這裡不直接改寫模型的字：改字只是把那句話藏起來，帳一樣沒記。
-          if (!wroteViaTool && !claimCorrected && !isLastTurn &&
+          if (!wroteViaTool() && !claimCorrected && !isLastTurn &&
               Utils.claimsWriteDone(textPart.text)) {
             claimCorrected = true;
             Logger.warning('ChatBot.reply', '宣稱已完成但沒有呼叫寫入工具，打回重做',
@@ -255,7 +259,7 @@ var ChatBot = (() => {
       // 打回去之後還是那樣講（或根本沒機會打回去 —— 最後一輪沒有工具可用），
       // 那就至少不要讓主人以為記好了。這裡用加註而不是整段換掉：萬一是誤判
       // （模型只是在轉述查詢結果），原本的內容還在，加註本身也仍然是實話。
-      if (!wroteViaTool && Utils.claimsWriteDone(finalResponse)) {
+      if (!wroteViaTool() && Utils.claimsWriteDone(finalResponse)) {
         Logger.error('ChatBot.reply', '宣稱已完成但整輪都沒有寫入工具，加註警告',
           finalResponse.slice(0, 200));
         finalResponse =

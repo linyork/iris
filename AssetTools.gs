@@ -181,6 +181,7 @@ var AssetTools = (() => {
             val.symbol, val.symbol, 'TPE', 'TWD', 'GOOGLEFINANCE', '', '', '', '持有中',
             '由 Iris 於 ' + dateStr + ' 首次買進時自動建立，名稱與區域/類型請補上'
           ]]);
+          Utils.noteLedgerWrite('標的 自動登記 ' + val.symbol);
           autoAdded = true;
         }
       }
@@ -392,6 +393,7 @@ var AssetTools = (() => {
       put('狀態', '啟用');
       put('備註', _str(a.note) || '由 Iris 於 ' + dateStr + ' 建立');
       sheet.getRange(sheet.getLastRow() + 1, 1, 1, row.length).setValues([row]);
+      Utils.noteLedgerWrite('帳戶 新增 ' + name);
 
       var rebuilt = Position.rebuild();
 
@@ -625,6 +627,7 @@ var AssetTools = (() => {
       // ⚠️ 一定要重寫這一列的公式：現金流的守門條件寫在公式裡，而這一列可能還
       //    帶著加「狀態」欄之前的舊版公式 —— 不重寫就會變成「列跳過了、錢還在」。
       AssetSchema.writeRowFormulas(sheet, row, map);
+      Utils.noteLedgerWrite('交易 第 ' + row + ' 列 作廢');
 
       var rebuilt = Position.rebuild();
 
@@ -944,10 +947,13 @@ var AssetTools = (() => {
         changed.push(col + '：' + (_str(before) || '(空白)') + ' → ' + _str(updates[col]));
       });
 
+      // 沒有任何一欄真的變動就不算寫入 —— 上面那個迴圈「沒變就不寫」，
+      // 這裡的提前返回也就是「這次沒動到試算表」，計數器不能動。
       if (!changed.length) {
         return symbol + ' 的這些欄位本來就是這個值，沒有改動。' +
                (skipped.length ? '（表上沒有這些欄位：' + skipped.join('、') + '）' : '');
       }
+      Utils.noteLedgerWrite('標的 更新 ' + symbol + '：' + changed.length + ' 欄');
 
       var rebuilt = Position.rebuild();
 
@@ -1127,6 +1133,12 @@ var AssetTools = (() => {
         notes.push('「交易」裡 ' + renamed + ' 列的帳戶名一起改寫了' +
           (renamed ? '' : '（本來就沒有交易掛在這個名字下）'));
         notes.push('「每日快照」的歷史列仍是舊名稱 —— 那是當時的紀錄，不動它');
+      }
+
+      // 改名只動「交易」而主檔沒變的情況也算寫入，所以兩個都要看
+      if (changed.length || renamed) {
+        Utils.noteLedgerWrite('帳戶 更新 ' + name +
+          '：' + changed.length + ' 欄' + (renamed ? '、交易 ' + renamed + ' 列改名' : ''));
       }
 
       var rebuilt = Position.rebuild();

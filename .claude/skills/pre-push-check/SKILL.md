@@ -20,14 +20,16 @@ git diff --name-only HEAD
 ## 步驟二 — 依改動類型逐項檢查
 
 ### 如果 `Tools.gs` 有變動
-Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case + `WRITE_TOOLS`），三處必須手動同步：
+Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），兩處必須手動同步：
 
 - [ ] **definitions**：新工具有完整的 `name` / `description` / `parameters` schema
 - [ ] **execute**：`switch` 內有對應的 `case`（漏掉＝模型叫得出來但一律回「未知的工具」）
-- [ ] **WRITE_TOOLS**：會動到試算表的工具要登記進去。`ChatBot` 靠它判斷模型說「已記錄」時
-      到底有沒有寫過；漏掉不會報錯，只是那個工具的假宣稱不再被攔下來（見 CLAUDE.md
-      「已記錄」是自由文字，只有工具名字算數）
 - [ ] **必填參數檢查**：`case` 內有擋 `args` 缺漏並回傳可讀訊息，而不是讓底層丟例外
+- [ ] **會寫入的話**：底層真正動到試算表的那一行後面要有 `Utils.noteLedgerWrite()`，
+      `ChatBot` 靠它判斷模型說「已記錄」時到底有沒有寫過。漏掉不會報錯，
+      也不會放行假宣稱 —— 是反過來給**寫成功的回覆**加上「我沒有真的寫進帳本」的警語
+      （見 CLAUDE.md「已記錄」是自由文字，只有工具名字算數）。
+      ⚠️ 不要為了省事改成攔截所有寫入：consolelog 與 chat 每次回覆都在寫，會恆為真
 - [ ] **實作**：底層函式確實存在（多半在 `GoogleSheet.gs` / `StockPrice.gs` / `WebSearch.gs`）
 - [ ] **文件**：`README.md` 的「AI 工具集」表格與工具總數、`CLAUDE.md` 的工具清單同步更新
 

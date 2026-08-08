@@ -502,6 +502,8 @@ var AssetSchema = (() => {
     var r = sheet.getLastRow() + 1;
     sheet.getRange(r, 1, 1, row.length).setValues([row]);
     s.writeRowFormulas(sheet, r, map);
+    // 記帳、股利、餘額校正三個工具都走這裡，所以這一行涵蓋全部帳本新增
+    Utils.noteLedgerWrite('交易 第 ' + r + ' 列 ' + s.str(fields['動作']));
     return r;
   };
 

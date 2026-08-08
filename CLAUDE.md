@@ -430,12 +430,29 @@ account to an absolute balance, the model asked one confirming question, got 「
 because they had been told it was done. **A false success is worse than a refusal** — a refusal
 gets retried.
 
-The claim itself carries no evidence. The only evidence is whether a write tool ran this reply,
-so `ChatBot.reply` checks exactly that: `Tools.isWrite()` marks the ten tools that touch the
-spreadsheet, `Utils.claimsWriteDone()` recognises the claim, and a claim with no write gets
-**pushed back into the loop once** with the tools still attached — that turn is where the write
-finally happens. If it survives that (or the claim lands on the last turn, which has no tools),
-the reply goes out with a banner saying it was not written. Both paths land in `consolelog`.
+The claim itself carries no evidence. **The only evidence is the write.** Every place that
+actually touches the spreadsheet calls `Utils.noteLedgerWrite()`; `ChatBot.reply` takes
+`Utils.ledgerWriteCount()` as a baseline before the loop and compares afterwards.
+`Utils.claimsWriteDone()` recognises the claim, and a claim with no write gets **pushed back into
+the loop once** with the tools still attached — that turn is where the write finally happens. If
+it survives that (or the claim lands on the last turn, which has no tools), the reply goes out
+with a banner saying it was not written. Both paths land in `consolelog`.
+
+⚠️ **Do not go back to "did the model call a write tool?"** That is what this used to check, via
+a `WRITE_TOOLS` list, and the flag was raised *before* `Tools.execute` ran. So a tool that refused
+— an over-sell blocked by `recordTrade`, missing parameters, a thrown exception — left the ledger
+untouched while the guard counted it as a write and stood down. Those refusals are exactly the
+moments a false 「已記錄」 is most likely and most costly.
+
+⚠️ **`noteLedgerWrite` must never become a blanket hook on spreadsheet writes.** `Logger` appends
+to `consolelog` constantly and `ChatBot` writes two `chat` rows per reply, so a global counter is
+always true — the guard would be off, and would look fixed. The call sites are deliberately the
+handful of real action boundaries (`AssetSchema.appendTrade`, the 標的/帳戶 master writes,
+`voidTrade`'s 狀態, and the three memory writers).
+
+Forgetting a call site makes the guard *over*-fire: a successful write gets the banner anyway.
+That direction is chosen on purpose — a false banner is visible and gets complained about, a
+missing one is invisible.
 
 Three things that make this work rather than merely fire:
 
@@ -450,9 +467,10 @@ The confirming question is itself the trigger — the gap between "I'll do it" a
 where the action gets dropped. So `Prompt.gs` also says: parameters complete → call the tool, do
 not ask; the tool's return **is** the confirmation, and `voidTrade` undoes a mistake.
 
-⚠️ Adding a write tool means adding it to `WRITE_TOOLS` in `Tools.gs` as well — a third place
-alongside `definitions` and the `execute()` switch. Missing it doesn't error, it just stops that
-tool's false claims from being caught.
+Adding a write tool needs **two** edits, not three: `definitions` and the `execute()` switch.
+There used to be a third — registering it in `WRITE_TOOLS` — and forgetting it silently disabled
+the guard for that tool. Keying off the write itself removed that footgun: a tool that writes is
+counted whether or not anyone remembered to declare it.
 
 ### 記錯了怎麼撤：作廢，不是刪、也不是反手記一筆
 

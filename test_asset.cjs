@@ -325,6 +325,9 @@ global.Date.now = RealDate.now;
 // 用間接 eval 讓 .gs 的 var 宣告落在全域，跟 Apps Script 的平坦命名空間一致
 const load = f => (0, eval)(fs.readFileSync(path.join(__dirname, f), 'utf8'));
 
+// Utils 要在資產層之前 —— 真正寫進試算表的地方會叫 Utils.noteLedgerWrite()，
+// 那是「模型說已記錄到底有沒有寫」的唯一證據，載真的比 stub 有意義（見 T27）
+load('Utils.gs');
 load('AssetSchema.gs');
 load('Panel.gs');        // Position.rebuild() 最後會叫它重畫面板
 load('Position.gs');
@@ -1784,6 +1787,59 @@ console.log('\nT26  公式抓不到價時的第三層備援');
   delete global.StockPrice;
   posSheet.getRange(victim, 8).setValue(saved);
   Position.rebuild();
+}
+
+// ─── T27  被擋下的寫入不能算成「寫過了」──────────────────────────
+//
+// 這是假宣稱攔截器的地基。以前 ChatBot 看的是「模型有沒有叫寫入工具」，而旗子掀在
+// Tools.execute 之前 —— 工具被業務規則擋下時帳本一個字沒改，攔截器卻已放行，
+// 偏偏那正是最容易出現假「已記錄」的場合。現在證據取自寫入本身，這裡就是在釘死
+// 「擋下 → 計數器不動」與「寫成功 → 計數器一定動」這兩個方向。
+console.log('\nT27  擋下的寫入不算寫入');
+{
+  const held = AssetSchema.readObjects(target.getSheetByName('持倉'))
+    .filter(p => num(p['股數']) > 0);
+  const code = String(held[0]['代號']);
+  const shares = num(held[0]['股數']);
+
+  // ① 賣超被擋下：recordTrade 整筆不寫
+  const before = Utils.ledgerWriteCount();
+  const blocked = AssetTools.recordTrade({
+    action: '賣出', symbol: code, shares: shares + 100000, price: 50,
+    account: '國泰證券戶', date: '2026-08-03'
+  });
+  check('賣超確實被擋下（沒有寫進去）', !/已記錄第/.test(blocked), String(blocked).slice(0, 60));
+  check('擋下時計數器沒有動', Utils.ledgerWriteCount() === before,
+    before + ' → ' + Utils.ledgerWriteCount());
+
+  // ② 參數不齊：連動作都判斷不了
+  const before2 = Utils.ledgerWriteCount();
+  AssetTools.recordTrade({ action: '買進', symbol: code });   // 缺股數與單價
+  check('參數不齊時計數器沒有動', Utils.ledgerWriteCount() === before2,
+    before2 + ' → ' + Utils.ledgerWriteCount());
+
+  // ③ 不存在的帳戶
+  const before3 = Utils.ledgerWriteCount();
+  AssetTools.setCashBalance({ account: '不存在的戶頭', balance: 123 });
+  check('帳戶不存在時計數器沒有動', Utils.ledgerWriteCount() === before3,
+    before3 + ' → ' + Utils.ledgerWriteCount());
+
+  // ④ 真的寫成功時一定要動 —— 否則上面三條可以靠「永遠不動」作弊通過
+  const before4 = Utils.ledgerWriteCount();
+  const ok = AssetTools.recordTrade({
+    action: '買進', symbol: code, shares: 1000, price: 10,
+    account: '國泰證券戶', date: '2026-08-03', note: 'T27 寫入成功'
+  });
+  check('寫成功時計數器有動', Utils.ledgerWriteCount() > before4,
+    before4 + ' → ' + Utils.ledgerWriteCount() + ' ｜ ' + String(ok).slice(0, 40));
+
+  // ⑤ 更新主檔但值沒變 → 沒動到試算表，不算寫入
+  const inst = AssetSchema.readObjects(target.getSheetByName('標的'))
+    .find(i => String(i['代號']) === code);
+  const before5 = Utils.ledgerWriteCount();
+  AssetTools.updateInstrument({ symbol: code, name: String(inst['名稱']) });
+  check('主檔值沒變時計數器沒有動', Utils.ledgerWriteCount() === before5,
+    before5 + ' → ' + Utils.ledgerWriteCount());
 }
 
 //   REALIZED_CSV=path/to.csv node test_asset.cjs

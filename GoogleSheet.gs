@@ -108,11 +108,13 @@ var GoogleSheet = (() => {
           if (data[i][0] === key) {
             var row = i + 2;
             sheet.getRange(row, 2, 1, 3).setValues([[contentWithTime, expireStr, category || '']]);
+            Utils.noteLedgerWrite('短期記憶 更新 ' + key);
             return '已更新「' + key + '」的記憶（時效 ' + durationHours + ' 小時）';
           }
         }
       }
       sheet.appendRow([key, contentWithTime, expireStr, category || '']);
+      Utils.noteLedgerWrite('短期記憶 新增 ' + key);
       return '已記住「' + key + '」（時效 ' + durationHours + ' 小時）';
     } catch (ex) {
       Logger.error('GoogleSheet.addShortTermMemory', '寫入短期記憶失敗', ex);
@@ -195,11 +197,13 @@ var GoogleSheet = (() => {
           var existTags = String(data[i][0]).split(',').map(t => t.trim()).sort().join(',');
           if (existTags === normalTags) {
             sheet.getRange(i + 2, 2, 1, 2).setValues([[content, timestamp]]);
+            Utils.noteLedgerWrite('知識 更新 ' + tags);
             return '已更新知識點「' + tags + '」';
           }
         }
       }
       sheet.appendRow([tags, content, timestamp]);
+      Utils.noteLedgerWrite('知識 新增 ' + tags);
       return '已記錄知識點「' + tags + '」';
     } catch (ex) {
       Logger.error('GoogleSheet.addKnowledge', '新增知識失敗', ex);
@@ -354,6 +358,7 @@ var GoogleSheet = (() => {
       for (var i = data.length - 1; i >= 0; i--) {
         if (String(data[i][0]).trim() === String(key).trim()) {
           sheet.deleteRow(i + 2);
+          Utils.noteLedgerWrite(sheetName + ' 刪除 ' + key);
           return '已刪除「' + key + '」';
         }
       }
