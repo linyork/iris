@@ -57,9 +57,8 @@ var ChatBot = (() => {
       var calledTools = {};
       var wroteViaTool   = false;  // 這一輪有沒有真的執行過寫入工具（見 Utils.claimsWriteDone）
       var claimCorrected = false;  // 攔截只做一次，避免模型跟提示詞互相頂到把輪數燒光
-      var startTime = new Date().getTime();
-      var elapsed   = () => new Date().getTime() - startTime;
-      var timedOut  = false;
+      var elapsed  = () => Utils.execElapsedMs();
+      var timedOut = false;
 
       // 時間預算：GAS 硬上限為 6 分鐘（360s），超過會被直接砍掉。
       // 被砍掉的後果比中途放棄嚴重得多 —— doPost 來不及回 200，平台會重送 webhook，
@@ -67,6 +66,14 @@ var ChatBot = (() => {
       // 因此兩道關卡都往前抓，寧可少跑一輪也要留時間把話講完：
       var NEW_TURN_DEADLINE_MS  = 200000; // 200s 後不再開新一輪（單輪思考可能要 60~90s）
       var TAIL_CALL_DEADLINE_MS = 280000; // 280s 後不再做補救型 API 呼叫，留 80s 收尾
+
+      // ⚠️ 錶要跟底下兩層同一支：`Utils.execElapsedMs()` 從**檔案載入**起算，
+      // 那才是本次執行的真正起點。以前這裡自己 `new Date()` 從進 reply() 起算，
+      // 於是「280s + 留 80s 收尾 = 360s」這個算式少掉了前面那一段 —— GAS 載入
+      // 三十個 .gs、doPost 去重、checkMaster、一次 indicateTyping，走 miniAppAsk
+      // 還要多一次驗簽與一次 push。少多少沒人量過，而 NvidiaService 與
+      // AIServiceFactory 判斷「還夠不夠再打一次」用的一直都是 Utils 這支錶。
+      // 同一次執行裡有兩個對剩餘時間意見不同的來源，正是 Utils 那段註解要消滅的。
 
       for (var turn = 0; turn < maxTurns; turn++) {
         if (elapsed() > NEW_TURN_DEADLINE_MS) {
