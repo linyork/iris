@@ -2,6 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 怎麼跟這個專案的擁有者溝通
+
+**一則訊息一個目的。** 開頭就講清楚這是什麼：報告做完的事、提議下一步、還是回答問題。
+不要把三種混在同一則裡——讀的人得自己拆解「所以你要我做什麼」，等於把整理工作丟回去。
+
+- 先講結論或要求，不要鋪陳。
+- 問是非題就先答是或否，要補充再一兩句。
+- 不要主動附上沒被問到的背景、選項比較、風險清單。要的時候會問。
+- 表格與分點是為了好略讀，不是為了多塞內容。
+- **技術細節寫進 commit message 與這份文件，不要灌進對話。** 為什麼這樣改、踩過什麼坑、
+  哪些路徑試過不行——那些是給未來的人看的，寫在這裡才留得住，講在對話裡只是噪音。
+
 ## Project Overview
 
 Iris is a personal asset management LINE bot built on Google Apps Script (GAS). The architecture is:
