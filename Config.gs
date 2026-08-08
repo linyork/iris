@@ -72,12 +72,6 @@ var Config = (() => {
       SMART: { model: 'gemini-2.5-pro',        maxOutputTokens: 6144, temperature: 1.0 }
     },
 
-    MODEL_CAPABILITIES: {
-      'gemini-2.5-flash-lite': { maxOutputTokens: 8192, supportsFunctionCalling: true },
-      'gemini-2.5-flash':      { maxOutputTokens: 8192, supportsFunctionCalling: true },
-      'gemini-2.5-pro':        { maxOutputTokens: 8192, supportsFunctionCalling: true }
-    },
-
     // ─── Google Custom Search ─────────────────────────────────
     get GOOGLE_SEARCH_KEY() { return scriptProperties.getProperty(ENV_KEYS.SEARCH_KEY); },
     get GOOGLE_SEARCH_CX()  { return scriptProperties.getProperty(ENV_KEYS.SEARCH_CX); },

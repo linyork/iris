@@ -9,8 +9,9 @@ var GeminiService = (() => {
     try {
       options = options || {};
 
+      // 檔次（maxOutputTokens / temperature）由 AIServiceFactory 依 GEMINI_MODELS
+      // 設好才進來，這裡的預設值只在有人繞過 Factory 直接呼叫時才會用到。
       var selectedModel = options.model || 'gemini-2.5-flash';
-      var modelCaps = Config.MODEL_CAPABILITIES[selectedModel];
 
       var url = Config.GEMINI_API_BASE + '/models/' + selectedModel +
                 ':generateContent?key=' + Config.GEMINI_API_KEY;
@@ -19,7 +20,7 @@ var GeminiService = (() => {
         contents: contents,
         generationConfig: {
           temperature:     options.temperature || 1.0,
-          maxOutputTokens: options.maxOutputTokens || (modelCaps ? modelCaps.maxOutputTokens : 4096),
+          maxOutputTokens: options.maxOutputTokens || 4096,
           topP: 0.95
         }
       };
