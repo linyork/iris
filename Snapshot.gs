@@ -1,22 +1,18 @@
 /**
  * Snapshot
- * @description 顧問感知層的「備料」模組
+ * @description 資產狀態的結構化讀取層 —— 「現在手上是什麼」只從這裡出去
  *
- * 收集所有 Sheet 的當下狀態，並預先計算關鍵指標，
- * 產出一份結構化 JSON 給 AdvisorCheck 餵給 LLM 判斷。
+ * 讀「資產管理」表（指令碼屬性 `SHEET_ID`）的當下狀態、預先算好關鍵指標，
+ * 產出結構化 JSON。不做判斷、不做通知、不做排版，只做資料整理。
  *
- * 不做判斷、不做通知、只做資料整理。
+ * ⚠️ **四個消費端吃同一份輸出**，改欄位形狀要四個一起看：
+ *   Dashboard.getPayload → DashboardPage.html
+ *                        → MiniAppPage.html
+ *   GoogleSheet.getHoldings / getDashboard / getHistory（格式化成給 LLM 讀的文字）
+ *   AdvisorCheck（collectAll，整包序列化進 prompt）
  *
- * ⚠️ **資料來源已改為新的「資產管理」表**（指令碼屬性 `SHEET_ID`）。
- * 對外的輸出形狀刻意一個欄位都沒動 —— Dashboard、MiniApp、AdvisorCheck
- * 全都吃這裡的結果，形狀不變它們就不用改。要改欄位的話那三個要一起看。
- *
- * 舊表 → 新表的對應：
- *   所有股票（寬表）      → 持倉
- *   面板 E1:F8（固定格）  → 現金
- *   @所有股票紀錄（寬表） → 每日快照（長表，類型=合計 且 鍵=總資產）
- *   @股利                 → 交易（動作=股利）
- *   @固定                 → 實體資產
+ * 它最初只是 AdvisorCheck 的「備料」模組，後來儀表板與聊天工具都改成讀它 ——
+ * 那正是重點：一份數字，四個地方看到的一樣。
  */
 var Snapshot = (() => {
   var snap = {};
@@ -183,7 +179,7 @@ var Snapshot = (() => {
         ratioOfPortfolio: totalMarketValue > 0 ? _round(h.marketValue / totalMarketValue, 4) : 0,
         isClosed: live ? !!live.isClosed : null
       };
-      // 新表獨有：已實現損益（舊表推導不出來，所以舊版沒有這個欄位）
+      // 出清過才有，沒有就整個欄位不出現（前端一律 `|| 0`）
       if (h.realized) result.realizedPnl = _round(h.realized);
       if (h.priceMissing) result.priceMissing = true;
       return result;

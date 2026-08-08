@@ -129,7 +129,7 @@ Telegram Bot API ───┤        │
 | `Main.gs` | `doPost` / `doGet` 入口、`dailyCleanUp`、`setupAllTriggers`、各項一次性 setup 函式 |
 | `Commands.gs` | 斜線指令攔截層（定義 + 分派，與 Telegram 選單共用同一份清單） |
 | `MessagingServiceFactory.gs` | 依 userId 前綴分派到 LINE 或 Telegram |
-| `Line.gs` | LINE 簽章驗證、reply / push 訊息封裝 |
+| `Line.gs` | LINE 事件正規化、reply / push 訊息封裝 |
 | `Telegram.gs` | Telegram update 正規化、訊息推送、webhook 與指令選單註冊 |
 | `ChatBot.gs` | ReAct 對話迴圈，注入記憶、處理工具呼叫與 XML 清理 |
 | `Prompt.gs` | `SYSTEM_PROMPT`（對話人設）、`ADVISOR_PROMPT`（感知層 prompt）、`systemContext()`（四個 LLM 迴圈共用的開頭與日期規則） |
@@ -392,6 +392,7 @@ Telegram 的指令選單只是 UI 提示——點下去送出的仍是普通文�
 |---|---|
 | `/dashboard` | Telegram 上送出一則帶 Mini App 按鈕的訊息（點按鈕就地開啟面板）；其他平台回傳 `DASHBOARD_URL` |
 | `/report` | 立即產生今日早報，只回給發問者（排程版本會跳過週末並推給所有主人） |
+| `/refresh` | 立即重算持倉／面板／配置。`持倉` 與 `面板` 的市價是活公式，但 `指標` 與 `配置` 是重算當下寫死的值，而程式讀的「總資產」來自 `指標` —— 13:00 排程也有一班，這支是不想等的時候用的 |
 
 指令清單與分派共用同一份定義，並由 `Telegram.setupCommands()` 註冊到選單，
 因此選單不會與實作脫節。**新增或改名指令後，需在 GAS 編輯器執行一次 `setupTelegramCommands()`。**
@@ -619,7 +620,6 @@ shouldAlert? → Line.pushMsg + AlertLog.append
 | `SHEET_ID` | ✅ | 「資產管理」試算表 ID —— 資產分頁與系統分頁都在這一張。全專案唯一來源，`AssetSchema.SHEET_ID` 是指回這裡的 getter，換表只要改這一個地方 |
 | `ADMIN_STRING` | ✅ | 管理員 userId 允許清單，逗號分隔；Telegram 加 `TELEGRAM:` 前綴 |
 | `LINE_API_KEY` | ⚙️ | LINE channel access token（用 LINE 時必填） |
-| `LINE_CHANNEL_SECRET` | ⚙️ | LINE webhook 簽章驗證（用 LINE 時必填） |
 | `TELEGRAM_API_KEY` | ⚙️ | Telegram bot token，來自 @BotFather（用 Telegram 時必填） |
 | `DASHBOARD_URL` | ⚙️ | 儀表板 `/dev` 網址（`/dashboard` 指令回傳用） |
 | `GEMINI_API_KEY` | ⚙️ | Gemini API key（用 Gemini 時必填） |

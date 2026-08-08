@@ -98,8 +98,11 @@ function doPost(e) {
  *
  * ⚠️ 這支 doGet 在「任何人、匿名」的 webhook deployment 上同樣可達，
  * 所以一定要靠 Dashboard.isAuthorized() 擋——匿名訪客的 getActiveUser()
- * 是空字串，會被擋在外面。請另外建立一個「存取權：只有我自己」的
- * deployment，用那支網址開儀表板。
+ * 是空字串，會被擋在外面。
+ *
+ * 儀表板要用 **HEAD 部署的 `/dev` 網址**開（`Config.DASHBOARD_URL`）：它會強制
+ * Google 登入，閘門才拿得到身分，而且永遠服務最新的程式碼。不需要、也不要另外
+ * 建一個「只有我自己」的部署。`/exec` 是匿名的 webhook 部署，GET 一律回 Not Found。
  *
  * @param {object} e - Google Apps Script doGet 事件
  */

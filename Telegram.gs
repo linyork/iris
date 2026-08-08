@@ -159,7 +159,9 @@ var Telegram = (() => {
       method:  'post',
       payload: JSON.stringify({
         url: webAppUrl,
-        // 只收一般訊息，過濾 edited_message / my_chat_member 等雜訊
+        // 只收一般訊息，過濾 my_chat_member / callback_query 等雜訊。
+        // ⚠️ 這也一併擋掉 edited_message —— normalizeEvent 仍然看得懂它（改回
+        //    allowed_updates 就會生效），但以現在這份設定來說那條分支進不來。
         allowed_updates: ['message'],
         // 重設時清掉積壓的舊 update（含逾時重送、尚未消化的那些）
         drop_pending_updates: true,

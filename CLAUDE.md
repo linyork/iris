@@ -168,6 +168,7 @@ answer is fixed skip the whole ReAct loop and one LLM call.
 |---|---|
 | `/dashboard` | On Telegram, sends a message with an inline `web_app` button that opens the Mini App; elsewhere returns `Config.DASHBOARD_URL` (Script Property — the browser dashboard is on the HEAD deployment's `/dev`, whose deployment id differs from the webhook's `/exec`, so it cannot be derived). The handler sends its own message and returns `''` — "handled, nothing left to push" — which is distinct from `null`. |
 | `/report` | Runs `buildDailyReport()` — the same generator the 09:00 trigger uses, minus the weekend guard, replying only to the caller |
+| `/refresh` | Runs `Position.rebuild()` on demand. 持倉 and 面板 prices are live formulas, but 指標 and 配置 hold values frozen at rebuild time — and the total-assets figure everything downstream reads comes from 指標. The 13:00 job does the same thing on a schedule; this is for when you don't want to wait. |
 
 The command list is shared between dispatch and `Telegram.setupCommands()` (`setMyCommands`) so the
 menu cannot drift from what is implemented. **After adding or renaming a command, run
@@ -746,7 +747,6 @@ All secrets are stored in GAS **Script Properties** (not in code):
 | Property Key | Purpose |
 |---|---|
 | `LINE_API_KEY` | LINE channel access token (optional if using Telegram) |
-| `LINE_CHANNEL_SECRET` | LINE webhook signature verification (optional if using Telegram) |
 | `TELEGRAM_API_KEY` | Telegram bot token from @BotFather (optional if using LINE) |
 | `SHEET_ID` | Google Sheet ID |
 | `ADMIN_STRING` | Master user LINE userId |

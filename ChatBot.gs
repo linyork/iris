@@ -223,7 +223,9 @@ var ChatBot = (() => {
           : '抱歉，我有點混亂，請再試一次。';
       }
 
-      // 清除模型誤輸出的 <tool_call> XML（GLM-5.1 在最後一輪有時會用 XML 格式輸出工具呼叫）
+      // 清除模型誤輸出的 <tool_call> XML —— 最後一輪沒有掛工具，有些模型會改用
+      // 文字形式把工具呼叫「講」出來。這道清理不綁任何特定模型（當初是 GLM-5.1
+      // 撞出來的，那顆早就換掉了），換模型時不必重新評估，留著就對了。
       var cleanedResponse = Utils.stripToolCallXml(finalResponse);
       if (!cleanedResponse && finalResponse) {
         // 整個回覆都是 XML，強制要求文字回覆

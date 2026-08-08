@@ -9,8 +9,10 @@
  *   short_term_memory— [key, content, expire_at, category]
  *   knowledge        — [tags, content, timestamp]
  *
- * ⚠️ 資產類的讀取（持倉/總覽/歷史/股利）已改走 Snapshot，讀新的「資產管理」表；
- *    這裡只剩系統類分頁（chat / 記憶 / 知識）與舊表的股利鏡像仍在 SHEET_ID。
+ * ⚠️ 這個檔案自己直接讀寫的，只剩上面那幾張系統分頁。
+ *    資產類的讀取（getHoldings / getDashboard / getHistory / getDividendHistory）
+ *    是**格式化層**：資料一律向 Snapshot 與 AssetSchema 拿，不自己讀資產分頁 ——
+ *    儀表板與聊天回答同一份數字，才不會出現「網頁說 A、Iris 說 B」。
  */
 var GoogleSheet = (() => {
   var gs = {};
@@ -364,11 +366,6 @@ var GoogleSheet = (() => {
 
   // ─── Portfolio Tools ──────────────────────────────────────────
 
-  /**
-   * 取得完整持倉明細（走 Snapshot，讀新表的「持倉」）
-   * row2 = 0000 合計列，row3+ = 個別 ETF
-   * @returns {string} 格式化文字
-   */
   /**
    * 持倉明細（給 LLM 讀的文字）
    *
