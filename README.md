@@ -80,6 +80,7 @@ Telegram Bot API ───┤        │
 ┌──────────────────────────────────────────────┐
 │  ChatBot.gs · ReAct Loop (最多 3 turns)       │
 │  - 注入：SYSTEM_PROMPT + STM + 相關長期知識      │
+│          + Facts 事實區塊（程式算好的關鍵數字）    │
 │  - 工具呼叫快取（同一輪不重複叫同樣的 tool）        │
 │  - 200s 不再開新輪 / 280s 不再補救呼叫            │
 │  - 清除模型偶發的 <tool_call> XML 殘留           │
@@ -133,6 +134,7 @@ Telegram Bot API ───┤        │
 | `Telegram.gs` | Telegram update 正規化、訊息推送、webhook 與指令選單註冊 |
 | `ChatBot.gs` | ReAct 對話迴圈，注入記憶、處理工具呼叫與 XML 清理 |
 | `Prompt.gs` | `SYSTEM_PROMPT`（對話人設）、`ADVISOR_PROMPT`（感知層 prompt）、`systemContext()`（四個 LLM 迴圈共用的開頭與日期規則） |
+| `Facts.gs` | 程式算好的關鍵數字，注入每一則對話 prompt 要求原樣引用。**刻意只收不用打外部 API 的數字**（讀 指標／現金／每日快照），逐檔持倉留給 `getHoldings` —— 這個區塊每則訊息都要組一次 |
 | `Tools.gs` | 工具定義與分派 |
 | `AIServiceFactory.gs` | 依 `env!B3` 路由 Gemini / NVIDIA，含備援模型 fallback |
 | `GeminiService.gs` | Gemini API 呼叫（含 function calling） |

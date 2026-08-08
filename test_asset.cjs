@@ -1974,6 +1974,55 @@ console.log('\nT29  數字要帶著「什麼時候、可不可信」一起出去
   if (extra > 0) snapSheet.deleteRows(rowsBefore + 1, extra);
 }
 
+// ─── T30  注入 prompt 的事實區塊 ─────────────────────────────────
+//
+// 這個區塊會進**每一則**訊息的 prompt，所以它有兩個非功能性的硬要求：
+// 不准丟例外（丟了就整則回覆沒了），也不准無限長（每則訊息都要付那個 token）。
+console.log('\nT30  事實區塊');
+{
+  load('Facts.gs');
+  const block = Facts.build(target);
+
+  check('有組出東西來', block.length > 0, block.slice(0, 40));
+  check('開頭是給模型看的標記', block.indexOf('[系統計算的事實]') === 0, block.split('\n')[0]);
+  check('明講必須原樣引用', /必須原樣引用/.test(block), '');
+  check('明講不要自己算百分比', /不要自己算/.test(block), '');
+
+  // 數字要與指標表一致 —— 這個區塊的全部價值就在「不會算錯」
+  const m = Snapshot._metrics(target);
+  check('總資產與 Snapshot 對得上',
+    block.indexOf(Math.round(Snapshot._totals(target).today).toLocaleString()) >= 0,
+    block.split('\n').filter(l => l.indexOf('總資產') >= 0)[0] || '(沒有總資產)');
+  check('未實現損益與指標對得上',
+    block.indexOf(Math.round(m.unrealized).toLocaleString()) >= 0,
+    block.split('\n').filter(l => l.indexOf('未實現') >= 0)[0] || '(沒有未實現損益)');
+
+  // XIRR 算不出來時要講原因，不能只給一個空白或 0
+  check('XIRR 沒有值時講得出原因', /XIRR/.test(block) &&
+    (/XIRR（年化）：\d|尚無法計算/.test(block)),
+    block.split('\n').filter(l => l.indexOf('XIRR') >= 0)[0] || '(沒有 XIRR)');
+
+  // 長度：進每一則 prompt，不能無限長
+  check('長度控制在 1200 字以內', block.length <= 1200, block.length + ' 字');
+
+  // ⚠️ 真正的限制是「不准打外部 API」，不是「不准出現代號」——「待修正」的警告
+  //    本來就會點名是哪一檔，那是該有的。所以直接盯呼叫，不要用文字內容當代理指標。
+  const savedSP30 = global.StockPrice;
+  let twseCalls = 0;
+  global.StockPrice = { getRawPrices: () => { twseCalls++; return []; } };
+  Facts.build(target);
+  global.StockPrice = savedSP30;
+  check('組事實區塊不打 TWSE（每則訊息都要付的成本）',
+    twseCalls === 0, twseCalls + ' 次呼叫');
+
+  // 最重要的一條：壞掉也不能炸，只能安靜地不提供
+  const brokenSS = { getSheetByName: () => { throw new Error('T30 故意炸的'); } };
+  let threw = false, out = null;
+  try { out = Facts.build(brokenSS); } catch (e) { threw = true; }
+  check('讀不到資料時回空字串而不是丟例外', !threw && out === '',
+    threw ? '丟了例外' : JSON.stringify(out));
+}
+
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);

@@ -575,6 +575,33 @@ escape, which makes **update the only correction path** — and delete the dange
 `區域` / `類型` / `目標配置%` 全留空，而 `配置` 正是按 `區域` 與 `類型` 分組的。也就是說
 那個 C **保證**後面需要一次 `updateInstrument`；`listInstruments` 會直接點名缺哪一欄。
 
+### 數字先算好給它，不要指望它算對
+
+`Facts.build()` puts the headline figures — 總資產, day/week/month change, cash, 未實現/已實現/
+累計股利/淨損益, XIRR, 殖利率, 佔比, plus any `⚠️ 待修正` warning — straight into every
+`ChatBot` prompt, with an instruction to quote them verbatim. Two reasons, and the second is the
+one that usually gets forgotten:
+
+- **An LLM doing arithmetic in prose fails silently.** It will total two figures, divide P&L by
+  cost, convert a currency at a rate it assumed — in the same confident tone it uses when right.
+- **It saves a whole ReAct turn.** 「我總資產多少」 used to cost a tool call, a round trip and a
+  second generation. The number is now already in the prompt.
+
+⚠️ **Only figures that need no external call belong here.** `Facts` reads 指標 / 現金 / 每日快照
+— three sheet reads. Per-holding data is deliberately absent because `Snapshot._holdings` calls
+TWSE, and this block is built for *every* message, including 「謝謝」. `T30` enforces this by
+spying on `StockPrice`, not by pattern-matching the text — the 待修正 warnings legitimately name
+instrument codes, so text matching would forbid the wrong thing.
+
+⚠️ **`Facts.build()` must never throw.** It returns `''` on any failure. It is an enhancement to
+a reply; letting it take the whole reply down would be a strictly worse trade.
+
+⚠️ **The system prompt's 「一律重新呼叫工具」 rule had to be amended, not just extended.** As
+written it would have made the model ignore a correct number sitting in front of it in order to
+obey. The ban was always about quoting *stale numbers from conversation history*; the rule now
+names the two acceptable sources (this block, and tool returns) and says which questions each
+answers.
+
 ### 拿不到就說拿不到，不要生一個 0 出來
 
 `StockPrice.getRawPrices` returns `changePct: null`, never `0`, when there is no trade price
