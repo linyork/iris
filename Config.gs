@@ -7,7 +7,6 @@ var Config = (() => {
 
   var ENV_KEYS = {
     LINE_TOKEN:   'LINE_API_KEY',
-    LINE_SECRET:  'LINE_CHANNEL_SECRET',
     TELEGRAM_TOKEN: 'TELEGRAM_API_KEY',
     SHEET_ID:     'SHEET_ID',
     ADMIN_STRING: 'ADMIN_STRING',
@@ -23,8 +22,11 @@ var Config = (() => {
 
   return {
     // ─── LINE API ─────────────────────────────────────────────
+    //
+    // 沒有 LINE_CHANNEL_SECRET：webhook 簽章驗證做不了。GAS 的 doPost(e) 讀不到
+    // HTTP header，拿不到 X-Line-Signature，所以那份驗簽程式從寫出來的第一天起
+    // 就沒有被呼叫過（2026-08-08 刪除）。防線是 Utils.checkMaster 的允許清單。
     get LINE_CHANNEL_TOKEN()  { return scriptProperties.getProperty(ENV_KEYS.LINE_TOKEN); },
-    get LINE_CHANNEL_SECRET() { return scriptProperties.getProperty(ENV_KEYS.LINE_SECRET); },
     LINE_API_BASE: 'https://api.line.me/v2/bot',
 
     // ─── Telegram API ─────────────────────────────────────────
