@@ -376,12 +376,23 @@ var GoogleSheet = (() => {
    *
    * 走 Snapshot._holdings，不自己讀表 —— 儀表板與聊天回答同一份數字，
    * 才不會出現「網頁說 A、Iris 說 B」。它也一併帶回當日漲跌與佔比。
+   *
+   * ⚠️ 開頭一定要有【資料時點】。這張表裡的數字**時效各不相同**：股數與成本是
+   * 上一次重算凍結的、市價是試算表的活公式、當日漲跌來自 TWSE 延遲報價，
+   * 而其中有些價可能是備援層補上去的死值。全部混在同一段文字裡送進 prompt，
+   * 模型只能當成同一時刻的快照來讀，然後照著講給主人聽。
+   *
+   * 時點不是新算的：`最後重算` 本來就在 `指標` 裡（`_metrics().lastRebuild`），
+   * 備援補價也早就寫成 `指標` 的 `⚠️ 待修正` 列（`_metrics().warnings`）——
+   * 兩個都只有 `getDashboard` 印得出來，問持倉的時候就消失了。
    */
   gs.getHoldings = () => {
     try {
       var ss = Snapshot._open();
       var rows = Snapshot._holdings(ss);
       if (!rows || rows.length === 0) return '（尚無持倉資料）';
+
+      var metrics = Snapshot._metrics(ss) || {};
 
       var fmt = (n) => (n === null || n === undefined) ? '—' : Math.round(n).toLocaleString();
       var pct = (n) => (n === null || n === undefined) ? '—' : (n * 100).toFixed(2) + '%';
@@ -419,7 +430,19 @@ var GoogleSheet = (() => {
         '（' + (totalCost > 0 ? pct((totalValue - totalCost) / totalCost) : '—') + '）' +
         ' | 累計股利: ' + fmt(totalDiv));
 
-      return lines.join('\n\n');
+      // 時點放最前面，讓模型在讀到任何數字之前就知道它們各是什麼時候的
+      var asOf = ['【資料時點】'];
+      asOf.push('  股數／成本／累計股利：上一次重算' +
+        (metrics.lastRebuild ? '（' + metrics.lastRebuild + '）' : '（時間不詳）'));
+      asOf.push('  市價／市值：試算表的 GOOGLEFINANCE 公式，更新時機不固定，不保證是此刻的價');
+      asOf.push('  當日漲跌：TWSE 即時報價，延遲約 20 分鐘；非交易時段取不到，會標明');
+      if (metrics.warnings && metrics.warnings.length) {
+        // 備援補價、懸空的賣出都寫在這裡。`getDashboard` 印得出來，以前這支印不出來，
+        // 於是「這個價是補的死值」這件事只有問總覽的人看得到。
+        asOf.push('  ⚠️ 待修正：' + metrics.warnings.join('；'));
+      }
+
+      return asOf.join('\n') + '\n\n' + lines.join('\n\n');
     } catch (ex) {
       Logger.error('GoogleSheet.getHoldings', '讀取持倉失敗', ex);
       return '讀取持倉時發生錯誤：' + ex.message;
@@ -492,7 +515,12 @@ var GoogleSheet = (() => {
       var head = '最近 ' + series.length + ' 筆總資產紀錄（' +
         first.date + ' → ' + last.date + '）：';
 
-      var body = series.map(r => r.date + ': ' + Math.round(r.total).toLocaleString());
+      // ⚠️ `status` 只在**不是正常交易日**時才有值（休市／資料未更新／報價異常）。
+      //    以前這裡只印日期與金額，把它丟掉了 —— 於是一段平掉的曲線，模型無從分辨
+      //    是放假、是抓價失敗、還是真的沒有變動，只能猜，而猜出來的講得跟事實一樣。
+      //    這與「拿不到當日成交價卻回 0%」是同一種病：資訊在下層算好了，排版時掉了。
+      var body = series.map(r =>
+        r.date + ': ' + Math.round(r.total).toLocaleString() + (r.status ? '（' + r.status + '）' : ''));
       if (body.length > 40) {
         body = body.slice(0, 10).concat(['... 中間省略 ' + (body.length - 20) + ' 筆 ...'])
                    .concat(body.slice(-10));
@@ -500,8 +528,26 @@ var GoogleSheet = (() => {
 
       var change = last.total - first.total;
       var pct = first.total > 0 ? (change / first.total * 100).toFixed(2) + '%' : '—';
-      return head + '\n' + body.join('\n') +
+      var out = head + '\n' + body.join('\n') +
         '\n區間變化: ' + Math.round(change).toLocaleString() + '（' + pct + '）';
+
+      // 中間被省略的那段也可能有異常日，所以統計要算**整個序列**，不能只看印出來的行
+      var abnormal = {};
+      series.forEach(r => { if (r.status) abnormal[r.status] = (abnormal[r.status] || 0) + 1; });
+      var kinds = Object.keys(abnormal);
+      if (kinds.length) {
+        out += '\n⚠️ 其中 ' + kinds.map(k => abnormal[k] + ' 天' + k).join('、') +
+          '。「資料未更新」與「報價異常」那幾天的數字不可信，' +
+          '計算波動或漲跌統計前要先排除，不要當成「那天沒有變動」。';
+      }
+      // 端點本身就是異常日的話，區間變化是拿一個不可信的數字當基準算出來的
+      if (first.status || last.status) {
+        out += '\n⚠️ 區間' + (first.status ? '起點（' + first.date + '：' + first.status + '）' : '') +
+          (first.status && last.status ? '與' : '') +
+          (last.status ? '終點（' + last.date + '：' + last.status + '）' : '') +
+          '不是正常交易日，上面的「區間變化」以此為基準，請一併說明。';
+      }
+      return out;
     } catch (ex) {
       Logger.error('GoogleSheet.getHistory', '讀取歷史紀錄失敗', ex);
       return '讀取歷史紀錄時發生錯誤：' + ex.message;

@@ -1909,6 +1909,71 @@ console.log('\nT28  取不到當日成交價不算平盤');
   global.UrlFetchApp = savedFetch;
 }
 
+// ─── T29  給 LLM 的文字要帶著時點與異常標記 ──────────────────────
+//
+// 與 T28 同一種病：資訊在下層算好了，排版時被丟掉，模型只好用猜的。
+// 這裡管兩支：getHistory 丟掉快照的「狀態」，getHoldings 沒有任何時點。
+console.log('\nT29  數字要帶著「什麼時候、可不可信」一起出去');
+{
+  const snapSheet = target.getSheetByName('每日快照');
+  const hdr = AssetSchema.headerMap(snapSheet);
+  const rowsBefore = snapSheet.getLastRow();
+
+  // 塞三天合計列：一天正常、一天休市、一天報價異常
+  const mkDay = (date, total, status) => {
+    const row = new Array(hdr.__header.length).fill('');
+    row[hdr['日期']] = date;
+    row[hdr['類型']] = '合計';
+    row[hdr['鍵']]   = '總資產';
+    row[hdr['市值']] = total;
+    row[hdr['狀態']] = status;
+    snapSheet.getRange(snapSheet.getLastRow() + 1, 1, 1, row.length).setValues([row]);
+  };
+  mkDay('2026-07-20', 1000000, '交易日');
+  mkDay('2026-07-21', 1000000, '休市');
+  mkDay('2026-07-22', 1000000, '報價異常');
+
+  const hist = GoogleSheet.getHistory(365);
+  // ⚠️ 要挑出**那一列資料本身**再比對。直接對整份文字比對會被文末的
+  //    「終點（2026-07-22：報價異常）」那句話滿足，測不到逐列標記有沒有做。
+  const dayLine = (d) => (hist.split('\n').find(l => l.trim().indexOf(d + ':') === 0) || '');
+  check('休市那天在該列標出來', /休市/.test(dayLine('2026-07-21')),
+    dayLine('2026-07-21') || '(沒有這一列)');
+  check('報價異常那天在該列標出來', /報價異常/.test(dayLine('2026-07-22')),
+    dayLine('2026-07-22') || '(沒有這一列)');
+  check('正常交易日不加註（否則整片都是雜訊）',
+    dayLine('2026-07-20') !== '' && !/（/.test(dayLine('2026-07-20')),
+    dayLine('2026-07-20') || '(沒有這一列)');
+  check('有整段的異常天數統計（中間被省略也算得到）',
+    /1 天休市/.test(hist) && /1 天報價異常/.test(hist),
+    hist.split('\n').filter(l => l.indexOf('⚠️') >= 0).join(' ｜ ') || '(沒有統計)');
+  check('明講那幾天不可信、不是「沒有變動」',
+    /不要當成「那天沒有變動」/.test(hist), '(沒有這句提醒)');
+
+  // getHoldings 的時點
+  const holdText = GoogleSheet.getHoldings();
+  check('持倉開頭有【資料時點】', /【資料時點】/.test(holdText),
+    holdText.split('\n')[0]);
+  check('講明股數成本來自上一次重算', /上一次重算/.test(holdText), '');
+  check('講明市價是活公式、不保證是此刻', /不保證是此刻的價/.test(holdText), '');
+  check('講明當日漲跌有延遲', /延遲約 20 分鐘/.test(holdText), '');
+
+  // 指標的待修正警告（備援補價就寫在這裡）要跟著持倉一起出去
+  // `_metrics` 是掃全表挑開頭是 ⚠️ 的列，不綁列號，所以接在最後面就行
+  const metricSheet = target.getSheetByName('指標');
+  const mAt = metricSheet.getLastRow() + 1;
+  metricSheet.getRange(mAt, 1, 1, 3).setValues([['⚠️ 待修正', '', 'T29 假的備援補價警告']]);
+  const holdText2 = GoogleSheet.getHoldings();
+  check('指標的待修正警告會出現在持倉輸出裡',
+    /T29 假的備援補價警告/.test(holdText2),
+    holdText2.split('\n').filter(l => l.indexOf('待修正') >= 0)[0] || '(沒帶出來)');
+  metricSheet.deleteRow(mAt);
+
+  // 收乾淨，不影響後面（目前沒有後續測試，但別留給未來的人踩）
+  const extra = snapSheet.getLastRow() - rowsBefore;
+  if (extra > 0) snapSheet.deleteRows(rowsBefore + 1, extra);
+}
+
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);
