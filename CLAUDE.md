@@ -563,6 +563,46 @@ escape, which makes **update the only correction path** — and delete the dange
 `區域` / `類型` / `目標配置%` 全留空，而 `配置` 正是按 `區域` 與 `類型` 分組的。也就是說
 那個 C **保證**後面需要一次 `updateInstrument`；`listInstruments` 會直接點名缺哪一欄。
 
+### 拿不到就說拿不到，不要生一個 0 出來
+
+`StockPrice.getRawPrices` returns `changePct: null`, never `0`, when there is no trade price
+for today (`isClosed` — MIS's `z` field is empty or `-`: outside trading hours, a holiday, or a
+holding with no volume). It used to return `0`, and that was a fabricated number: `current` falls
+back to yesterday's close, so the calculation is `(y - y) / y`. **That is not "flat today", it is
+a meaningless expression that happens to look exactly like one.**
+
+The cost was concrete: every evening Iris told the owner each holding was precisely flat, and had
+no way to know it was making that up — the one field that distinguishes the two cases,
+`isClosed`, was computed at the bottom and dropped before reaching the model.
+
+The same data already had one consumer doing it right: `MarketAlert` has always guarded with
+`if (p.isClosed || !p.yesterday) return;`. The bug was that the other two consumers didn't.
+
+Three layers have to agree, and each is easy to break alone:
+
+- **Source** — `getRawPrices` returns `null`. `getPrice` (the tool) prints 「非交易時段，取不到
+  當日成交價」 instead of 「漲跌：0.00　幅度：0.00%」 next to a 「收盤價」 that was actually
+  yesterday's close, the same number under two different labels.
+- **Middle** — ⚠️ `Snapshot._holdings` must not write `live ? _round(live.changePct, 4) : null`.
+  `_round(null)` is `Math.round(null * 10000) / 10000`, which is **0** — "unknown" quietly
+  becomes "flat" and the null at the source is wasted. Check the value, not the object.
+- **Output** — `GoogleSheet.getHoldings` says 「今日: 取不到當日成交價…，不是平盤」 rather than
+  omitting the field silently. `DashboardPage` already rendered `null` as `—`, so it needed nothing.
+
+`T28` pins all three, including the case that must keep reporting `0`: a real quote that genuinely
+equals yesterday's close **is** flat, and must not be swept into `null` along with the rest.
+
+The general rule this is an instance of: **a model cannot be honest about something it cannot
+distinguish.** Prompt instructions don't fix that — the fix is to not hand it a number to be
+wrong with. Compare [「已記錄」是自由文字](#已記錄是自由文字只有工具名字算數), which is the
+same lesson from the write side.
+
+⚠️ Known limitation, deliberately not papered over: `Snapshot.isQuiet`'s "any holding moved ≥3%"
+condition is inert at its only call site (`advisorCheckEvening`, 19:00), because there is no
+day-change data after the close. It was equally inert before — the zeros failed the same
+threshold — so this changed nothing except making the reason visible. Fixing it means changing
+the schedule or the data source, not treating `null` as `0`.
+
 ### 面板 vs 指標
 
 Two tabs, one number set, on purpose:

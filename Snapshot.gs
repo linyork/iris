@@ -164,7 +164,11 @@ var Snapshot = (() => {
       var live = livePrices[h.code];
       var pnl = h.marketValue && h.costBasis ? h.marketValue - h.costBasis : null;
       var pnlPct = h.costBasis > 0 ? (h.marketValue - h.costBasis) / h.costBasis : null;
-      var displayPrice = (live && live.current) ? live.current : h.price;
+      // 盤中才用 MIS 的即時價；非交易時段它給的 current 是**昨收**，
+      // 而表上的 GOOGLEFINANCE 值多半已經是今日收盤，比它新，也與同列的
+      // 市值同源（市值讀的是表，不是這裡）——拿昨收當市價會讓兩者對不起來。
+      var liveUsable   = live && live.current > 0 && !live.isClosed;
+      var displayPrice = liveUsable ? live.current : (h.price || (live ? live.current : 0));
       var result = {
         code: h.code,
         name: h.name,
@@ -175,7 +179,11 @@ var Snapshot = (() => {
         totalDividendReceived: _round(h.totalDividend),
         pnl: pnl !== null ? _round(pnl) : null,
         pnlPct: pnlPct !== null ? _round(pnlPct, 4) : null,
-        dayChangePct: live ? _round(live.changePct, 4) : null,
+        // ⚠️ 不可以寫成 `live ? _round(live.changePct, 4) : null` —— `_round(null)`
+        //    是 `Math.round(null * 10000) / 10000`，也就是 **0**。「不知道」會在
+        //    這一步靜靜地變回「今天平盤」，而 StockPrice 特地回 null 就白費了。
+        dayChangePct: (live && live.changePct !== null && live.changePct !== undefined)
+          ? _round(live.changePct, 4) : null,
         ratioOfPortfolio: totalMarketValue > 0 ? _round(h.marketValue / totalMarketValue, 4) : 0,
         isClosed: live ? !!live.isClosed : null
       };
@@ -496,6 +504,12 @@ var Snapshot = (() => {
    *   1. 總資產日變動 < 0.5%
    *   2. 無單檔當日漲跌 >= 3%
    *   3. 無持倉佔比異常（>50% 或 <2% 但市值 > 0）
+   *
+   * ⚠️ 條件 2 在**唯一的呼叫端（19:00 的 advisorCheckEvening）幾乎永遠成立**，
+   *    因為那時候收盤了，MIS 給不出當日成交價，`dayChangePct` 全是 null。
+   *    以前它們是 0，看起來像「每檔都平盤」，一樣過不了門檻 —— 差別只在現在是
+   *    誠實的「不知道」。要讓這條真的有作用，得改的是**排程時間或資料來源**
+   *    （例如改讀當日快照的漲跌），不是把 null 當成 0。
    */
   snap.isQuiet = (data) => {
     if (!data) return false;

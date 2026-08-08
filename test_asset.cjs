@@ -1842,6 +1842,73 @@ console.log('\nT27  擋下的寫入不算寫入');
     before5 + ' → ' + Utils.ledgerWriteCount());
 }
 
+// ─── T28  拿不到當日成交價時，不准生出 0% ────────────────────────
+//
+// 收盤後 MIS 的「最近成交價」是空的，程式退回用昨收當現價，於是
+// 「今天漲跌」變成昨收減昨收 —— 恆等於 0，而且長得跟「今天平盤」一模一樣。
+// 舊版就這樣一路傳到 LLM 面前，於是每到盤後 Iris 就會說每一檔都剛好平盤。
+// 這裡釘死三層：源頭不造 0、中間不把 null 轉回 0、輸出講明取不到。
+console.log('\nT28  取不到當日成交價不算平盤');
+{
+  const savedSP    = global.StockPrice;
+  const savedFetch = global.UrlFetchApp;
+
+  const misReply = (rows) => ({
+    getResponseCode: () => 200,
+    getContentText:  () => JSON.stringify({ msgArray: rows })
+  });
+
+  // ① 源頭：z 是 '-'（沒有當日成交價）→ changePct 必須是 null，不是 0
+  global.UrlFetchApp = { fetch: () => misReply([
+    { c: 'AAAA', n: '收盤後',   z: '-',    y: '50.00' },
+    { c: 'BBBB', n: '真的平盤', z: '50.00', y: '50.00' },
+    { c: 'CCCC', n: '真的漲',   z: '55.00', y: '50.00' }
+  ]) };
+  load('StockPrice.gs');   // 覆蓋掉 harness 的 stub，測真的那支
+
+  const raw = StockPrice.getRawPrices(['AAAA', 'BBBB', 'CCCC']);
+  const byCode = {};
+  raw.forEach(r => { byCode[r.code] = r; });
+
+  check('沒有當日成交價 → changePct 是 null 不是 0',
+    byCode.AAAA.changePct === null && byCode.AAAA.isClosed === true,
+    JSON.stringify(byCode.AAAA));
+  check('真的平盤 → changePct 是 0（不能一起變成 null）',
+    byCode.BBBB.changePct === 0 && byCode.BBBB.isClosed === false,
+    JSON.stringify(byCode.BBBB));
+  check('有成交且上漲 → changePct 照算',
+    Math.abs(byCode.CCCC.changePct - 0.1) < 1e-9,
+    JSON.stringify(byCode.CCCC));
+
+  // ② 中間層：_round(null) 是 0，Snapshot 不能讓「不知道」在這裡復活
+  const held = AssetSchema.readObjects(target.getSheetByName('持倉'))
+    .filter(p => num(p['股數']) > 0);
+  const code = String(held[0]['代號']);
+
+  global.StockPrice = { getRawPrices: () => [
+    { code: code, name: 'X', current: 50, yesterday: 50, changePct: null, isClosed: true }
+  ] };
+  const rows = Snapshot._holdings(target);
+  const row  = rows.find(r => r.code === code);
+  check('Snapshot 把 null 原樣傳下去，沒有變成 0',
+    row.dayChangePct === null, JSON.stringify(row.dayChangePct));
+  check('isClosed 有帶出去（輸出層才有辦法講清楚）',
+    row.isClosed === true, JSON.stringify(row.isClosed));
+
+  // ③ 輸出層：給 LLM 的文字不准出現「今日: 0.00%」
+  load('GoogleSheet.gs');
+  const text = GoogleSheet.getHoldings();
+  check('給 LLM 的持倉文字沒有假的 0.00% 當日漲跌',
+    text.indexOf('今日: 0.00%') < 0 && text.indexOf('今日: +0.00%') < 0,
+    text.split('\n').filter(l => l.indexOf('今日') >= 0).join(' ｜ ').slice(0, 120));
+  check('而且明講取不到，不是默默省略',
+    /取不到當日成交價/.test(text),
+    text.split('\n').filter(l => l.indexOf('今日') >= 0)[0] || '(沒有任何今日欄位)');
+
+  global.StockPrice = savedSP;
+  global.UrlFetchApp = savedFetch;
+}
+
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);

@@ -400,8 +400,13 @@ var GoogleSheet = (() => {
           '累計股利: ' + fmt(r.totalDividendReceived),
           '佔比: ' + pct(r.ratioOfPortfolio)
         ];
+        // 「今天漲跌」只有在真的拿得到當日成交價時才講。取不到就明講取不到 ——
+        // 舊版會印「今日: 0.00%」，那個 0 是昨收減昨收算出來的，模型無從分辨
+        // 它是「今天平盤」還是「沒有資料」，於是每到盤後就會告訴主人全部平盤。
         if (r.dayChangePct !== null && r.dayChangePct !== undefined) {
           parts.push('今日: ' + pct(r.dayChangePct));
+        } else if (r.isClosed) {
+          parts.push('今日: 取不到當日成交價（非交易時段或該檔今日無成交），不是平盤');
         }
         if (r.realizedPnl) parts.push('已實現損益: ' + fmt(r.realizedPnl));
         if (r.priceMissing) parts.push('⚠️ 市價抓不到，市值不可信');

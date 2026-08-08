@@ -62,7 +62,21 @@ var StockPrice = (() => {
 
   /**
    * 供內部使用：回傳結構化股價陣列
-   * @returns {Array<{code, name, current, yesterday, changePct, isClosed}>}
+   *
+   * ⚠️ **拿不到當日成交價時，`changePct` 是 `null`，不是 `0`。**
+   *
+   * `isClosed` 問的其實就是「證交所有沒有給今天的成交價」（`z` 欄位空或是 `-`）——
+   * 非交易時段、假日、或該檔今天無量都會是這樣。這時 `current` 退回昨收，於是
+   * 「今天漲跌」變成昨收減昨收除以昨收：**那不是 0%，那是一個沒有意義的算式**，
+   * 偏偏長得跟「今天平盤」一模一樣。
+   *
+   * 舊版回 0，於是每到盤後 Iris 就會告訴主人每一檔都剛好平盤，而且它自己不知道
+   * 那是編出來的 —— 分辨所需的 `isClosed` 到不了它面前。回 `null` 之後，
+   * 「不知道」與「真的平盤」在型別上就分得開，下游想講錯也沒有材料。
+   *
+   * `yesterday` 為 0（沒有昨收可比）同理，也回 `null`。
+   *
+   * @returns {Array<{code, name, current, yesterday, changePct: number|null, isClosed}>}
    */
   sp.getRawPrices = (symbols) => {
     var list  = typeof symbols === 'string'
@@ -73,7 +87,7 @@ var StockPrice = (() => {
       var isClosed  = !item.z || item.z === '-';
       var current   = parseFloat(isClosed ? item.y : item.z) || 0;
       var yesterday = parseFloat(item.y) || 0;
-      var changePct = yesterday ? (current - yesterday) / yesterday : 0;
+      var changePct = (isClosed || !yesterday) ? null : (current - yesterday) / yesterday;
       return { code: item.c, name: item.n, current: current, yesterday: yesterday, changePct: changePct, isClosed: isClosed };
     });
   };
@@ -95,16 +109,24 @@ var StockPrice = (() => {
       if (items.length === 0) return '查無資料，請確認代號是否正確（僅支援上市股票）';
 
       var lines = items.map(item => {
+        // 同 getRawPrices：沒有當日成交價時不要算漲跌 —— 舊版這裡會印出
+        // 「漲跌：0.00　幅度：0.00%」，而上一行的「收盤價」印的其實是昨收，
+        // 同一個數字掛兩個名字，看起來卻像一筆完整的行情。
         var isClosed  = !item.z || item.z === '-';
-        var price     = isClosed ? item.y : item.z;
         var yesterday = parseFloat(item.y) || 0;
-        var current   = parseFloat(price)  || 0;
-        var change    = yesterday ? (current - yesterday).toFixed(2) : 'N/A';
-        var changePct = yesterday ? ((current - yesterday) / yesterday * 100).toFixed(2) + '%' : 'N/A';
-        var status    = isClosed ? '收盤價' : '即時價';
+
+        if (isClosed) {
+          return '▸ ' + item.n + '（' + item.c + '）\n' +
+                 '  ⚠️ 非交易時段，取不到當日成交價\n' +
+                 '  昨收：' + (item.y || '-') + '（漲跌與幅度無法計算）';
+        }
+
+        var current   = parseFloat(item.z) || 0;
+        var change    = yesterday ? (current - yesterday).toFixed(2) : '無昨收可比';
+        var changePct = yesterday ? ((current - yesterday) / yesterday * 100).toFixed(2) + '%' : '無昨收可比';
 
         return '▸ ' + item.n + '（' + item.c + '）\n' +
-               '  ' + status + '：' + price + '　昨收：' + item.y + '\n' +
+               '  即時價：' + item.z + '　昨收：' + (item.y || '-') + '\n' +
                '  漲跌：' + change + '　幅度：' + changePct + '\n' +
                '  開盤：' + (item.o || '-') + '　最高：' + (item.h || '-') + '　最低：' + (item.l || '-');
       });
