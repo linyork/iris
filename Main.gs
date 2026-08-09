@@ -142,6 +142,10 @@ function doGet(e) {
  */
 function dailyCleanUp() {
   try {
+    // ⚠️ 聚合一定要排在清 consolelog **之前** —— 順序倒過來就等於把資料丟掉再去算它。
+    //    回頭算 3 天，所以就算某天這支排程沒跑到，下次也會自己補上。
+    Metrics.rollupDaily(3);
+
     GoogleSheet.cleanExpiredShortTermMemories();
     AlertLog.cleanOld();
     AdviceLog.cleanOld();   // 保留 180 天，比 alert_log 長很多，見 AdviceLog

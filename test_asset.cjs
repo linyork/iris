@@ -2186,6 +2186,62 @@ console.log('\nT33  人設寫的是行為準則，不是排版規範');
   check('沒傳就不留空段落', Prompt.systemContext({ scope: '回覆' }).indexOf('undefined') < 0, '');
 }
 
+// ─── T34  consolelog 聚合成每日指標 ───────────────────────────────
+//
+// 這些數字本來每 10 天就被 dailyCleanUp 清掉。聚合的重點不只是「有數字看」，
+// 而是改完迴圈或模型設定之後，有東西可以拿來驗證實際影響。
+console.log('\nT34  每日指標聚合');
+{
+  load('Metrics.gs');
+
+  // ⚠️ 要重用已有的分頁。mock 允許同名分頁共存（真的 Sheets 不行），
+  //    直接 insertSheet 會冒出第二張，而 getSheetByName 拿到的是第一張 ——
+  //    症狀是「測試寫了一堆資料，Metrics 卻說只有一列」。
+  const logSheet = target.getSheetByName('consolelog') || target.insertSheet('consolelog');
+  logSheet.clear();
+  logSheet.getRange(1, 1, 1, 5).setValues([['時間', '層級', 'tag', '訊息', '細節']]);
+
+  const today = Utilities.formatDate(new Date(), 'GMT+8', 'yyyy/MM/dd');
+  const put = (level, tag, msg, detail) =>
+    logSheet.appendRow([today + ' 10:00:00', level, tag, msg, detail || '']);
+
+  put('INFO', 'ChatBot.reply', 'ReAct 迴圈結束', JSON.stringify({ totalTurns: 2, elapsedMs: 12000, timedOut: false }));
+  put('INFO', 'ChatBot.reply', 'ReAct 迴圈結束', JSON.stringify({ totalTurns: 4, elapsedMs: 30000, timedOut: true }));
+  put('INFO', 'Tools.execute', '執行工具: getHoldings', '{}');
+  put('INFO', 'Tools.execute', '執行工具: getHoldings', '{}');
+  put('INFO', 'Tools.execute', '執行工具: searchWeb', '{}');
+  put('WARNING', 'AIServiceFactory.callAPI', '備援模型接手成功', '');
+  put('INFO', 'Utils.noteLedgerWrite', '帳本寫入 #1', '');
+  put('WARNING', 'ChatBot.reply', '宣稱已完成但沒有呼叫寫入工具，打回重做', '');
+  put('ERROR', 'StockPrice._fetch', '請求丟出例外', '');
+
+  const rows = Metrics.rollupDaily(1);
+  const r = rows[0];
+
+  check('算出對話數', r.replies === 2, JSON.stringify(r.replies));
+  check('平均輪數 = (2+4)/2', r.avgTurns === 3, JSON.stringify(r.avgTurns));
+  check('最多輪數取最大值', r.maxTurns === 4, JSON.stringify(r.maxTurns));
+  check('耗時換算成秒', r.avgSec === 21 && r.maxSec === 30, r.avgSec + ' / ' + r.maxSec);
+  check('逾時只算 timedOut=true 的', r.timeouts === 1, JSON.stringify(r.timeouts));
+  check('工具呼叫總數', r.toolCalls === 3, JSON.stringify(r.toolCalls));
+  check('最常用工具帶次數', r.topTool === 'getHoldings(2)', r.topTool);
+  check('備援接手次數', r.fallback === 1, JSON.stringify(r.fallback));
+  check('假宣稱攔截有被數到（最值得盯的一條）', r.falseClaim === 1, JSON.stringify(r.falseClaim));
+  check('帳本寫入次數', r.ledgerWrites === 1, JSON.stringify(r.ledgerWrites));
+  check('錯誤數只算 ERROR', r.errors === 1, JSON.stringify(r.errors));
+
+  // 同一天重跑要覆蓋，不能疊加 —— 排程補跑與手動執行都會發生
+  const metricSheet2 = target.getSheetByName('metrics');
+  const rowsAfterFirst = metricSheet2.getLastRow();
+  Metrics.rollupDaily(1);
+  check('同一天重跑覆蓋而不是疊加',
+    target.getSheetByName('metrics').getLastRow() === rowsAfterFirst,
+    rowsAfterFirst + ' → ' + target.getSheetByName('metrics').getLastRow());
+
+  target.sheets = target.sheets.filter(s =>
+    s.getName() !== 'consolelog' && s.getName() !== 'metrics');
+}
+
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);

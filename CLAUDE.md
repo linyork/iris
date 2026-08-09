@@ -575,6 +575,29 @@ escape, which makes **update the only correction path** — and delete the dange
 `區域` / `類型` / `目標配置%` 全留空，而 `配置` 正是按 `區域` 與 `類型` 分組的。也就是說
 那個 C **保證**後面需要一次 `updateInstrument`；`listInstruments` 會直接點名缺哪一欄。
 
+### 每日指標：consolelog 在被丟掉之前先算一次
+
+`Metrics.rollupDaily(days)` folds `consolelog` into one row per day in a `metrics` tab: replies,
+average and max turns, average and max seconds, timeouts, tool calls, most-used tool, fallback
+takeovers, **false-claim interceptions**, ledger writes, errors. `DevTools.rollupMetrics()` runs
+it by hand over 7 days.
+
+⚠️ **It runs first in `dailyCleanUp`, before the `consolelog` purge.** Reversing that order means
+throwing the data away and then trying to count it. There is currently a lot of slack (10-day
+retention, 3-day rollup) but the ordering is the invariant, not the slack.
+
+Each run recomputes the last 3 days and **overwrites** rows for those dates, so a missed schedule
+backfills itself and a manual run never doubles a row.
+
+⚠️ **Do not re-parse the timestamp into a `Date`.** `GoogleSheet.setLog` already wrote it as a
+GMT+8 string; parsing it back with the execution's timezone and re-formatting to GMT+8 shifts the
+whole day when the two conversions don't cancel — and the symptom is "yesterday has no data",
+with no error. `_dayOf` takes the first ten characters instead. It still accepts a real `Date`,
+because Sheets sometimes coerces that column.
+
+This exists partly to make the `TOOL_MAX_ITERATIONS` 3 → 5 change checkable: `avgTurns` /
+`maxTurns` / `timeouts` are exactly the numbers that say whether it helped or cost anything.
+
 ### 人設寫的是行為，排版放最後
 
 `Prompt.SYSTEM_PROMPT` used to spend about 40% of its length on formatting — no Markdown, use

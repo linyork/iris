@@ -174,6 +174,17 @@ function testAdvisorCheck() {
   }
 }
 
+/**
+ * 手動聚合最近 N 天的 consolelog 成每日指標。
+ * 改完 ChatBot 的迴圈或模型設定之後用這支看實際影響：平均輪數、耗時分佈、
+ * 逾時次數、備援接手、假宣稱攔截有沒有觸發。冪等，同一天重跑會覆蓋不會疊加。
+ */
+function rollupMetrics() {
+  var rows = Metrics.rollupDaily(7);
+  console.log(JSON.stringify(rows, null, 2));
+  return rows;
+}
+
 /** 只重畫「面板」的版面（不重算持倉）。改了 Panel.render() 之後用這支看結果。 */
 function renderPanel() {
   var r = Panel.render();
