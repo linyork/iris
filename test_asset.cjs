@@ -2485,6 +2485,23 @@ console.log('\nT37  評估的判定函式');
   check('未知的性質名稱會被點名，不是靜靜跳過',
     Eval.judge('隨便', 'noSuchCheck', {}).failed.join('').indexOf('未知性質') >= 0, '');
 
+  // ── 2026-08-09 第一次跑基準線時，這幾條把做對的回覆判成失敗。
+  //    判定誤殺比漏殺更糟：漏殺只是少發現一個問題，誤殺會讓人去「修」對的行為。
+  check('「先講結論：不算太高」算有先答（Q03 誤殺）',
+    C.yesNoFirst('先講結論：不算太高，但這正是您刻意保留的戰略現金。').ok === true, '');
+  check('「▸ 結論：不建議」也算', C.yesNoFirst('▸ 結論：不建議現在加碼。').ok === true, '');
+  check('真的在鋪陳還是要擋下',
+    C.yesNoFirst('根據你的既定策略與目前持倉，我直接給結論。').ok === false, '');
+
+  check('「您的長期配置原則」算引用（Q03 誤殺）',
+    C.citesStanding('我記得您的長期配置原則：現金＋黃金約佔 38%').ok === true, '');
+  check('「你原本就有預留」算引用（Q05 誤殺）',
+    C.citesStanding('你原本就有預留 38% 的戰略現金等機會').ok === true, '');
+  check('「照你訂的紀律」算引用',
+    C.citesStanding('照你訂的紀律，現在不動。').ok === true, '');
+  check('完全沒提到主人設過什麼 → 仍然擋下',
+    C.citesStanding('這檔最近漲很多，建議減碼。').ok === false, '');
+
   check('預設題組有東西', Eval.DEFAULT_SET.length >= 10, Eval.DEFAULT_SET.length + ' 題');
   check('每題的期望性質都是真的存在的檢查',
     Eval.DEFAULT_SET.every(q => q[2].split(',').every(n => !!Eval.CHECKS[n.trim()])),

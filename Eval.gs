@@ -72,10 +72,19 @@ var Eval = (() => {
                          : { ok: true, why: '' };
     },
 
-    /** 是非題要先答是或否，不要把一個「對」寫成三段 */
+    /**
+     * 是非題要先答是或否，不要把一個「對」寫成三段。
+     *
+     * ⚠️ 「先講結論：不算太高」要算通過 —— 答案就在第一行，只是前面有個標籤。
+     *    2026-08-09 的基準線上這條誤殺了 Q03：模型做對了，判定說它沒做。
+     *    **判定函式誤殺比漏殺更糟**：漏殺只是少發現一個問題，誤殺會讓人去「修」
+     *    一個本來就對的行為。
+     */
     yesNoFirst: (reply) => {
-      var head = String(reply).split('\n').filter(l => l.trim())[0] || '';
-      return /^(是|否|對|不|有|沒有|可以|不行|會|不會)/.test(head.trim())
+      var head = (String(reply).split('\n').filter(l => l.trim())[0] || '').trim();
+      // 剝掉「先講結論：」「結論：」「▸ 」這類前綴再看
+      var body = head.replace(/^[▸◆\-*\s]*(先講)?結論[：:]\s*/, '').replace(/^\*+/, '');
+      return /^(是|否|對|不|有|沒有|可以|不行|會|不會|還好|算是)/.test(body)
         ? { ok: true, why: '' }
         : { ok: false, why: '第一行沒有先給是／否：' + head.slice(0, 30) };
     },
@@ -104,11 +113,24 @@ var Eval = (() => {
     /** 數字要有出處 */
     numbersGrounded: _numbersGrounded,
 
-    /** 該引用主人立的規矩時要引用 */
+    /**
+     * 該引用主人立的規矩時要引用。
+     *
+     * ⚠️ 主人與 Iris 之間「你／您」混用，而且引用的講法很多種：
+     *    「您的長期配置原則」「你原本就有預留」「照你訂的紀律」「你設定的策略」。
+     *    2026-08-09 的基準線上這條誤殺了 Q03 與 Q05 —— 兩則都確實引用了偏好，
+     *    只是沒用我當初想到的那三種寫法。**規則寫得太窄，等於在考模型會不會照樣造句。**
+     */
     citesStanding: (reply) => {
-      return /\[(決策|目標|偏好)\]|你(設|說)過|上次/.test(reply)
-        ? { ok: true, why: '' }
-        : { ok: false, why: '沒有引用主人設過的決策／目標' };
+      var s = String(reply);
+      var hit = /\[(決策|目標|偏好)\]/.test(s) ||
+        /(你|您)(自己)?(設|訂|說|定)(過|的|了)/.test(s) ||
+        /(你|您)的.{0,6}(原則|策略|紀律|目標|計畫|配置|偏好)/.test(s) ||
+        /(你|您)原本(就)?(有|預留|打算)/.test(s) ||
+        /照(你|您)(自己)?(的|訂)/.test(s) ||
+        /上次(我|你|您)/.test(s);
+      return hit ? { ok: true, why: '' }
+                 : { ok: false, why: '沒有引用主人設過的決策／目標' };
     }
   };
 
@@ -223,6 +245,28 @@ var Eval = (() => {
    * 這一輪到底給了模型哪些數字。事實區塊自己組一次即可（它是純讀取）。
    */
   ev._ask = (question, id) => {
+    // ⚠️ 脈絡必須包含**這一輪工具回傳的內容**，否則 numbersGrounded 會把「忠實轉述
+    //    工具給的數字」誤判成「憑空捏造」。2026-08-09 的基準線上它誤殺了三題
+    //    （Q04 的股數 300,000、Q09 的股利 165,622、Q10 的逐日總資產）——
+    //    那些數字全部來自 getHoldings / getDividendHistory / getHistory，全是對的。
+    //
+    //    所以在這裡暫時包住 Tools.execute 把回傳收集起來。包在 Eval 裡而不是改
+    //    ChatBot：正式路徑不需要為了被評估而多背一個參數。
+    var toolOutput = [];
+    var realExecute = Tools.execute;
+    Tools.execute = function (name, args) {
+      var r = realExecute(name, args);
+      try { toolOutput.push(String(r && r.text !== undefined ? r.text : r)); } catch (e) { /* 收集失敗不影響評估 */ }
+      return r;
+    };
+    try {
+      return ev._askInner(question, id, toolOutput);
+    } finally {
+      Tools.execute = realExecute;   // 一定要還原，否則之後每一則對話都掛著這層包裝
+    }
+  };
+
+  ev._askInner = (question, id, toolOutput) => {
     var event = {
       // ⚠️ 每一題用不同的 userId。對話歷史是按 userId 讀的，共用一個的話第 2 題
       //    會看到第 1 題的問答 —— 結果就變成跟執行順序有關，同一組題目跑兩次
@@ -237,7 +281,11 @@ var Eval = (() => {
     };
     var context = Facts.build() + '\n' + GoogleSheet.knowledgeForPrompt(question);
     var reply = ChatBot.reply(event);
-    return { reply: String(reply || ''), context: context };
+    // 工具回傳接在後面 —— 模型看得到的數字，判定也要看得到
+    return {
+      reply: String(reply || ''),
+      context: context + '\n' + (toolOutput || []).join('\n')
+    };
   };
 
   return ev;

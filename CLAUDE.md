@@ -603,6 +603,22 @@ Two things that would quietly ruin the results:
 the wrong thing. The set asks whether the reply *carries an as-of*, whether *every figure has a
 source*, whether a yes/no question *got a yes or no first*.
 
+⚠️ **The first baseline run graded the checkers, not the model.** 2026-08-09: 3 pass / 7 fail, and
+four of those failures were the checker's fault — `yesNoFirst` rejected 「先講結論：不算太高」
+(the answer is right there, behind a label), `citesStanding` missed 「您的長期配置原則」 and
+「你原本就有預留」 because it only knew three phrasings, and `numbersGrounded` flagged figures the
+model had correctly transcribed from tool output, because `_ask` built its context from `Facts` +
+knowledge and never captured what the tools returned.
+
+**A checker that fails correct behaviour is worse than one that misses bad behaviour.** A miss
+costs you one undetected problem; a false failure sends someone off to "fix" something that was
+already right. `T37` now pins each of those four cases.
+
+`_ask` wraps `Tools.execute` for the duration of a question to collect outputs into the context —
+in `Eval`, not in `ChatBot`, because the production path should not carry a parameter it only
+needs when being graded. The wrapper is restored in a `finally`; leaving it installed would put an
+extra layer on every later reply in that execution.
+
 ⚠️ `numbersGrounded` is the valuable check and the one most likely to misfire, so its allowances
 are deliberate: 「142萬」 counts as grounded for 1,420,000 because the persona *requires* that
 form, and anything under 10,000 is skipped — years, percentages, share counts and row numbers all
