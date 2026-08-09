@@ -299,9 +299,25 @@ var Tools = (() => {
   // 現在證據取自寫入本身（`Utils.noteLedgerWrite`），這份名單就不需要了 ——
   // 工具只要真的寫進去就一定會被算到，不必有人記得來這裡登記。要改的地方回到兩處。
 
-  tools.execute = (name, args) => {
-    try {
-      Logger.info('Tools.execute', '執行工具: ' + name, args);
+  /**
+   * 工具回傳的信封
+   *
+   * `execute()` 以前一律回字串，於是「查到了」「參數不齊」「工具壞了」在型別上完全一樣。
+   * 後果是模型可以把「讀取持倉時發生錯誤：xxx」當成一段內容拿去總結，然後用一樣的
+   * 語氣講給主人聽 —— 迴圈也沒有任何辦法對失敗做出不同的反應。
+   *
+   * ⚠️ **只宣告分得出來的三種。** 「成功但查無資料」刻意不在裡面：那個判斷藏在
+   *    `GoogleSheet` / `AssetTools` 各自回的中文句子裡（「（尚無持倉資料）」之類），
+   *    要在這一層認出來只能比對字串 —— 那正是這個信封想消滅的東西。真要區分，
+   *    得從底層函式一起改，而不是在信封上補一個猜出來的欄位。
+   */
+  var ok      = (text) => ({ ok: true,  status: 'ok',           text: String(text) });
+  var invalid = (text) => ({ ok: false, status: 'invalid_args', text: String(text) });
+  var failed  = (text) => ({ ok: false, status: 'error',        text: String(text) });
+
+  /** 原本的分派；回字串代表成功，回信封代表它自己判斷過了 */
+  var _dispatch = (name, args) => {
+    {
       switch (name) {
         case 'getHoldings':
           return GoogleSheet.getHoldings();
@@ -313,7 +329,7 @@ var Tools = (() => {
           return GoogleSheet.getHistory(args.days || 30);
 
         case 'rememberShortTerm':
-          if (!args.key || !args.content) return '缺少必要參數：key 與 content 皆為必填。';
+          if (!args.key || !args.content) return invalid('缺少必要參數：key 與 content 皆為必填。');
           return GoogleSheet.addShortTermMemory(
             args.key,
             args.content,
@@ -321,18 +337,18 @@ var Tools = (() => {
           );
 
         case 'saveKnowledge':
-          if (!args.tags || !args.content) return '缺少必要參數：tags 與 content 皆為必填。';
+          if (!args.tags || !args.content) return invalid('缺少必要參數：tags 與 content 皆為必填。');
           return GoogleSheet.addKnowledge(args.tags, args.content);
 
         case 'searchKnowledge':
-          if (!args.query) return '缺少必要參數：query。';
+          if (!args.query) return invalid('缺少必要參數：query。');
           return GoogleSheet.searchKnowledge(args.query);
 
         case 'getDividendHistory':
           return GoogleSheet.getDividendHistory(args.year);
 
         case 'recordDividend':
-          if (!args.symbol || !args.amount) return '缺少必要參數：symbol 與 amount 皆為必填。';
+          if (!args.symbol || !args.amount) return invalid('缺少必要參數：symbol 與 amount 皆為必填。');
           // 統一走 recordTrade：股利只是動作欄不同的一列交易，
           // 走同一條路才會一併觸發重算，累計股利與帳戶餘額才跟得上。
           return AssetTools.recordTrade({
@@ -340,23 +356,23 @@ var Tools = (() => {
           });
 
         case 'recordTrade':
-          if (!args.action) return '缺少必要參數：action。';
+          if (!args.action) return invalid('缺少必要參數：action。');
           return AssetTools.recordTrade(args);
 
         case 'addAccount':
-          if (!args.name) return '缺少必要參數：name。';
+          if (!args.name) return invalid('缺少必要參數：name。');
           return AssetTools.addAccount(args);
 
         case 'setCashBalance':
           // balance 可以是 0（把戶頭清空），所以只能擋 undefined/null
           if (!args.account || args.balance === undefined || args.balance === null) {
-            return '缺少必要參數：account 與 balance 皆為必填。';
+            return invalid('缺少必要參數：account 與 balance 皆為必填。');
           }
           return AssetTools.setCashBalance(args);
 
         case 'voidTrade':
           if (args.row === undefined || args.row === null) {
-            return '缺少必要參數：row（「交易」表上的列號，用 listTrades 查）。';
+            return invalid('缺少必要參數：row（「交易」表上的列號，用 listTrades 查）。');
           }
           return AssetTools.voidTrade(args);
 
@@ -370,34 +386,48 @@ var Tools = (() => {
           return AssetTools.listInstruments(args);
 
         case 'updateInstrument':
-          if (!args.symbol) return '缺少必要參數：symbol。';
+          if (!args.symbol) return invalid('缺少必要參數：symbol。');
           return AssetTools.updateInstrument(args);
 
         case 'updateAccount':
-          if (!args.name) return '缺少必要參數：name。';
+          if (!args.name) return invalid('缺少必要參數：name。');
           return AssetTools.updateAccount(args);
 
         case 'getPrice':
-          if (!args.symbols) return '缺少必要參數：symbols。';
+          if (!args.symbols) return invalid('缺少必要參數：symbols。');
           return StockPrice.getPrice(args.symbols);
 
         case 'listMemories':
           return GoogleSheet.listMemories();
 
         case 'deleteMemory':
-          if (!args.type || !args.key) return '缺少必要參數：type 與 key 皆為必填。';
+          if (!args.type || !args.key) return invalid('缺少必要參數：type 與 key 皆為必填。');
           return GoogleSheet.deleteMemory(args.type, args.key);
 
         case 'searchWeb':
-          if (!args.query) return '缺少必要參數：query。';
+          if (!args.query) return invalid('缺少必要參數：query。');
           return WebSearch.search(args.query);
 
         default:
-          return '未知的工具：' + name;
+          return failed('未知的工具：' + name);
       }
+    }
+  };
+
+  /**
+   * 執行一個工具
+   * @returns {{ok: boolean, status: 'ok'|'invalid_args'|'error', text: string}}
+   */
+  tools.execute = (name, args) => {
+    try {
+      Logger.info('Tools.execute', '執行工具: ' + name, args);
+      var out = _dispatch(name, args);
+      // 分派裡自己判斷過的（參數不齊、未知工具）已經是信封，其餘一律視為成功
+      if (out && typeof out === 'object' && out.status) return out;
+      return ok(out);
     } catch (ex) {
       Logger.error('Tools.execute', '工具執行失敗: ' + name, ex);
-      return '工具執行失敗：' + ex.message;
+      return failed('工具執行失敗：' + (ex && ex.message ? ex.message : String(ex)));
     }
   };
 

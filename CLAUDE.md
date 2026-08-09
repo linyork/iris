@@ -88,7 +88,7 @@ renaming or relocating them fails silently:
 1. `Main.gs` — `doPost()` receives the LINE **or** Telegram webhook, normalizes it into a single LINE-shaped event object, deduplicates via `CacheService` (6h TTL), silently drops non-master events, calls `ChatBot.reply()`
 2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 3 turns). Injects short-term memory + relevant knowledge into system context before each call. Caches tool results within a single turn to prevent duplicate calls.
 3. `AIServiceFactory.gs` — Routes to `GeminiService` or `NvidiaService` based on `env!B3`. NVIDIA path goes through `AIAdapter` (Gemini ↔ OpenAI format conversion) so the rest of the codebase always speaks Gemini format.
-4. `Tools.gs` — Defines and executes **21** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. Grouped by which layer they touch:
+4. `Tools.gs` — Defines and executes **21** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. `execute()` returns an envelope, `{ok, status, text}` — `status` is `ok` / `invalid_args` / `error`, and `ChatBot` sends it to the model alongside the text so a failure cannot be read as data (see [工具回傳要分得出成功與失敗](#工具回傳要分得出成功與失敗)). Grouped by which layer they touch:
    - **Computed-layer reads** (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, answering "what do I have now".
    - **Input-layer reads** (`listTrades`, `listAccounts`, `listInstruments`) — the 交易/帳戶/標的 tabs themselves, answering "how did this get recorded, which row do I change". They live in `AssetTools.gs`, not `Snapshot`, because each one is the precondition for a write: `listTrades` hands out the row number `voidTrade` needs, `listAccounts` is the only surface exposing **原幣** balances (`Snapshot._cash` gives TWD-converted only), `listInstruments` names the instruments whose 區域/類型 are still blank.
    - **Ledger writes** (`recordTrade`, `recordDividend`, `setCashBalance`, `voidTrade`) — all four land in the 交易 tab via `AssetTools.gs`; a dividend, a balance correction and a void are each just one row with a different 動作 or 狀態.
@@ -574,6 +574,33 @@ escape, which makes **update the only correction path** — and delete the dange
 ⚠️ `recordTrade` 的自動登記只生得出**半個標的**：買進沒見過的代號時會補一列 `標的`，但
 `區域` / `類型` / `目標配置%` 全留空，而 `配置` 正是按 `區域` 與 `類型` 分組的。也就是說
 那個 C **保證**後面需要一次 `updateInstrument`；`listInstruments` 會直接點名缺哪一欄。
+
+### 工具回傳要分得出成功與失敗
+
+`Tools.execute()` returns `{ok, status, text}`, not a bare string. It used to return a string for
+everything, so 「查到了」, 「參數不齊」 and 「工具壞了」 were the same type — and the model could
+take 「讀取持倉時發生錯誤：xxx」 and summarise it as content, in the same confident tone it uses
+for real data.
+
+`ChatBot` puts `status` and `ok` into the `functionResponse` alongside the text (`AIAdapter`
+serializes the whole response object to JSON, so the model sees them), and appends an explicit
+instruction on failure: this is why it failed, not data, don't paraphrase it as a result. The
+same check guards the timeout path that hands the raw tool output straight to the user.
+
+Two distinctions that must not blur:
+
+- **A business rule saying no is `ok: true`.** An over-sell blocked by `recordTrade` means the
+  tool ran correctly and the answer is 「不行」. Classifying it as a failure would make the model
+  apologise for a malfunction instead of relaying the reason.
+- **「成功但查無資料」 is deliberately not a status.** That判斷 lives inside the Chinese sentences
+  the underlying functions return (「（尚無持倉資料）」), and recognising it here would mean
+  string-matching — the exact thing this envelope exists to remove. Adding it properly means
+  changing the underlying functions, not bolting a guessed field onto the envelope.
+
+⚠️ `execute()` is the only place that wraps. `_dispatch()` still returns plain strings for the
+success path; anything that is already an envelope (the `invalid_args` guards, the unknown-tool
+default) passes through untouched. So adding a tool needs no envelope work unless it has its own
+argument guards.
 
 ### 數字先算好給它，不要指望它算對
 

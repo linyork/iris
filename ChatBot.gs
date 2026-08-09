@@ -153,22 +153,33 @@ var ChatBot = (() => {
               calledTools[callKey] = result;
               Logger.info('ChatBot.reply', '工具回傳', {
                 name:   name,
-                length: String(result).length,
-                preview: String(result).slice(0, 100)
+                status: result.status,
+                length: result.text.length,
+                preview: result.text.slice(0, 100)
               });
             }
             lastToolResult = result;
 
             // 收斂提示只掛在最後一筆，避免同一輪內重複疊加同樣的句子
             var isLastCall = (i === functionCallParts.length - 1);
+
+            // 失敗的工具要**明講失敗**。以前成功與失敗都只是字串，模型可以把
+            // 「讀取持倉時發生錯誤：xxx」當成一段資料拿去總結，然後用同樣篤定的
+            // 語氣講給主人聽。status 一起送出去（AIAdapter 會把整個 response
+            // 物件序列化成 JSON），並補一句它該怎麼辦。
+            var body = result.text;
+            if (!result.ok) {
+              body += '\n\n（這次工具呼叫沒有成功，上面是失敗原因，不是資料。' +
+                      '不要把它當成查詢結果轉述，也不要據此推測數字；' +
+                      '參數不齊就問清楚再叫一次，其餘請誠實告訴主人這項查不到。）';
+            } else if (isLastCall) {
+              body += '\n\n（若資訊已足夠，請直接以繁體中文回覆，勿再呼叫工具。）';
+            }
+
             responseParts.push({
               functionResponse: {
                 name: name,
-                response: {
-                  result: result + (isLastCall
-                    ? '\n\n（若資訊已足夠，請直接以繁體中文回覆，勿再呼叫工具。）'
-                    : '')
-                }
+                response: { status: result.status, ok: result.ok, result: body }
               }
             });
           });
@@ -217,8 +228,12 @@ var ChatBot = (() => {
           // 沒時間再叫一次模型了。資料其實已經拿到，與其硬跑總結而被 GAS 砍掉、
           // 讓使用者什麼都收不到，不如直接把原始工具結果交出去。
           Logger.warning('ChatBot.reply', '時間不足，略過總結呼叫，直接回傳工具結果',
-            'Elapsed=' + elapsed() + 'ms');
-          finalResponse = '（這次查詢花的時間比預期久，來不及整理，先把原始結果給你）\n\n' + lastToolResult;
+            'Elapsed=' + elapsed() + 'ms | status=' + lastToolResult.status);
+          // 直接把原始結果交出去時更要看 ok：失敗的話這段文字是錯誤訊息，
+          // 原封不動貼給主人會讓它看起來像查詢結果。
+          finalResponse = lastToolResult.ok
+            ? '（這次查詢花的時間比預期久，來不及整理，先把原始結果給你）\n\n' + lastToolResult.text
+            : '這次查詢沒有成功，也來不及重試。原因是：\n\n' + lastToolResult.text;
         } else {
           // 迴圈是因為逾時才結束的，代表已經等很久了，而總結呼叫還要再等一輪思考。
           // 先送一則實體訊息（不是只有 5 秒的 typing 狀態）出去：萬一收尾階段真的

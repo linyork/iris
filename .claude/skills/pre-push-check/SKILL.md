@@ -24,7 +24,9 @@ Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），
 
 - [ ] **definitions**：新工具有完整的 `name` / `description` / `parameters` schema
 - [ ] **execute**：`switch` 內有對應的 `case`（漏掉＝模型叫得出來但一律回「未知的工具」）
-- [ ] **必填參數檢查**：`case` 內有擋 `args` 缺漏並回傳可讀訊息，而不是讓底層丟例外
+- [ ] **必填參數檢查**：`case` 內有擋 `args` 缺漏，而且是 `return invalid('缺少必要參數：…')`
+      —— 回裸字串會被當成成功，模型就分不出「參數不齊」與「查到了」。
+      成功路徑照樣回字串就好，`execute()` 會自己包成信封
 - [ ] **會寫入的話**：底層真正動到試算表的那一行後面要有 `Utils.noteLedgerWrite()`，
       `ChatBot` 靠它判斷模型說「已記錄」時到底有沒有寫過。漏掉不會報錯，
       也不會放行假宣稱 —— 是反過來給**寫成功的回覆**加上「我沒有真的寫進帳本」的警語

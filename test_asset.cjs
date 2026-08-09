@@ -2023,6 +2023,53 @@ console.log('\nT30  事實區塊');
     threw ? '丟了例外' : JSON.stringify(out));
 }
 
+// ─── T31  工具回傳的信封 ─────────────────────────────────────────
+//
+// execute() 以前一律回字串，「查到了」「參數不齊」「工具壞了」在型別上一模一樣，
+// 於是模型可以把「讀取持倉時發生錯誤」當成一段資料拿去總結。
+console.log('\nT31  工具回傳分得出成功與失敗');
+{
+  load('Tools.gs');
+  global.WebSearch = { search: () => '假的搜尋結果' };
+
+  const okRes = Tools.execute('getHoldings', {});
+  check('成功時 ok=true / status=ok',
+    okRes.ok === true && okRes.status === 'ok', JSON.stringify(okRes.status));
+  check('成功時 text 是實際內容', okRes.text.length > 0 && /【資料時點】/.test(okRes.text),
+    okRes.text.slice(0, 30));
+
+  const missing = Tools.execute('recordTrade', {});
+  check('參數不齊 → ok=false / status=invalid_args',
+    missing.ok === false && missing.status === 'invalid_args', JSON.stringify(missing.status));
+  check('參數不齊仍然回得出可讀訊息', /缺少必要參數/.test(missing.text), missing.text);
+
+  const unknown = Tools.execute('noSuchTool', {});
+  check('未知工具 → ok=false / status=error',
+    unknown.ok === false && unknown.status === 'error', JSON.stringify(unknown.status));
+
+  // 底層丟例外時不能讓它逃出去，但也不能假裝成功
+  const savedGS = global.GoogleSheet;
+  global.GoogleSheet = { getHoldings: () => { throw new Error('T31 故意炸的'); } };
+  const boom = Tools.execute('getHoldings', {});
+  global.GoogleSheet = savedGS;
+  check('底層丟例外 → 接住而且 ok=false',
+    boom.ok === false && boom.status === 'error', JSON.stringify(boom));
+  check('例外訊息有帶出來（Logger 那個坑：例外 stringify 只剩 name）',
+    /T31 故意炸的/.test(boom.text), boom.text);
+
+  // 業務規則擋下**不是**工具失敗：工具正常執行、正常回話，只是答案是「不行」。
+  // 這兩件事混在一起的話，模型會把「賣超被擋」當成系統故障去道歉，而不是轉述原因。
+  const held31 = AssetSchema.readObjects(target.getSheetByName('持倉'))
+    .filter(p => num(p['股數']) > 0);
+  const blocked = Tools.execute('recordTrade', {
+    action: '賣出', symbol: String(held31[0]['代號']),
+    shares: num(held31[0]['股數']) + 999999, price: 50,
+    account: '國泰證券戶', date: '2026-08-03'
+  });
+  check('業務規則擋下算 ok=true（工具正常運作，答案是「不行」）',
+    blocked.ok === true && blocked.status === 'ok', JSON.stringify(blocked.status));
+}
+
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);
