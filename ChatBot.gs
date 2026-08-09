@@ -23,8 +23,11 @@ var ChatBot = (() => {
         }));
 
       // 讀取短期記憶與知識（搜尋與當前訊息相關的知識）
-      var stm               = GoogleSheet.getValidShortTermMemories();
-      var relevantKnowledge = GoogleSheet.searchKnowledge(message);
+      var stm = GoogleSheet.getValidShortTermMemories();
+      // 注入用的知識走 knowledgeForPrompt，不是 searchKnowledge：主人立的
+      // 決策／目標／偏好一律帶上，不能靠用字碰運氣（見那裡的註解）。
+      // searchKnowledge 仍然是模型主動查詢時用的工具。
+      var relevantKnowledge = GoogleSheet.knowledgeForPrompt(message);
 
       Logger.info('ChatBot.reply', '記憶注入', {
         stm:       stm ? stm.split('\n').length + ' 筆 STM' : '無',

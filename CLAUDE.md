@@ -575,6 +575,32 @@ escape, which makes **update the only correction path** — and delete the dange
 `區域` / `類型` / `目標配置%` 全留空，而 `配置` 正是按 `區域` 與 `類型` 分組的。也就是說
 那個 C **保證**後面需要一次 `updateInstrument`；`listInstruments` 會直接點名缺哪一欄。
 
+### 知識檢索：中文切得開，規矩不靠碰運氣
+
+`searchKnowledge` used to tokenise with `query.split(/\s+/)`. Chinese has no spaces, so
+「我現在可以加碼嗎」 was **one token** and only matched if those exact seven characters appeared
+in an entry. For the project's primary language, keyword search was effectively inert — and it
+failed by returning 「沒有找到」, which is indistinguishable from an empty knowledge base.
+
+`_tokens` now emits CJK bigrams plus whole latin/numeric runs (so 代號 and ETF still work), and
+scoring weights a tag hit at 3 against a body hit at 1 — tags are the topic someone chose by hand.
+Bigrams do over-match; sorting and a top-5 cap absorb that.撈多一點再排序 beats 撈不到.
+
+**Injection and the tool are now different functions, on purpose.** `ChatBot` calls
+`knowledgeForPrompt`, which always includes every `[決策]` / `[目標]` / `[偏好]` entry (capped at
+10) and then adds up to 3 keyword matches. `searchKnowledge` stays purely query-driven for the
+model to call.
+
+The reason is that the persona instructs Iris to compare against 「主人設過的 [目標]」 — and that
+rule can only hold if the 目標 is actually in the prompt. Leave it to keyword luck and asking
+「現金太多了嗎」 against a goal worded 「年底前現金比例降到 20%」 silently disables the rule.
+Standing rules are few; carrying all of them every turn is the cheap half of the trade.
+
+⚠️ **Synonyms remain out of reach and that is accepted.** 「加碼」 and a stored 「加倉」 share no
+characters, so no amount of segmenting connects them. A synonym table was considered and rejected:
+it goes stale unnoticed. The case that matters — standing rules — is covered by always injecting
+them, which does not depend on wording at all. `T36` pins both the limitation and the fallback.
+
 ### 每日指標：consolelog 在被丟掉之前先算一次
 
 `Metrics.rollupDaily(days)` folds `consolelog` into one row per day in a `metrics` tab: replies,

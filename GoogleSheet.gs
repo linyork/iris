@@ -212,33 +212,109 @@ var GoogleSheet = (() => {
   };
 
   /**
-   * 關鍵字搜尋知識庫（回傳最多 5 筆）
+   * 把查詢切成可以比對的詞。
+   *
+   * ⚠️ **中文沒有空白，所以不能只用 `split(/\s+/)`。** 舊版就是這樣做的，於是
+   * 「我現在可以加碼嗎」整句是**一個詞**，只有這七個字原封不動出現在知識庫裡才算命中
+   * —— 也就是說，對中文而言關鍵字搜尋幾乎等於沒有作用，而且它安靜地回「沒有找到」，
+   * 看起來就像知識庫裡真的沒東西。
+   *
+   * 這裡把 CJK 切成 bigram（「加碼」「碼嗎」…），英數字與代號整段保留。
+   * bigram 會製造一些雜訊，靠下面的加權與取前 N 名壓下去 —— 這是刻意的取捨：
+   * 寧可多撈一點再排序，也不要像以前那樣一筆都撈不到。
+   */
+  var _tokens = (s) => {
+    var out = [];
+    String(s || '').toLowerCase().split(/[\s，。、？！,.?!；;：:「」（）()]+/).forEach(part => {
+      if (!part) return;
+      (part.match(/[a-z0-9]{2,}/g) || []).forEach(t => out.push(t));   // 代號、英文縮寫
+      var cjk = part.replace(/[^一-鿿]/g, '');
+      if (cjk.length === 1) out.push(cjk);
+      for (var i = 0; i + 1 < cjk.length; i++) out.push(cjk.substr(i, 2));
+    });
+    return out.filter((v, i, a) => a.indexOf(v) === i);
+  };
+
+  /** `[決策]` / `[目標]` / `[偏好]` 是主人立的規矩，不是一般知識 */
+  var STANDING_RE = /^\s*\[(決策|目標|偏好)\]/;
+
+  /** 逐筆算分：標籤命中比內文命中重要得多（標籤是人為下的主題） */
+  var _scored = (query) => {
+    var sheet = getSheet().getSheetByName('knowledge');
+    if (!sheet) return null;
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return [];
+
+    var data   = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+    var tokens = _tokens(query);
+
+    return data.filter(r => r[0] || r[1]).map(row => {
+      var tags = String(row[0] || '').toLowerCase();
+      var body = String(row[1] || '').toLowerCase();
+      var score = 0;
+      tokens.forEach(t => {
+        if (tags.indexOf(t) >= 0) score += 3;
+        else if (body.indexOf(t) >= 0) score += 1;
+      });
+      return {
+        text: '[' + row[0] + ']: ' + row[1],
+        standing: STANDING_RE.test(String(row[0] || '')),
+        score: score
+      };
+    });
+  };
+
+  /**
+   * 關鍵字搜尋知識庫（工具用，回傳最多 5 筆）
    * @param {string} query - 查詢關鍵字
    * @returns {string} 匹配結果文字
    */
   gs.searchKnowledge = (query) => {
     try {
-      var sheet = getSheet().getSheetByName('knowledge');
-      if (!sheet) return '（找不到 knowledge 工作表）';
-      var lastRow = sheet.getLastRow();
-      if (lastRow < 2) return '（知識庫尚無資料）';
+      var rows = _scored(query);
+      if (rows === null) return '（找不到 knowledge 工作表）';
+      if (rows.length === 0) return '（知識庫尚無資料）';
 
-      var data     = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
-      var keywords = query.split(/\s+/).filter(k => k.length > 0);
-      var hits     = [];
-
-      data.forEach(row => {
-        var haystack   = (String(row[0]) + ' ' + String(row[1])).toLowerCase();
-        var matchCount = keywords.filter(k => haystack.includes(k.toLowerCase())).length;
-        if (matchCount > 0) hits.push({ text: '[' + row[0] + ']: ' + row[1], score: matchCount });
-      });
-
+      var hits = rows.filter(r => r.score > 0).sort((a, b) => b.score - a.score);
       if (hits.length === 0) return '沒有找到與「' + query + '」相關的知識';
-      hits.sort((a, b) => b.score - a.score);
       return hits.slice(0, 5).map(h => h.text).join('\n');
     } catch (ex) {
       Logger.error('GoogleSheet.searchKnowledge', '搜尋知識失敗', ex);
       return '搜尋時發生錯誤：' + ex.message;
+    }
+  };
+
+  /**
+   * 注入 prompt 用的知識：**主人立的規矩一律帶上，其餘才靠關鍵字撈**。
+   *
+   * 為什麼分兩層：人設要求「主人設過的 [目標] 要主動比對」「相關話題出現時主動提」，
+   * 但那要成立的前提是那條 [目標] 真的出現在 prompt 裡。純靠關鍵字的話，
+   * 主人問「現金太多了嗎」而目標寫成「年底前現金比例降到 20%」，撈不撈得到全看用字，
+   * 撈不到就等於那條規則沒有生效 —— 而且沒有人會發現。
+   *
+   * 決策／目標／偏好本來就少（個位數到十來條），值得每次都帶。
+   *
+   * @param {string} message 這一輪使用者說的話
+   * @returns {string} 空字串代表沒有東西可帶
+   */
+  gs.knowledgeForPrompt = (message) => {
+    try {
+      var rows = _scored(message);
+      if (!rows || rows.length === 0) return '';
+
+      var standing = rows.filter(r => r.standing).slice(0, 10);
+      var picked   = standing.slice();
+
+      rows.filter(r => !r.standing && r.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 3)
+        .forEach(r => picked.push(r));
+
+      return picked.map(r => r.text).join('\n');
+    } catch (ex) {
+      Logger.warning('GoogleSheet.knowledgeForPrompt', '組知識區塊失敗（已略過）',
+        ex && ex.message ? ex.message : String(ex));
+      return '';
     }
   };
 

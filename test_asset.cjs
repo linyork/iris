@@ -2358,6 +2358,63 @@ console.log('\nT35  ReAct 迴圈');
   delete global.MessagingServiceFactory;
 }
 
+// ─── T36  知識檢索：中文查得到，規矩一律帶上 ──────────────────────
+console.log('\nT36  知識檢索');
+{
+  const kn = target.getSheetByName('knowledge') || target.insertSheet('knowledge');
+  kn.clear();
+  kn.getRange(1, 1, 1, 3).setValues([['tags', 'content', 'timestamp']]);
+  kn.appendRow(['[偏好] 投資工具限制', '我不持有單一個股，只買 ETF', '2026/01/01 00:00:00']);
+  kn.appendRow(['[目標] 現金比例-2026年底', '年底前把現金比例降到 20%', '2026/01/01 00:00:00']);
+  kn.appendRow(['[決策] 00631L-加倉條件', '單日跌超過 5% 想加倉', '2026/01/01 00:00:00']);
+  kn.appendRow(['筆記,雜項', '喜歡看晨星的報告', '2026/01/01 00:00:00']);
+  kn.appendRow(['筆記,券商', '主要用富邦證券下單', '2026/01/01 00:00:00']);
+
+  // ① 這是舊版真正壞掉的地方：中文整句當一個詞，只有原文完全出現才算命中
+  const r1 = GoogleSheet.searchKnowledge('現金比例太高了嗎');
+  check('中文整句查詢撈得到（舊版整句當一個詞，一定落空）',
+    /現金比例/.test(r1), r1.slice(0, 60));
+
+  // ①-b 同義詞仍然連不起來，這是 bigram 的天花板，不是 bug。
+  //     「加碼」與知識庫裡的「加倉」沒有共用字，怎麼切都對不上。
+  //     刻意不做同義詞表：那種表沒人維護就會過期，而且真正重要的那類知識
+  //     （決策／目標／偏好）已經由 knowledgeForPrompt 無條件帶上，不靠用字碰運氣。
+  check('同義詞查不到 —— 已知限制，由「規矩一律帶上」那層兜底',
+    !/加倉/.test(GoogleSheet.searchKnowledge('可以加碼嗎')), '');
+  check('而注入層照樣看得到那條決策',
+    /加倉/.test(GoogleSheet.knowledgeForPrompt('可以加碼嗎')), '');
+
+  // ② 標籤命中要贏過內文命中
+  const r2 = GoogleSheet.searchKnowledge('券商');
+  check('標籤命中排在前面', r2.split('\n')[0].indexOf('券商') >= 0, r2.split('\n')[0]);
+
+  // ③ 代號、英文照樣查得到
+  check('代號查得到', /00631L-加倉條件/.test(GoogleSheet.searchKnowledge('00631L')), '');
+  check('英文縮寫查得到', /ETF/.test(GoogleSheet.searchKnowledge('ETF 好嗎')), '');
+
+  // ④ 真的無關就要說沒找到，不能因為 bigram 亂撈而永遠有結果
+  check('無關的查詢仍然回沒找到',
+    /沒有找到/.test(GoogleSheet.searchKnowledge('鮭魚壽司')),
+    GoogleSheet.searchKnowledge('鮭魚壽司').slice(0, 40));
+
+  // ⑤ 注入用的區塊：決策／目標／偏好一律帶上，不看用字
+  const inj = GoogleSheet.knowledgeForPrompt('今天天氣真好');
+  check('與問題無關時，主人立的規矩照樣帶上', /目標/.test(inj) && /偏好/.test(inj) && /決策/.test(inj),
+    inj.replace(/\n/g, ' ｜ ').slice(0, 80));
+  check('無關的一般筆記不會被硬塞進來', inj.indexOf('晨星') < 0, inj);
+
+  // ⑥ 相關的一般知識還是撈得進來
+  const inj2 = GoogleSheet.knowledgeForPrompt('我都用哪一家券商下單');
+  check('相關的一般知識會補進來', /富邦證券/.test(inj2), inj2.replace(/\n/g, ' ｜ '));
+
+  // ⑦ 空知識庫不要炸，也不要回一句會被當成內容的廢話
+  kn.clear();
+  kn.getRange(1, 1, 1, 3).setValues([['tags', 'content', 'timestamp']]);
+  check('空知識庫回空字串（呼叫端才好整段略過）',
+    GoogleSheet.knowledgeForPrompt('隨便問') === '', '');
+  target.sheets = target.sheets.filter(s => s.getName() !== 'knowledge');
+}
+
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);
