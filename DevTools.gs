@@ -605,9 +605,11 @@ function testNimFaithfulness() {
     { label: 'minimax-m3',
       model: 'minimaxai/minimax-m3', mode: 'deepseek' },
     { label: 'nemotron-3-super-120b  /no_think',
-      model: 'nvidia/nemotron-3-super-120b-a12b', mode: 'nemotron' },
-    { label: 'llama-3.3-70b',
-      model: 'meta/llama-3.3-70b-instruct', mode: 'plain' }
+      model: 'nvidia/nemotron-3-super-120b-a12b', mode: 'nemotron' }
+    // meta/llama-3.3-70b-instruct 已剔除：探測過得了，帶工具呼叫時 504，
+    // 一顆就把 2026-08-09 那批拖滿 303 秒、害中文測試被時間不足跳過。
+    // 這是第三次同樣的形狀（前兩次是 mistral-medium-3.5、glm-5.2）——
+    // **探測過關不代表扛得住真實請求**，重的那關才會現形。
   ];
 
   var buildRequest = (c) => {
