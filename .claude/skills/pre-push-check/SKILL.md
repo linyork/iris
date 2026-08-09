@@ -35,6 +35,14 @@ Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），
 - [ ] **實作**：底層函式確實存在（多半在 `GoogleSheet.gs` / `StockPrice.gs` / `WebSearch.gs`）
 - [ ] **文件**：`README.md` 的「AI 工具集」表格與工具總數、`CLAUDE.md` 的工具清單同步更新
 
+### 如果 `ChatBot.gs` 的迴圈控制流有變動
+- [ ] **跑 `node test_asset.cjs` 的 T35**。替身已經建好了（假的 `AIServiceFactory` 排隊回應 +
+      記事本式的 `MessagingServiceFactory`），要加情境就照那個模式往下寫，不要靠讀程式碼確認
+- [ ] **改壞一次看它會不會紅**。T35 做過變異驗證；新增的斷言也該過同樣的檢查，
+      不然只是多一條永遠綠燈的測試
+- [ ] **輪數上限不是時間保護**：真正守門的是每輪開始前的 `Utils.execElapsedMs()`。
+      調 `TOOL_MAX_ITERATIONS` 前先確認那道關卡還在
+
 ### 如果 `Commands.gs` 有變動
 - [ ] **definitions**：新指令有 `name` / `description` / `handler`
 - [ ] **提醒**：push 後需從 GAS 編輯器手動執行一次 `setupTelegramCommands()`，否則 Telegram 選單不會更新

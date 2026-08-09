@@ -2242,6 +2242,122 @@ console.log('\nT34  每日指標聚合');
     s.getName() !== 'consolelog' && s.getName() !== 'metrics');
 }
 
+// ─── T35  ChatBot 的 ReAct 迴圈 ──────────────────────────────────
+//
+// 這支到今天為止完全沒有測試替身，而假宣稱攔截、工具信封、輪數上限全都住在裡面。
+// 替身只要兩個：把 LLM 換成一個可以排隊的假回應，把訊息推送換成一個記事本。
+// 其餘（Tools / Facts / AdviceLog / Utils / Prompt / GoogleSheet）都用真的。
+console.log('\nT35  ReAct 迴圈');
+{
+  const AI_QUEUE = [];   // 依序回給 ChatBot 的假 LLM 回應
+  const AI_CALLS = [];   // 每次呼叫的 contents 與 options，用來驗「最後一輪不帶工具」
+  const MSGS     = [];   // 送出去的訊息
+
+  global.AIServiceFactory = {
+    callAPI(contents, options) {
+      AI_CALLS.push({ turns: contents.length, hasTools: !!(options && options.tools) });
+      return AI_QUEUE.length ? AI_QUEUE.shift() : null;
+    }
+  };
+  global.MessagingServiceFactory = {
+    reply: (e, m) => MSGS.push(['reply', m]),
+    push:  (u, m) => MSGS.push(['push', m]),
+    indicateTyping: () => {}
+  };
+  global.WebSearch = { search: () => '假的搜尋結果' };
+  Config.TOOL_MAX_ITERATIONS = 3;   // 固定成已知值；正式值在 Config.gs
+
+  load('ChatBot.gs');
+
+  const say  = (text) => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text }] } }] });
+  const call = (...names) => ({ candidates: [{ content: { parts:
+    names.map(n => ({ functionCall: { name: typeof n === 'string' ? n : n.name,
+                                      args: typeof n === 'string' ? {} : n.args } })) } }] });
+  const ev = (text) => ({ platform: 'TELEGRAM', replyToken: '1', sourceId: '1',
+    source: { type: 'user', userId: 'TELEGRAM:1' }, message: { type: 'text', text }, isMaster: true });
+
+  const reset = () => { AI_QUEUE.length = 0; AI_CALLS.length = 0; MSGS.length = 0; };
+
+  // ① 一輪就給文字：不該碰任何工具
+  reset(); AI_QUEUE.push(say('總資產是 100 萬。'));
+  let out = ChatBot.reply(ev('我總資產多少'));
+  check('一輪就回文字', /總資產是 100 萬/.test(out), out);
+  check('只呼叫一次 LLM', AI_CALLS.length === 1, AI_CALLS.length + ' 次');
+
+  // ② 工具呼叫 → 結果回灌 → 第二輪回文字
+  reset(); AI_QUEUE.push(call('getHoldings'), say('你有三檔。'));
+  out = ChatBot.reply(ev('我有哪些持倉'));
+  check('工具結果回灌後第二輪作答', /你有三檔/.test(out), out);
+  check('第二輪的 contents 比第一輪長（結果有回灌）',
+    AI_CALLS[1].turns > AI_CALLS[0].turns, JSON.stringify(AI_CALLS.map(c => c.turns)));
+
+  // ③ 同一輪多個工具全部執行（舊版只取第一個，模型得多花一輪重問）
+  //    ⚠️ 要數**實際執行了幾個工具**，不是數 LLM 呼叫幾次 —— 只取第一個工具的話
+  //       LLM 呼叫次數一模一樣，用它當指標抓不到這個回歸。
+  reset(); AI_QUEUE.push(call('getHoldings', 'listAccounts'), say('好了。'));
+  const realExec = Tools.execute;
+  const execed = [];
+  Tools.execute = (n, a) => { execed.push(n); return realExec(n, a); };
+  const before35 = Utils.ledgerWriteCount();
+  out = ChatBot.reply(ev('持倉跟帳戶各給我一份'));
+  Tools.execute = realExec;
+  check('同一輪的兩個工具都真的執行了',
+    execed.length === 2 && execed.indexOf('getHoldings') >= 0 && execed.indexOf('listAccounts') >= 0,
+    execed.join(','));
+  check('讀取類工具不會動到帳本', Utils.ledgerWriteCount() === before35, '');
+
+  // ③-b 同一輪相同參數重複呼叫走快取，只真的執行一次
+  reset(); AI_QUEUE.push(call('getHoldings', 'getHoldings'), say('好了。'));
+  const execed2 = [];
+  Tools.execute = (n, a) => { execed2.push(n); return realExec(n, a); };
+  ChatBot.reply(ev('查兩次一樣的'));
+  Tools.execute = realExec;
+  check('相同參數的重複呼叫只執行一次', execed2.length === 1, execed2.join(','));
+
+  // ④ 最後一輪不帶工具定義 —— 否則模型會在沒有機會用結果的那一輪還在叫工具
+  reset();
+  AI_QUEUE.push(call('getHoldings'), call('getHoldings'), say('最後回答。'));
+  out = ChatBot.reply(ev('一直查'));
+  check('輪數不超過上限', AI_CALLS.length <= 3, AI_CALLS.length + ' 輪');
+  check('最後一輪沒有帶工具定義', AI_CALLS[AI_CALLS.length - 1].hasTools === false,
+    JSON.stringify(AI_CALLS.map(c => c.hasTools)));
+
+  // ⑤ 宣稱寫入但帳本沒動 → 打回重做一次，那一輪才是真的寫進去的地方
+  reset();
+  AI_QUEUE.push(say('好的，已校正。'),
+                call({ name: 'rememberShortTerm', args: { key: 'T35', content: '測試' } }),
+                say('已記錄完成。'));
+  out = ChatBot.reply(ev('把郵局改成 12000'));
+  check('假宣稱被打回，補叫了工具之後才作答', AI_CALLS.length === 3,
+    AI_CALLS.length + ' 輪');
+  check('真的寫了就不加警語', out.indexOf('沒有真的寫進帳本') < 0, out.slice(0, 60));
+
+  // ⑥ 打回之後還是那樣講 → 回覆前面加警語（不是把話刪掉）
+  reset();
+  AI_QUEUE.push(say('好的，已校正。'), say('已經校正好了。'), say('已經校正好了。'));
+  out = ChatBot.reply(ev('把郵局改成 9000'));
+  check('屢勸不聽就加警語', /沒有真的寫進帳本/.test(out), out.slice(0, 60));
+  check('原本的內容還留著（誤判時不會把話吃掉）', /已經校正好了/.test(out), out.slice(-40));
+
+  // ⑦ 工具失敗要讓模型知道是失敗，不是資料
+  reset(); AI_QUEUE.push(call({ name: 'recordTrade', args: {} }), say('參數不齊，請補。'));
+  out = ChatBot.reply(ev('記一筆'));
+  check('工具回 invalid_args 時迴圈照常往下走', /參數不齊/.test(out), out);
+
+  // ⑧ 時間預算才是真正的守門員（輪數上限放寬到 5 的前提）
+  reset();
+  const realElapsed = Utils.execElapsedMs;
+  Utils.execElapsedMs = () => 250000;          // 超過 200s 的開新輪門檻
+  AI_QUEUE.push(say('不該被用到'));
+  out = ChatBot.reply(ev('現在很晚了'));
+  Utils.execElapsedMs = realElapsed;
+  check('超過時間門檻就一輪都不開', AI_CALLS.length === 0, AI_CALLS.length + ' 輪');
+  check('而且會講清楚是逾時，不是裝沒事', /超過我的處理上限/.test(out), out.slice(0, 40));
+
+  delete global.AIServiceFactory;
+  delete global.MessagingServiceFactory;
+}
+
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);

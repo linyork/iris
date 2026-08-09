@@ -462,10 +462,17 @@ GAS 沒有向量資料庫，**不要**試圖引入。務實作法是分層：決
 實際耗時而不是猜的輪數，所以 5 輪與 3 輪的最壞情況一樣長，差別只在跑得快的時候
 能多跑幾輪，而那正是串接推理需要的。
 
-⚠️ 這一項沒有自動測試：`ChatBot.reply` 目前沒有測試替身（要 mock `AIServiceFactory`、
-`MessagingServiceFactory`、`GoogleSheet` 的對話讀寫、`Facts`、`AdviceLog`）。
-驗證方式是部署後看 `consolelog` 的 `ReAct 迴圈結束` 那筆的 `totalTurns` 與 `elapsedMs`
-分佈。**如果要動這個迴圈的控制流，先把那組替身補起來**，不要靠讀程式碼確認。
+✅ **測試替身補上了（`T35`）。** 寫這段時 `ChatBot.reply` 一個測試都沒有；現在有 17 條，
+替身只需要兩個 —— 把 `AIServiceFactory.callAPI` 換成可排隊的假回應、把
+`MessagingServiceFactory` 換成記事本，其餘（`Tools` / `Facts` / `AdviceLog` / `Utils` /
+`Prompt` / `GoogleSheet`）都用真的。涵蓋：一輪作答、工具結果回灌、同一輪多工具、
+重複呼叫走快取、最後一輪不帶工具、假宣稱打回與加註、工具失敗、時間關卡。
+
+那組測試做過變異驗證（把「只執行第一個工具」「最後一輪照樣帶工具」「攔截永遠認為有寫」
+「拿掉時間關卡」各改壞一次），四個都被抓到。
+
+實際行為仍要看 `consolelog` 的 `totalTurns` / `elapsedMs` 分佈 —— 那是延遲，測試量不到。
+`Metrics.rollupDaily()` 每天會把它聚合進 `metrics` 分頁。
 
 以下是原始規劃，僅供參考：
 
