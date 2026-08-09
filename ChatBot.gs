@@ -31,7 +31,8 @@ var ChatBot = (() => {
         knowledge: (relevantKnowledge && !/沒有找到|尚無資料/.test(relevantKnowledge))
                    ? relevantKnowledge.slice(0, 60) + '...' : '無相關知識',
         // 事實區塊會進每一則 prompt，長度失控是最先要看見的訊號
-        facts:     factsBlock ? factsBlock.length + ' 字' : '無（讀不到或出錯）'
+        facts:     factsBlock ? factsBlock.length + ' 字' : '無（讀不到或出錯）',
+        advice:    adviceBlock ? adviceBlock.length + ' 字' : '無先前建議'
       });
 
       // 事實區塊：程式算好的關鍵數字，直接進 prompt。模型因此不必為了「我總資產多少」
@@ -39,12 +40,23 @@ var ChatBot = (() => {
       // 只讀三張表、不打外部 API，所以每則訊息都付得起這個成本。
       var factsBlock = Facts.build();
 
+      // 先前給過的建議。「後來如何」是現算的（拿當時的總資產跟現在比），所以要有
+      // 現在的總資產 —— Facts 已經讀過一次，這裡再讀一次是浪費，直接從快照層拿。
+      var adviceBlock = '';
+      try {
+        var nowTotals = Snapshot._totals(Snapshot._open());
+        adviceBlock = AdviceLog.formatForPrompt(30, nowTotals ? nowTotals.today : 0, 5);
+      } catch (e) {
+        Logger.warning('ChatBot.reply', '讀先前建議失敗（已略過）', e.message);
+      }
+
       var systemContext = Prompt.systemContext({
         scope:     '回覆',
         user:      event.isMaster ? '主人 (Master)' : '訪客 (Guest)',
         knowledge: relevantKnowledge,
         stm:       stm,
-        facts:     factsBlock
+        facts:     factsBlock,
+        advice:    adviceBlock
       });
 
       systemContext +=

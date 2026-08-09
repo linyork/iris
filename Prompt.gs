@@ -89,6 +89,12 @@ var Prompt = (() => {
    目標配置填 0..1 的比例：15% 填 0.15，填 15 會被擋
 ▸ 說「帳戶改名 / 那個戶頭關了 / 換機構」→ updateAccount（不是改餘額，餘額走 setCashBalance）
    帳戶不能刪只能停用，停用前餘額要先歸零
+▸ 給出**具體、可驗證的建議**之後 → logAdvice 登記起來
+   例如「建議加碼 00878」「這檔佔比太高，建議減碼」「現金水位偏低，先別進場」
+   查詢結果、閒聊、單純回報數字都不算建議，不要登記
+   同一件事用同一個 topic（代號或短標籤），之後才串得起來
+   上方 [我先前給過的建議] 是你自己說過的話 —— 主人問起要認帳，
+   相關話題再出現時主動提「我上次說過…，後來…」，不要假裝沒說過
 ▸ 問「你記住什麼」→ listMemories
 ▸ 刪記憶 → listMemories 確認名稱 → deleteMemory
 ▸ 給個人化建議前 → 先 searchKnowledge 確認主人偏好
@@ -148,6 +154,7 @@ var Prompt = (() => {
    * @param {string} [o.knowledge] searchKnowledge 的結果，查無資料時會自動略過
    * @param {string} [o.stm]       短期記憶
    * @param {string} [o.facts]     Facts.build() 的事實區塊（目前只有 ChatBot 傳）
+   * @param {string} [o.advice]    AdviceLog.formatForPrompt() 的先前建議（同上）
    * @returns {string}
    */
   prompt.systemContext = (o) => {
@@ -179,6 +186,7 @@ var Prompt = (() => {
 
     // 事實區塊放最後 —— 離使用者的問題最近，也最不容易被前面的長篇規則稀釋掉
     if (o.facts) out += '\n\n' + o.facts;
+    if (o.advice) out += '\n\n' + o.advice;
 
     return out;
   };

@@ -86,6 +86,19 @@ class Sheet {
       if (this.rows[i].some(v => v !== '' && v !== null && v !== undefined)) return i + 1;
     return 0;
   }
+  /**
+   * 資產層一律走 getRange().setValues()，所以這個 mock 本來沒有 appendRow ——
+   * 但系統層（AlertLog / AdviceLog / GoogleSheet 的記憶與日誌）用的是它。
+   * 少了它的症狀是那些模組**安靜地回失敗**：它們都包在 try/catch 裡，
+   * 例外被吞掉，測試只看到「寫入回傳 false」而看不出原因。
+   */
+  appendRow(values) {
+    const r = this.getLastRow() + 1;
+    this._grow(r, values.length);
+    values.forEach((v, i) => { this.rows[r - 1][i] = this._coerce(v, i + 1); });
+    EVAL.reset();
+    return this;
+  }
   getLastColumn() {
     let last = 0;
     this.rows.forEach(r => r.forEach((v, j) => { if (v !== '' && v !== null && v !== undefined) last = Math.max(last, j + 1); }));
@@ -2068,6 +2081,69 @@ console.log('\nT31  工具回傳分得出成功與失敗');
   });
   check('業務規則擋下算 ok=true（工具正常運作，答案是「不行」）',
     blocked.ok === true && blocked.status === 'ok', JSON.stringify(blocked.status));
+}
+
+// ─── T32  建議紀錄與回饋閉環 ──────────────────────────────────────
+console.log('\nT32  Iris 記得自己說過什麼');
+{
+  load('AdviceLog.gs');
+
+  // 分頁不存在時要自己建，不能安靜地什麼都不做
+  check('一開始沒有 advice_log 分頁', !target.getSheetByName('advice_log'));
+  const wrote = AdviceLog.record({
+    source: 'chat', topic: '00878', advice: '佔比偏高，建議先不要加碼', totalAssets: 1000000
+  });
+  check('第一次記錄會自己把分頁建出來',
+    wrote === true && !!target.getSheetByName('advice_log'));
+
+  const before = Utils.ledgerWriteCount();
+  AdviceLog.record({ source: 'chat', topic: '現金水位', advice: '現金偏低，先留著', totalAssets: 1000000 });
+  check('記建議算一次帳本寫入（模型會說「我記下來了」）',
+    Utils.ledgerWriteCount() > before, before + ' → ' + Utils.ledgerWriteCount());
+
+  check('空建議不寫', AdviceLog.record({ topic: 'X', advice: '  ' }) === false);
+
+  const recent = AdviceLog.getRecent(30);
+  // ⚠️ 不比對順序：測試把時間凍住，兩筆的 timestamp 一模一樣，排序本來就不保證。
+  //    真正要釘的是**代號的前導零沒掉** —— 主題欄若不是純文字格式，Sheets 會把
+  //    '00878' 存成 878，於是「同一個 topic 串得起來」會默默失效。
+  check('讀得回來，而且代號的前導零沒被 Sheets 吃掉',
+    recent.length === 2 && recent.some(r => r.topic === '00878') &&
+    recent.some(r => r.topic === '現金水位'),
+    recent.map(r => r.topic).join(','));
+
+  // 「後來如何」是現算的，不是存在表裡的死值
+  const grown = AdviceLog.formatForPrompt(30, 1100000, 5);
+  check('有帶出當時總資產與至今變化', /當時總資產/.test(grown) && /\+10\.00%/.test(grown),
+    grown.split('\n')[1] || '');
+  const shrunk = AdviceLog.formatForPrompt(30, 900000, 5);
+  check('同一筆建議、換一個現在的總資產，算出來就不同（沒有把結果存死）',
+    /-10\.00%/.test(shrunk), shrunk.split('\n')[1] || '');
+  check('沒給現在的總資產就不硬算', !/至今/.test(AdviceLog.formatForPrompt(30, 0, 5)), '');
+
+  check('明講這些是自己說過的話、要認帳', /要認帳/.test(grown), grown.split('\n')[0]);
+
+  // 會進每一則 prompt，所以要有上限
+  for (let i = 0; i < 20; i++) {
+    AdviceLog.record({ source: 'chat', topic: 'T' + i, advice: '第 ' + i + ' 筆測試建議', totalAssets: 1000000 });
+  }
+  const capped = AdviceLog.formatForPrompt(30, 1000000, 5);
+  check('筆數有上限（標題 + 5 筆）', capped.split('\n').length === 6,
+    capped.split('\n').length + ' 行');
+
+  // 走 Tools 這條路（模型實際用的介面）
+  const viaTool = Tools.execute('logAdvice', { topic: '0056', advice: '殖利率轉弱，建議觀察' });
+  check('logAdvice 工具走得通', viaTool.ok === true && /已登記建議/.test(viaTool.text),
+    JSON.stringify(viaTool).slice(0, 80));
+  check('logAdvice 缺參數 → invalid_args',
+    Tools.execute('logAdvice', { topic: '0056' }).status === 'invalid_args', '');
+  const logged = AdviceLog.getRecent(30).find(r => r.topic === '0056');
+  check('總資產由程式讀，不是模型傳進來的',
+    !!logged && logged.totalAssets > 0, JSON.stringify(logged && logged.totalAssets));
+
+  // 沒有紀錄時回空字串，呼叫端才好整段略過
+  target.sheets = target.sheets.filter(s => s.getName() !== 'advice_log');
+  check('沒有分頁時回空字串而不是一句廢話', AdviceLog.formatForPrompt(30, 1000000, 5) === '', '');
 }
 
 //   REALIZED_CSV=path/to.csv node test_asset.cjs

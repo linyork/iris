@@ -278,6 +278,22 @@ var Tools = (() => {
       }
     },
     {
+      name: 'logAdvice',
+      description: '把你剛給出的**具體建議**登記起來，之後你自己看得到，可以追蹤後續。' +
+        '當你做出可以被驗證的判斷時使用：「建議加碼 XXX」「這檔佔比太高，建議減碼」' +
+        '「現金水位偏低，建議先不要進場」。' +
+        '⚠️ 只登記**建議**，不要登記查詢結果或閒聊。回答「我總資產多少」不算建議。' +
+        '⚠️ 這不是記憶工具：主人的偏好與原則用 saveKnowledge，這裡記的是**你說過的話**。',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic:  { type: 'string', description: '主題，用代號或短標籤，例如 "00878"、"現金水位"。同一件事要用同一個標籤才串得起來' },
+          advice: { type: 'string', description: '建議摘要，一兩句話講清楚你建議什麼、理由是什麼' }
+        },
+        required: ['topic', 'advice']
+      }
+    },
+    {
       name: 'searchWeb',
       description: '搜尋即時網路資訊，用於查詢當前國際財經、總體經濟、地緣政治、央行政策、匯率走勢、市場新聞等外部資訊。當分析持倉風險或市場趨勢需要參考外部時事時使用。',
       parameters: {
@@ -403,6 +419,18 @@ var Tools = (() => {
         case 'deleteMemory':
           if (!args.type || !args.key) return invalid('缺少必要參數：type 與 key 皆為必填。');
           return GoogleSheet.deleteMemory(args.type, args.key);
+
+        case 'logAdvice':
+          if (!args.topic || !args.advice) return invalid('缺少必要參數：topic 與 advice 皆為必填。');
+          // 總資產由程式讀，不讓模型傳 —— 它傳進來的數字沒有任何東西擔保是真的，
+          // 而這一格正是日後「後來如何」的錨點，錯了會一路錯下去。
+          return AdviceLog.record({
+            source: 'chat',
+            topic:  args.topic,
+            advice: args.advice,
+            totalAssets: (Snapshot._totals(Snapshot._open()) || {}).today
+          }) ? '已登記建議「' + args.topic + '」，之後我會自己追蹤後續。'
+             : '登記建議失敗，請看 consolelog。';
 
         case 'searchWeb':
           if (!args.query) return invalid('缺少必要參數：query。');

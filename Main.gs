@@ -144,6 +144,7 @@ function dailyCleanUp() {
   try {
     GoogleSheet.cleanExpiredShortTermMemories();
     AlertLog.cleanOld();
+    AdviceLog.cleanOld();   // 保留 180 天，比 alert_log 長很多，見 AdviceLog
 
     var ss = SpreadsheetApp.openById(Config.SHEET_ID);
 

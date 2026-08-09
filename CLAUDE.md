@@ -88,12 +88,12 @@ renaming or relocating them fails silently:
 1. `Main.gs` — `doPost()` receives the LINE **or** Telegram webhook, normalizes it into a single LINE-shaped event object, deduplicates via `CacheService` (6h TTL), silently drops non-master events, calls `ChatBot.reply()`
 2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 3 turns). Injects short-term memory + relevant knowledge into system context before each call. Caches tool results within a single turn to prevent duplicate calls.
 3. `AIServiceFactory.gs` — Routes to `GeminiService` or `NvidiaService` based on `env!B3`. NVIDIA path goes through `AIAdapter` (Gemini ↔ OpenAI format conversion) so the rest of the codebase always speaks Gemini format.
-4. `Tools.gs` — Defines and executes **21** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. `execute()` returns an envelope, `{ok, status, text}` — `status` is `ok` / `invalid_args` / `error`, and `ChatBot` sends it to the model alongside the text so a failure cannot be read as data (see [工具回傳要分得出成功與失敗](#工具回傳要分得出成功與失敗)). Grouped by which layer they touch:
+4. `Tools.gs` — Defines and executes **22** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. `execute()` returns an envelope, `{ok, status, text}` — `status` is `ok` / `invalid_args` / `error`, and `ChatBot` sends it to the model alongside the text so a failure cannot be read as data (see [工具回傳要分得出成功與失敗](#工具回傳要分得出成功與失敗)). Grouped by which layer they touch:
    - **Computed-layer reads** (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, answering "what do I have now".
    - **Input-layer reads** (`listTrades`, `listAccounts`, `listInstruments`) — the 交易/帳戶/標的 tabs themselves, answering "how did this get recorded, which row do I change". They live in `AssetTools.gs`, not `Snapshot`, because each one is the precondition for a write: `listTrades` hands out the row number `voidTrade` needs, `listAccounts` is the only surface exposing **原幣** balances (`Snapshot._cash` gives TWD-converted only), `listInstruments` names the instruments whose 區域/類型 are still blank.
    - **Ledger writes** (`recordTrade`, `recordDividend`, `setCashBalance`, `voidTrade`) — all four land in the 交易 tab via `AssetTools.gs`; a dividend, a balance correction and a void are each just one row with a different 動作 or 狀態.
    - **Master writes** (`addAccount`, `updateAccount`, `updateInstrument`) — the only code that writes 帳戶 and 標的.
-   - **Memory** (`rememberShortTerm`, `saveKnowledge`, `searchKnowledge`, `listMemories`, `deleteMemory`), **external** (`searchWeb`).
+   - **Memory** (`rememberShortTerm`, `saveKnowledge`, `searchKnowledge`, `listMemories`, `deleteMemory`), **feedback** (`logAdvice`, see [回饋閉環](#回饋閉環)), **external** (`searchWeb`).
 5. `GoogleSheet.gs` — All data access. Single spreadsheet instance cached per execution.
 
 ### AI Provider Switching
@@ -574,6 +574,38 @@ escape, which makes **update the only correction path** — and delete the dange
 ⚠️ `recordTrade` 的自動登記只生得出**半個標的**：買進沒見過的代號時會補一列 `標的`，但
 `區域` / `類型` / `目標配置%` 全留空，而 `配置` 正是按 `區域` 與 `類型` 分組的。也就是說
 那個 C **保證**後面需要一次 `updateInstrument`；`listInstruments` 會直接點名缺哪一欄。
+
+### 回饋閉環
+
+`alert_log` records what was pushed, for dedup. Nothing reads it back, so Iris never knew what it
+had advised — which is the line between an advisor and a query interface. `advice_log` +
+`AdviceLog.gs` close that: `AdvisorCheck` writes a row after every push, the `logAdvice` tool
+lets the model register advice it gives in chat, and `ChatBot` injects the last five into every
+prompt.
+
+**「後來如何」 is computed at read time, not backfilled.** The roadmap called for a scheduled job
+to fill in outcomes; this stores the total assets *at the time of the advice* and compares against
+the current figure whenever the block is built. Three reasons, and the second is the real one:
+
+- One less trigger, against a 20-trigger quota.
+- A backfilled cell is stale the next day. 「後來如何」 is inherently a question about *now*;
+  freezing it into a cell means committing to keep updating it.
+- A failed backfill leaves that row blank forever and nobody notices. Computing on read has no
+  such state.
+
+The cost is that callers must supply the current total — they already have it.
+
+⚠️ **主題 must be a text-formatted column.** Topics are usually ticker symbols, and Sheets turns
+`00878` into `878` on write. Nothing errors; the topic simply never matches again, so advice on
+one instrument stops linking up. Same trap as `AssetSchema`'s `textColumns`. `T32` pins it.
+
+⚠️ `AdviceLog` creates its own tab when missing, unlike `AlertLog`, which logs a warning and gives
+up. `AlertLog`'s tab is hand-made and predates it; a *new* module that quietly does nothing would
+be indistinguishable from a working one. That is also why `advice_log` is **not** in `setup()`'s
+`requiredSheets` — it would report a missing sheet until the first advice is recorded.
+
+Retention is 180 days versus `alert_log`'s 60, because the span is the point: 「你三個月前說要
+降現金比例」 is the whole reason the table exists.
 
 ### 工具回傳要分得出成功與失敗
 

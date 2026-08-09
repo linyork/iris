@@ -9,7 +9,7 @@
 > | 目前手刻 | 對應的 LangChain / LangGraph 概念 |
 > |---|---|
 > | `ChatBot.gs` 的 ReAct 迴圈 | `LangGraph` StateGraph + ToolNode |
-> | `Tools.gs` 的 21 個工具 | `@tool` decorator / `StructuredTool` |
+> | `Tools.gs` 的 22 個工具 | `@tool` decorator / `StructuredTool` |
 > | `AIServiceFactory` + `AIAdapter` | `BaseChatModel` 抽象 + provider 子類 |
 > | `GoogleSheet` 的 chat 讀寫 + STM 注入 | `Memory` / `Checkpointer` |
 > | `searchKnowledge` 關鍵字查 Sheet | `VectorStore` retriever |
@@ -96,7 +96,7 @@ Telegram Bot API ───┤        │
                  │
                  ▼
 ┌──────────────────────────────────────────────┐
-│  Tools.gs · 21 個工具                         │
+│  Tools.gs · 22 個工具                         │
 │   ├─ 資產查詢：getHoldings / getDashboard /    │
 │   │           getHistory / getPrice           │
 │   ├─ 股利：getDividendHistory / recordDividend │
@@ -108,6 +108,7 @@ Telegram Bot API ───┤        │
 │   ├─ 記憶：rememberShortTerm / saveKnowledge / │
 │   │       searchKnowledge / listMemories /    │
 │   │       deleteMemory                        │
+│   ├─ 回饋：logAdvice（記下自己給過的建議）        │
 │   └─ 外部：searchWeb (Google Custom Search)    │
 └────────────────┬─────────────────────────────┘
                  │
@@ -147,7 +148,8 @@ Telegram Bot API ───┤        │
 | `MiniApp.gs` | Telegram Mini App 的 `initData` 驗簽與後端進入點 |
 | `MiniAppPage.html` | Mini App 前端（手機優先，可點持倉問 Iris） |
 | `AdvisorCheck.gs` | 主動感知層：呼叫 LLM 判斷是否 push 通知 |
-| `AlertLog.gs` | 通知史記錄與去重 |
+| `AlertLog.gs` | 通知史記錄與去重（保留 60 天）|
+| `AdviceLog.gs` | Iris 給過的建議與後續追蹤（保留 180 天）。分頁不存在會自己建；「後來如何」在讀取時現算，不回填 |
 | `DailyReport.gs` | 三份報告共用的 `_generateReport()` 骨架，加上每日 09:00 早報、週六週報、每月 1 日月報 |
 | `MarketAlert.gs` | 10:00 / 14:00 盤中異動警報（單檔 ETF 日跌幅 > `ALERT_ETF_DROP`） |
 | `DataSync.gs` | 每日 18:00 寫入 `每日快照`（長表，同日冪等，見「每日快照」） |
@@ -172,7 +174,8 @@ Telegram Bot API ───┤        │
 | `chat` | 對話歷史（每 userId），超過 30 天自動清除 |
 | `short_term_memory` | 短期記憶；有 expiry，每日清除 |
 | `knowledge` | 長期知識；以關鍵字搜尋（非向量） |
-| `alert_log` | 主動通知歷史，供 AdvisorCheck 去重 |
+| `alert_log` | 主動通知歷史，供 AdvisorCheck 去重；保留 60 天 |
+| `advice_log` | Iris 給過的建議：時間／來源／主題／建議／當下總資產／使用者反應。保留 180 天，**不存在時由 `AdviceLog` 自己建立** |
 | `所有股票` | 持倉資料：row2 為 0000 合計列，row3+ 為個別 ETF |
 | `面板` | 儀表板：B1:B8 摘要、C1:D4 淨值、E1:F8 現金分布 |
 | `配置` | 資產配置（rows 2-21，台股/全球/息/指 比例） |
@@ -358,7 +361,7 @@ TWSE 的 `STOCK_DAY_AVG` 端點硬解析收盤價。
 
 ## AI 工具集
 
-`Tools.gs` 共定義 21 個工具，呼叫者為 LLM。
+`Tools.gs` 共定義 22 個工具，呼叫者為 LLM。
 工具以 `definitions` 陣列（給模型看的 schema）加上 `execute()` 內的 `switch` 分派實作，
 **新增工具時兩處都要改**，只加 definitions 會讓模型叫得出來卻一律收到「未知的工具」。
 
@@ -384,6 +387,7 @@ TWSE 的 `STOCK_DAY_AVG` 端點硬解析收盤價。
 | `searchKnowledge(query)` | 關鍵字搜尋長期知識 |
 | `listMemories` | 列出目前所有 STM + knowledge |
 | `deleteMemory(type, key)` | 刪除 STM 或 knowledge |
+| `logAdvice(topic, advice)` | 登記 Iris 自己剛給出的**具體建議**，寫進 `advice_log`。之後會注入對話，並在讀取時現算「當時 → 現在」的變化 —— 見[回饋閉環](#回饋閉環) |
 | `searchWeb(query)` | Google Custom Search 取得即時時事 |
 
 ReAct 迴圈上限 `Config.TOOL_MAX_ITERATIONS = 3`，且**最後一輪不帶工具定義**，

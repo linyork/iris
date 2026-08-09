@@ -29,6 +29,8 @@ function listTriggers() {
  * - 列印環境變數狀態
  */
 function setup() {
+  // advice_log 不在這裡：AdviceLog 找不到就自己建（見那裡的註解），
+  // 列進來只會在第一次記建議之前一直顯示「缺少工作表」的假警報。
   var requiredSheets = ['env', 'consolelog', 'chat', 'short_term_memory', 'knowledge', 'alert_log'];
   var ss = SpreadsheetApp.openById(Config.SHEET_ID);
 

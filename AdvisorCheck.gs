@@ -67,9 +67,19 @@ var AdvisorCheck = (() => {
 
       MessagingServiceFactory.pushToMasters(message);
 
-      // 8. 記錄到 alert_log
+      // 8. 記錄到 alert_log（去重用）與 advice_log（回饋閉環用）
       var summary = ac._summarizeSnapshot(snapshot);
       AlertLog.record(triggerSource, llmResult.decisionRef || '', message, summary);
+
+      // 兩張表用途不同，不要合併：alert_log 記「推播過什麼」給去重看，保留 60 天；
+      // advice_log 記「我建議了什麼」給日後的自己看，保留 180 天，而且會被注入對話。
+      // 主動推播就是 Iris 講得最篤定的時候，不記下來的話它下次會忘記自己講過。
+      AdviceLog.record({
+        source: 'advisor',
+        topic:  llmResult.decisionRef || triggerSource,
+        advice: message.slice(0, 200),
+        totalAssets: (snapshot.totals || {}).today
+      });
 
       Logger.info('AdvisorCheck.run', '通知已發送', {
         source: triggerSource,
