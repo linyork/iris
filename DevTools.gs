@@ -233,17 +233,27 @@ function testNimCandidateModels() {
 
   // 候選清單。deepseek-v4-flash 是現役主模型，放在這裡當**對照組** ——
   // 它若也失敗，代表是 API key / 網路 / NIM 整體壅塞，不是候選模型的問題。
+  // 2026-08-09 更新：主模型 deepseek-v4-flash 已於 08-07 EOL（410 Gone），
+  // 目錄上也查無此 id。這批要找的是**新的主模型**（FAST 要關思考求快、
+  // SMART 要能開思考，都要原生 function calling 與可用的繁中）。
+  //
+  // 對照組是 `openai/gpt-oss-20b` —— 它是現役備援，21:42 才剛成功接手過，
+  // 所以它若在這裡失敗，代表是 API key／網路／NIM 整體壅塞，不是候選的問題。
+  //
+  // ⚠️ 已知地雷，刻意不放進來：`mistral-medium-3.5-128b` 與 `z-ai/glm-5.2`
+  //    各卡死過一次整批（單顆吃滿 NIM 的 ~300s 閘道逾時，fetchAll 會等整批）。
+  //    要測它們請單獨跑一次，不要跟其他候選綁在同一批。
   var CANDIDATES = [
-    'deepseek-ai/deepseek-v4-flash',
+    'deepseek-ai/deepseek-v4-flash-0731',        // ★ 最可能的直接替代：同家族的日期版
+    'openai/gpt-oss-20b',                        // 對照組（現役備援）
+    'openai/gpt-oss-120b',
+    'minimaxai/minimax-m3',
+    'moonshotai/kimi-k2.6',
+    'stepfun-ai/step-3.7-flash',
+    'nvidia/nemotron-3-super-120b-a12b',
+    'nvidia/nemotron-nano-3-30b-a3b',
     'meta/llama-3.3-70b-instruct',
-    'meta/llama-3.1-8b-instruct',
-    'mistralai/mistral-medium-3.5-128b',
-    'mistralai/mistral-nemotron',
-    'nvidia/llama-3.3-nemotron-super-49b-v1.5',
-    'nvidia/nvidia-nemotron-nano-9b-v2',
-    'openai/gpt-oss-20b',
-    'google/gemma-3-12b-it',
-    'z-ai/glm-5.2'
+    'google/gemma-4-31b-it'
   ];
 
   var url     = Config.NVIDIA_API_BASE + '/chat/completions';
