@@ -2415,6 +2415,59 @@ console.log('\nT36  知識檢索');
   target.sheets = target.sheets.filter(s => s.getName() !== 'knowledge');
 }
 
+// ─── T37  評估：判定是純函式，所以測得起來 ────────────────────────
+//
+// 評估的價值全在判定準不準。判定跟 LLM 無關（吃文字、回 {ok, why}），
+// 所以這裡測的是判定本身 —— 執行那半要打 LLM，留給 DevTools.runEval()。
+console.log('\nT37  評估的判定函式');
+{
+  load('Eval.gs');
+  const C = Eval.CHECKS;
+
+  check('抓得到 Markdown 粗體', C.noMarkdown('總資產 **142萬**').ok === false, '');
+  check('抓得到 Markdown 標題', C.noMarkdown('## 標題\n內容').ok === false, '');
+  check('乾淨的回覆會過', C.noMarkdown('▸ 總資產：142萬').ok === true, '');
+  check('不要把數學乘號誤判成粗體', C.noMarkdown('2 * 3 = 6').ok === true, '');
+
+  check('是非題沒先答是否 → 不過', C.yesNoFirst('讓我先查一下你的持倉。').ok === false, '');
+  check('先答了就過', C.yesNoFirst('可以。目前現金水位還夠。').ok === true, '');
+
+  check('沒講時點 → 不過', C.hasAsOf('總資產 142萬。').ok === false, '');
+  check('講了重算時點 → 過', C.hasAsOf('總資產 142萬（13:02 重算）。').ok === true, '');
+  check('講了非交易時段 → 過', C.hasAsOf('非交易時段，取不到當日成交價。').ok === true, '');
+
+  check('唯讀問題宣稱寫入 → 不過', C.noWriteClaim('好的，已校正。').ok === false, '');
+  check('正常回答 → 過', C.noWriteClaim('你有三個帳戶。').ok === true, '');
+
+  check('太長 → 不過', C.concise(new Array(20).fill('一行').join('\n')).ok === false, '');
+
+  // 數字出處：最有價值也最容易誤判的一條
+  const ctx = { context: '總資產：1,420,000\n未實現損益：85,000' };
+  check('數字有出處 → 過', C.numbersGrounded('總資產 1,420,000。', ctx).ok === true, '');
+  check('「142萬」是人設要求的寫法，也要算有出處',
+    C.numbersGrounded('總資產 142萬。', ctx).ok === true,
+    C.numbersGrounded('總資產 142萬。', ctx).why);
+  check('憑空生出來的金額 → 不過',
+    C.numbersGrounded('總資產 1,999,999。', ctx).ok === false, '');
+  check('小數字不檢查（年份、百分比、股數、列號）',
+    C.numbersGrounded('2026 年、佔比 12.5%、1000 股、第 42 列', ctx).ok === true,
+    C.numbersGrounded('2026 年、佔比 12.5%、1000 股、第 42 列', ctx).why);
+
+  // judge：多條性質一起看
+  const v1 = Eval.judge('好的，已校正。', 'noMarkdown,noWriteClaim', {});
+  check('judge 會列出未通過的性質',
+    v1.pass === false && v1.failed.join(',') === 'noWriteClaim', JSON.stringify(v1.failed));
+  const v2 = Eval.judge('▸ 你有三個帳戶。', 'noMarkdown,noWriteClaim', {});
+  check('全過就是 pass', v2.pass === true, JSON.stringify(v2.failed));
+  check('未知的性質名稱會被點名，不是靜靜跳過',
+    Eval.judge('隨便', 'noSuchCheck', {}).failed.join('').indexOf('未知性質') >= 0, '');
+
+  check('預設題組有東西', Eval.DEFAULT_SET.length >= 10, Eval.DEFAULT_SET.length + ' 題');
+  check('每題的期望性質都是真的存在的檢查',
+    Eval.DEFAULT_SET.every(q => q[2].split(',').every(n => !!Eval.CHECKS[n.trim()])),
+    Eval.DEFAULT_SET.filter(q => q[2].split(',').some(n => !Eval.CHECKS[n.trim()])).map(q => q[0]).join(','));
+}
+
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);

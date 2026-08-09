@@ -185,6 +185,20 @@ function rollupMetrics() {
   return rows;
 }
 
+/**
+ * 跑一批評估題（預設 3 題）。改完 `Prompt.gs` 之後用這支看逐題差異。
+ *
+ * ⚠️ **重複執行直到整組都有新的「最後執行」時間。** 一題可能跑完整個 ReAct 迴圈，
+ *    GAS 只有 6 分鐘，所以一次只跑幾題；沒跑過的優先，其次最舊的。
+ *    第一次執行會自己建 `eval_set` 並寫入預設題組。
+ */
+function runEval() {
+  var r = Eval.runBatch(3);
+  console.log(JSON.stringify(r, null, 2));
+  console.log('未跑完的話再執行一次；結果與未通過的性質寫在 eval_set 分頁。');
+  return r;
+}
+
 /** 只重畫「面板」的版面（不重算持倉）。改了 Panel.render() 之後用這支看結果。 */
 function renderPanel() {
   var r = Panel.render();

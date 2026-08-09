@@ -157,6 +157,7 @@ Telegram Bot API ───┤        │
 | `WebSearch.gs` | Google Custom Search 包裝 |
 | `Utils.gs` | 文字格式化、`stripToolCallXml`、`formatForLine` |
 | `Logger.gs` | 寫入 `consolelog` 工作表 |
+| `Eval.gs` | 固定題組 + 可自動判定的性質。**判定是純函式（測得起來），執行才需要 LLM 且一次只跑幾題**，重複執行 `runEval()` 直到整組跑完 |
 | `Metrics.gs` | 把 `consolelog` 聚合成每日一列（輪數、耗時、逾時、備援接手、假宣稱攜截、錯誤數）。**在 `dailyCleanUp` 清 consolelog 之前跑**，否則等於丟掉再算 |
 | `AssetTools.gs` | 新表**輸入層**的用例層：`recordTrade` 驗證後 append 一列並重算；`voidTrade` 作廢記錯的列；`updateInstrument` / `updateAccount` 改主檔；`listTrades` / `listAccounts` / `listInstruments` 讀主檔（計算層的讀取在 `Snapshot`） |
 | `Panel.gs` | 「面板」分頁的排版：整張都是指向持倉／現金／實體資產的公式，由 `Position.rebuild()` 最後呼叫。程式讀的數字在「指標」那張，不在這裡 |
@@ -176,6 +177,7 @@ Telegram Bot API ───┤        │
 | `short_term_memory` | 短期記憶；有 expiry，每日清除 |
 | `knowledge` | 長期知識；以關鍵字搜尋（非向量） |
 | `alert_log` | 主動通知歷史，供 AdvisorCheck 去重；保留 60 天 |
+| `eval_set` | 評估題組與每題的最新判定（PASS / FAIL 與未通過的性質）。**不存在時自己建立並寫入預設題組** |
 | `metrics` | 每日執行指標，由 `Metrics.rollupDaily()` 寫入（同日覆蓋）。**不存在時自己建立** |
 | `advice_log` | Iris 給過的建議：時間／來源／主題／建議／當下總資產／使用者反應。保留 180 天，**不存在時由 `AdviceLog` 自己建立** |
 | `所有股票` | 持倉資料：row2 為 0000 合計列，row3+ 為個別 ETF |

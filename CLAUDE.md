@@ -575,6 +575,40 @@ escape, which makes **update the only correction path** — and delete the dange
 `區域` / `類型` / `目標配置%` 全留空，而 `配置` 正是按 `區域` 與 `類型` 分組的。也就是說
 那個 C **保證**後面需要一次 `updateInstrument`；`listInstruments` 會直接點名缺哪一欄。
 
+### 評估：判定與執行是兩件事
+
+`Eval.gs` splits into a half that needs an LLM and a half that does not, and only the second half
+is where the value lives.
+
+**`Eval.CHECKS` are pure functions** — `(reply, ctx) => {ok, why}`. No LLM, no sheet reads, so
+`T37` tests them directly: Markdown, yes/no-first, as-of present, no write claim on a read-only
+question, length, whether every figure in the reply can be found in that turn's context, and
+whether standing rules get cited. `Eval.judge` runs a named set and reports which ones failed.
+
+**`Eval.runBatch(limit)` is the half that costs money and time.** Default 3 questions per run,
+oldest-first, writing results back after each. GAS gives 6 minutes and one question can run a
+whole ReAct loop, so it is designed to be run repeatedly until every row has a fresh timestamp
+rather than to finish in one go. It also stops early if `Utils.execTimeLeftMs()` drops under 90s —
+better to do two questions than to be killed mid-question having written nothing.
+
+Two things that would quietly ruin the results:
+
+- **Each question uses its own `userId`** (`EVAL:<id>`). Chat history is read per user, so a
+  shared id would let question 2 see question 1 — results would then depend on run order and the
+  same set could grade differently on a re-run.
+- **`platform` is not `TELEGRAM`.** It would otherwise fire the typing indicator at the owner;
+  an eval is background work and should not appear in his chat.
+
+⚠️ **Expectations are properties, not answers.** 「應該回答 142萬」 is stale tomorrow and grades
+the wrong thing. The set asks whether the reply *carries an as-of*, whether *every figure has a
+source*, whether a yes/no question *got a yes or no first*.
+
+⚠️ `numbersGrounded` is the valuable check and the one most likely to misfire, so its allowances
+are deliberate: 「142萬」 counts as grounded for 1,420,000 because the persona *requires* that
+form, and anything under 10,000 is skipped — years, percentages, share counts and row numbers all
+live there and are nearly always transcription rather than invention. What it is really hunting is
+a fabricated figure at money scale.
+
 ### 知識檢索：中文切得開，規矩不靠碰運氣
 
 `searchKnowledge` used to tokenise with `query.split(/\s+/)`. Chinese has no spaces, so
