@@ -1970,6 +1970,10 @@ console.log('\nT29  數字要帶著「什麼時候、可不可信」一起出去
   check('講明股數成本來自上一次重算', /上一次重算/.test(holdText), '');
   check('講明市價是活公式、不保證是此刻', /不保證是此刻的價/.test(holdText), '');
   check('講明當日漲跌有延遲', /延遲約 20 分鐘/.test(holdText), '');
+  // 逐檔佔比的分母是股票市值，不是總資產 —— 標籤要自己講清楚
+  check('逐檔佔比標明分母是股票市值',
+    /佔股票市值:/.test(holdText) && !/(^|\|)\s*佔比:/.test(holdText),
+    holdText.split('\n').find(l => l.indexOf('佔') >= 0) || '');
 
   // 指標的待修正警告（備援補價就寫在這裡）要跟著持倉一起出去
   // `_metrics` 是掃全表挑開頭是 ⚠️ 的列，不綁列號，所以接在最後面就行
@@ -2000,6 +2004,13 @@ console.log('\nT30  事實區塊');
   check('開頭是給模型看的標記', block.indexOf('[系統計算的事實]') === 0, block.split('\n')[0]);
   check('明講必須原樣引用', /必須原樣引用/.test(block), '');
   check('明講不要自己算百分比', /不要自己算/.test(block), '');
+
+  // ⚠️ 分母要寫在數字旁邊。兩個不同母體的百分比並排時，讀的人（與模型）
+  //    無從察覺 —— 2026-08-09 實測就是把整體殖利率拿去比息型 ETF 的門檻。
+  check('殖利率標明是全部持股合計', /全部持股合計/.test(block),
+    block.split('\n').find(l => l.indexOf('殖利率') >= 0) || '');
+  check('佔比標明分母是總資產', /佔總資產/.test(block),
+    block.split('\n').find(l => l.indexOf('佔') >= 0) || '');
 
   // 數字要與指標表一致 —— 這個區塊的全部價值就在「不會算錯」
   const m = Snapshot._metrics(target);

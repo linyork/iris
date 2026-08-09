@@ -758,6 +758,14 @@ TWSE, and this block is built for *every* message, including 「謝謝」. `T30`
 spying on `StockPrice`, not by pattern-matching the text — the 待修正 warnings legitimately name
 instrument codes, so text matching would forbid the wrong thing.
 
+⚠️ **百分比要把分母寫在旁邊。** Two ratios with different denominators, printed next to each
+other, are indistinguishable to the reader — and to the model. On 2026-08-09 it set the
+portfolio-wide 2.56% 現值殖利率 beside the owner's rule about 息型 ETF dropping under 3.5%,
+and compared them. It also reported 009826 as 32.22% (of stock value) in a reply that elsewhere
+discussed 佔總資產. Both numbers were correct; only the labels were missing. `Facts` now says
+「全部持股合計」 and 「佔總資產」, and `getHoldings` says 「佔股票市值」 instead of a bare
+「佔比」. Naming the denominator beats asking the model to be careful.
+
 ⚠️ **`Facts.build()` must never throw.** It returns `''` on any failure. It is an enhancement to
 a reply; letting it take the whole reply down would be a strictly worse trade.
 

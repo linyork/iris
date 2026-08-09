@@ -72,9 +72,15 @@ var Facts = (() => {
         // 前端曾經各自猜成「現金流跨度不足」，而三個原因裡那只佔一個。
         lines.push('XIRR（年化）：' + (m.xirr === null ? '尚無法計算' : pct(m.xirr)) +
           (m.xirrNote ? '（' + m.xirrNote + '）' : ''));
-        lines.push('現值殖利率：' + pct(m.currentYield) + '　成本殖利率：' + pct(m.costYield));
-        lines.push('佔比 —— 股票 ' + pct(m.stockRatio) +
-          '／現金 ' + pct(m.cashRatio) + '／實體 ' + pct(m.physicalRatio));
+        // ⚠️ 這兩個殖利率是**全部持股合計**，不是任何單一類別。
+        //    2026-08-09 實測：模型把 2.56% 拿去跟主人「息型 ETF 殖利率跌破 3.5%」
+        //    那條規矩並排，兩個不同母體的數字放在一起，看起來就像可以比。
+        //    分母寫在數字旁邊，比事後叫它小心有效。
+        lines.push('現值殖利率：' + pct(m.currentYield) + '　成本殖利率：' + pct(m.costYield) +
+          '（全部持股合計；沒有分類別的殖利率，不要拿它跟單一類別的門檻比）');
+        lines.push('佔總資產 —— 股票 ' + pct(m.stockRatio) +
+          '／現金 ' + pct(m.cashRatio) + '／實體 ' + pct(m.physicalRatio) +
+          '（逐檔的佔比在 getHoldings，那個分母是股票市值，兩者不可混用）');
 
         if (m.warnings && m.warnings.length) {
           lines.push('⚠️ 待修正：' + m.warnings.join('；') +
