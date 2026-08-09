@@ -80,11 +80,11 @@ var Config = (() => {
     // ─── NVIDIA ───────────────────────────────────────────────
     get NVIDIA_API_KEY() { return scriptProperties.getProperty(ENV_KEYS.NVIDIA_KEY); },
     NVIDIA_API_BASE:     'https://integrate.api.nvidia.com/v1',
-    NVIDIA_DEFAULT_MODEL: 'deepseek-ai/deepseek-v4-flash',
+    NVIDIA_DEFAULT_MODEL: 'deepseek-ai/deepseek-v4-flash-0731',
 
     // 可用性保底（N-1）：主模型呼叫失敗（下架 404/410、過載 503/504/529、重試耗盡回 null）時，
-    // AIServiceFactory 會自動改用這個備援模型重試一次。deepseek-v4-flash 在 NIM 上很熱門、
-    // 過載機率高，這道保底就是為它準備的。
+    // AIServiceFactory 會自動改用這個備援模型重試一次。主模型在 NIM 上很熱門、
+    // 過載機率高，這道保底就是為它準備的 —— 而 2026-08-07 那次它擋下的是**下架**。
     //
     // gpt-oss-20b：21B MoE（3.6B active）、原生 Function Calling、思考可關。
     // 2026-08-05 從 10 顆候選實測選出（見 find-nim-model skill），四關全過：
@@ -95,22 +95,35 @@ var Config = (() => {
     // ⚠️ 前一顆備援 ministral-14b 於 2026-07-27 被 NVIDIA 下架，直到 8/5 主模型過載時
     //    才被發現 —— 那段期間保底等於不存在。備援不會自己報平安，換主模型時、
     //    或發現早報失敗時，都要順手確認備援還活著。
+    //    2026-08-09 複驗：仍在目錄上，四關全過（忠實轉述那關算得完全正確）。
     AI_FALLBACK_ENABLED:   true,
     NVIDIA_FALLBACK_MODEL: 'openai/gpt-oss-20b',
 
-    // 全檔次使用 DeepSeek-V4-Flash（前代 minimaxai/minimax-m2.7 將於 NIM 下架）
+    // 全檔次使用 DeepSeek-V4-Flash-0731。
+    //
+    // ⚠️ **無日期的 `deepseek-ai/deepseek-v4-flash` 已於 2026-08-07 EOL，打過去回 410。**
+    //    那兩天所有訊息都是備援 gpt-oss-20b 在扛（也就是備援已經沒有備援），
+    //    直到 08-09 主人回報「回覆變怪」才發現 —— 回覆品質下降是下架的**間接症狀**，
+    //    因為備援是顆 21B 小模型。下次遇到「講話變笨」先查 consolelog 有沒有 410。
+    //
+    // `-0731` 是同一顆的日期版：`NvidiaService` 的分支比對 `deepseek-ai/deepseek-v4` 前綴，
+    // 所以**不必加新分支**，三個 tier 的參數也原封不動沿用。
     // 規格：284B MoE（13B active）、1M context、原生 Function Calling
     //
-    // 選它的關鍵：思考「可開可關」，改用 enableThinking 依「使用者是否在等」分流 ——
+    // 2026-08-09 四關實測（見 find-nim-model skill），它是唯一四關全過的：
+    //   可用性 200 ／ 工具參數型別正確（days 是數字 7 不是字串）
+    //   關思考生效（reasoning 639 → 0，completion 371 → 30）
+    //   忠實轉述全對（市值 233,000／成本 218,000／損益 +15,000，51 token）
+    //
+    // 選它的關鍵：思考「可開可關」，用 enableThinking 依「使用者是否在等」分流 ——
     //   FAST  → ChatBot ReAct 迴圈，使用者盯著畫面等 → 關思考求快
-    //           （M2.7 無法關思考，實測單輪要 74~77 秒；關掉後這段延遲才有救）
     //   SMART → 早報/週報/月報、顧問檢查，全是排程背景任務，沒人在等 → 開思考求質
     //   LITE  → 目前無呼叫端，比照 FAST 設定
     // 思考開啟時 reasoning 會佔用 max_tokens 預算，故 SMART 預算給得比 FAST 寬。
     NVIDIA_MODELS: {
-      LITE:  { model: 'deepseek-ai/deepseek-v4-flash', maxOutputTokens: 3072,  temperature: 1.0, topP: 0.95, enableThinking: false },
-      FAST:  { model: 'deepseek-ai/deepseek-v4-flash', maxOutputTokens: 4096,  temperature: 1.0, topP: 0.95, enableThinking: false },
-      SMART: { model: 'deepseek-ai/deepseek-v4-flash', maxOutputTokens: 12288, temperature: 1.0, topP: 0.95, enableThinking: true  }
+      LITE:  { model: 'deepseek-ai/deepseek-v4-flash-0731', maxOutputTokens: 3072,  temperature: 1.0, topP: 0.95, enableThinking: false },
+      FAST:  { model: 'deepseek-ai/deepseek-v4-flash-0731', maxOutputTokens: 4096,  temperature: 1.0, topP: 0.95, enableThinking: false },
+      SMART: { model: 'deepseek-ai/deepseek-v4-flash-0731', maxOutputTokens: 12288, temperature: 1.0, topP: 0.95, enableThinking: true  }
     },
 
     // ─── 對話管理 ─────────────────────────────────────────────

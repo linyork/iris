@@ -97,7 +97,7 @@ renaming or relocating them fails silently:
 5. `GoogleSheet.gs` — All data access. Single spreadsheet instance cached per execution.
 
 ### AI Provider Switching
-Switch provider by setting `env!B3` in the Google Sheet to `GEMINI` or `NVIDIA`. Model tiers (`LITE`/`FAST`/`SMART`) are defined in `Config.gs` for both providers. Current NVIDIA model: `deepseek-ai/deepseek-v4-flash` for all tiers (284B MoE, 1M context, native function calling, `temperature 1.0` / `top_p 0.95` per NVIDIA's reference).
+Switch provider by setting `env!B3` in the Google Sheet to `GEMINI` or `NVIDIA`. Model tiers (`LITE`/`FAST`/`SMART`) are defined in `Config.gs` for both providers. Current NVIDIA model: `deepseek-ai/deepseek-v4-flash-0731` for all tiers (284B MoE, 1M context, native function calling, `temperature 1.0` / `top_p 0.95` per NVIDIA's reference). ⚠️ The undated `deepseek-ai/deepseek-v4-flash` **reached EOL on 2026-08-07 and returns 410** — see [下架的症狀是「講話變笨」](#下架的症狀是講話變笨).
 
 **Thinking is controllable on this model, and the tiers use it as the fast/quality dial:**
 
@@ -115,7 +115,7 @@ branches per family: deepseek uses `chat_template_kwargs.thinking`, glm uses
 `reasoning_effort` (nothing else works for it). Adding a model means adding a branch; miss it and
 thinking silently stays on, which mostly shows up as latency rather than an error.
 
-**Resilience.** deepseek-v4-flash is popular on NIM and overloads often (503 `ResourceExhausted`, 504, 529, and dropped connections). Two layers cover this: `NvidiaService.callAPI` retries 3× with 2s→4s backoff, counting **both** bad status codes and thrown connection exceptions as retryable; if it still returns null, `AIServiceFactory` falls back once to `Config.NVIDIA_FALLBACK_MODEL` (`openai/gpt-oss-20b`, 21B MoE, native function calling, thinking dialled down to `low`).
+**Resilience.** deepseek-v4-flash-0731 is popular on NIM and overloads often (503 `ResourceExhausted`, 504, 529, and dropped connections). Two layers cover this: `NvidiaService.callAPI` retries 3× with 2s→4s backoff, counting **both** bad status codes and thrown connection exceptions as retryable; if it still returns null, `AIServiceFactory` falls back once to `Config.NVIDIA_FALLBACK_MODEL` (`openai/gpt-oss-20b`, 21B MoE, native function calling, thinking dialled down to `low`).
 
 ⚠️ **The fallback never announces its own death.** The previous one was delisted by NVIDIA on
 2026-07-27 and that only surfaced on 08-05, when the primary happened to overload and the report
@@ -766,6 +766,29 @@ written it would have made the model ignore a correct number sitting in front of
 obey. The ban was always about quoting *stale numbers from conversation history*; the rule now
 names the two acceptable sources (this block, and tool returns) and says which questions each
 answers.
+
+### 下架的症狀是「講話變笨」
+
+2026-08-07 `deepseek-ai/deepseek-v4-flash` hit EOL and started returning `410 Gone`. Nothing
+broke. The fallback took over on every single request, exactly as designed — and that is why it
+went unnoticed for two days. What the owner eventually reported was not an error but a *reply that
+read wrong*: an incoherent line comparing 29% against 38%, the conclusion at the bottom instead of
+the top, arithmetic that did not hold up.
+
+Those are symptoms of a 21B fallback model doing work meant for a 284B one. **The failure
+presented as a quality problem, not an availability problem**, so the instinct was to go and look
+at the prompt.
+
+- **First check `consolelog` for `410` / `404` before touching `Prompt.gs`.** A model change
+  explains a behaviour change far more often than a prompt change does.
+- **`Metrics.rollupDaily` counts `fallback` per day.** A non-zero number there every day means the
+  primary is gone, not merely busy. That column is the alarm this incident needed and did not have.
+
+The replacement is the same model under a dated id, `-0731`. `NvidiaService` matches on the
+`deepseek-ai/deepseek-v4` prefix, so it needed no new branch — but that was verified, not assumed.
+
+⚠️ **A dated id can EOL too.** The undated one was supposed to be the stable alias and it was the
+one that died. Nothing here is permanent; the `find-nim-model` skill exists because this recurs.
 
 ### 拿不到就說拿不到，不要生一個 0 出來
 
