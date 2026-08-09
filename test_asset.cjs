@@ -2146,6 +2146,46 @@ console.log('\nT32  Iris 記得自己說過什麼');
   check('沒有分頁時回空字串而不是一句廢話', AdviceLog.formatForPrompt(30, 1000000, 5) === '', '');
 }
 
+// ─── T33  人設：行為準則優先，排版退到最後 ────────────────────────
+console.log('\nT33  人設寫的是行為準則，不是排版規範');
+{
+  load('Prompt.gs');
+  const sys = Prompt.SYSTEM_PROMPT;
+  const adv = Prompt.ADVISOR_PROMPT;
+
+  // ⚠️ 這條是真正會回歸的：提示詞一邊禁止 Markdown，一邊自己用 **強調**。
+  //    模型會模仿它讀到的格式，而 Utils.stripMarkdown 的存在正說明它真的會輸出星號。
+  check('SYSTEM_PROMPT 自己不用 Markdown 粗體（它才剛禁止這件事）',
+    sys.indexOf('**') < 0, (sys.match(/\*\*[^*\n]+\*\*/g) || []).slice(0, 3).join(' | '));
+  check('ADVISOR_PROMPT 同理', adv.indexOf('**') < 0,
+    (adv.match(/\*\*[^*\n]+\*\*/g) || []).slice(0, 3).join(' | '));
+
+  // 排版規範退到最後，行為準則放前面
+  const posBehaviour = sys.indexOf('[怎麼回答');
+  const posTools     = sys.indexOf('[工具選用]');
+  const posFormat    = sys.indexOf('[排版]');
+  check('行為準則在工具說明之前', posBehaviour > 0 && posBehaviour < posTools,
+    posBehaviour + ' vs ' + posTools);
+  check('排版規範退到最後', posFormat > posTools, posFormat + ' vs ' + posTools);
+
+  // D10 點名缺的那幾種顧問行為
+  [['先講結論', /先講結論/], ['區分事實與判斷', /分清楚「事實」與「判斷」/],
+   ['承認不確定', /不確定就說不確定/], ['比對目標', /\[目標\] 要主動比對/],
+   ['情緒應對', /焦慮或抱怨虧損/]].forEach(([label, re]) => {
+    check('有寫進' + label, re.test(sys), '');
+  });
+
+  // 這段每則訊息都要送，長度要看得住
+  check('SYSTEM_PROMPT 長度在 6000 字以內', sys.length <= 6000, sys.length + ' 字');
+
+  // systemContext 把事實與建議接在最後（離問題最近）
+  const ctx = Prompt.systemContext({ scope: '回覆', facts: 'FACTS_HERE', advice: 'ADVICE_HERE' });
+  check('事實與建議接在 systemContext 最後',
+    ctx.indexOf('FACTS_HERE') > ctx.indexOf('[重要：日期與年份規則]') &&
+    ctx.indexOf('ADVICE_HERE') > ctx.indexOf('FACTS_HERE'), '');
+  check('沒傳就不留空段落', Prompt.systemContext({ scope: '回覆' }).indexOf('undefined') < 0, '');
+}
+
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);

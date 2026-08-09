@@ -575,6 +575,29 @@ escape, which makes **update the only correction path** — and delete the dange
 `區域` / `類型` / `目標配置%` 全留空，而 `配置` 正是按 `區域` 與 `類型` 分組的。也就是說
 那個 C **保證**後面需要一次 `updateInstrument`；`listInstruments` 會直接點名缺哪一欄。
 
+### 人設寫的是行為，排版放最後
+
+`Prompt.SYSTEM_PROMPT` used to spend about 40% of its length on formatting — no Markdown, use
+▸ ◆ 【】, a worked example of both — and about three lines on how to actually behave as an
+advisor. The formatting rules are still there, but they now sit at the **end**, and the top of
+the prompt is `[怎麼回答]`: lead with the conclusion, answer yes/no questions with yes or no
+first, separate 事實 (quote it) from 判斷 (say what it rests on), say so when uncertain and name
+the as-of, compare against any `[目標]` the owner set, and — when the owner is anxious about a
+loss — acknowledge it once and then return to the numbers and *their own stated principles*,
+without generic reassurance or an excuse to recommend action.
+
+Those rules are the owner's own stated preferences (see the top of this file) applied to Iris.
+That is deliberate: the same person is on both ends.
+
+⚠️ **The prompt must not use Markdown itself.** It told the model 「嚴禁 Markdown」 while using
+`**bold**` fifteen times. Models mirror the formatting they are shown, and `Utils.stripMarkdown`
+exists precisely because the model emits `**` anyway — so the instruction was competing with the
+demonstration. `T33` pins `**` out of both prompts, and the 排版 section now *describes* the
+forbidden syntax instead of demonstrating it.
+
+`T33` also pins the ordering (behaviour before tools, formatting last) and the prompt's total
+length, since it ships with every single message.
+
 ### 回饋閉環
 
 `alert_log` records what was pushed, for dedup. Nothing reads it back, so Iris never knew what it
