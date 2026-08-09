@@ -350,12 +350,19 @@ function testNimModelCapability() {
   //   z-ai/glm-5.2               探測過得了，實際帶工具呼叫時 504，整批被它拖滿 303s
   //   mistralai/mistral-nemotron 回「好的，我現在幫你查詢…」卻沒發出 tool_calls ——
   //                              最危險的失敗模式，接手早報會產出語氣正常但數字全編的內容
+  // 2026-08-09 探測結果（6/10 可用）。剔除的四顆：
+  //   moonshotai/kimi-k2.6           404 —— 目錄有，這個帳號無權（NIM 目錄是全域的）
+  //   nvidia/nemotron-nano-3-30b-a3b 404 Model not found
+  //   stepfun-ai/step-3.7-flash      504
+  //   google/gemma-4-31b-it          504
+  // 那兩顆 504 就是把整批拖到 303 秒的兇手；要再試請單獨跑，不要併進這批。
   var MODELS = [
-    'deepseek-ai/deepseek-v4-flash',
-    'meta/llama-3.1-8b-instruct',
-    'nvidia/llama-3.3-nemotron-super-49b-v1.5',
-    'nvidia/nvidia-nemotron-nano-9b-v2',
-    'openai/gpt-oss-20b'
+    'deepseek-ai/deepseek-v4-flash-0731',
+    'openai/gpt-oss-20b',
+    'openai/gpt-oss-120b',
+    'minimaxai/minimax-m3',
+    'nvidia/nemotron-3-super-120b-a12b',
+    'meta/llama-3.3-70b-instruct'
   ];
 
   var DEADLINE_MS = 4.5 * 60 * 1000;
@@ -477,31 +484,41 @@ function testNimThinkingOff() {
   var QUESTION = '請用一句話說明你是哪個模型，並回答台股的交易時間。';
 
   // 每個案例 = 一種「模型 × 關思考手法」的組合
+  // 2026-08-09：改測新主模型的候選。每顆都是「預設 vs 嘗試關掉」一對，
+  // 才看得出關思考的寫法有沒有生效（只看單邊會把「本來就不思考」誤判成「關成功」）。
   var CASES = [
-    { label: 'nemotron-super-49b  預設',
-      model: 'nvidia/llama-3.3-nemotron-super-49b-v1.5', noThink: false },
-    { label: 'nemotron-super-49b  /no_think',
-      model: 'nvidia/llama-3.3-nemotron-super-49b-v1.5', noThink: true },
-    { label: 'nemotron-nano-9b    預設',
-      model: 'nvidia/nvidia-nemotron-nano-9b-v2', noThink: false },
-    { label: 'nemotron-nano-9b    /no_think',
-      model: 'nvidia/nvidia-nemotron-nano-9b-v2', noThink: true },
-    { label: 'gpt-oss-20b         預設',
-      model: 'openai/gpt-oss-20b', noThink: false },
-    { label: 'gpt-oss-20b         effort=low',
-      model: 'openai/gpt-oss-20b', noThink: true }
+    { label: 'deepseek-v4-flash-0731  預設', model: 'deepseek-ai/deepseek-v4-flash-0731', noThink: false },
+    { label: 'deepseek-v4-flash-0731  thinking=false', model: 'deepseek-ai/deepseek-v4-flash-0731', noThink: true },
+    { label: 'gpt-oss-120b            預設', model: 'openai/gpt-oss-120b', noThink: false },
+    { label: 'gpt-oss-120b            effort=low(top)', model: 'openai/gpt-oss-120b', noThink: true },
+    { label: 'minimax-m3              預設', model: 'minimaxai/minimax-m3', noThink: false },
+    { label: 'minimax-m3              thinking=false', model: 'minimaxai/minimax-m3', noThink: true },
+    { label: 'nemotron-3-super-120b   預設', model: 'nvidia/nemotron-3-super-120b-a12b', noThink: false },
+    { label: 'nemotron-3-super-120b   /no_think', model: 'nvidia/nemotron-3-super-120b-a12b', noThink: true }
   ];
 
+  // ⚠️ 每一家的形狀都不同，而且**寫錯地方不會報錯，只會沒效果**。
+  //    這裡刻意跟 `NvidiaService.gs` 的分支對齊 —— 測試用 A 寫法、正式用 B 寫法的話，
+  //    測出來的結論套不到線上。gpt-oss 尤其：舊版這支把 reasoning_effort 放進
+  //    chat_template_kwargs（無效），而 NvidiaService 放 top-level（有效），
+  //    兩邊測的根本不是同一件事。
   var buildRequest = (c) => {
     var messages = [];
     var payload  = { model: c.model, max_tokens: 512, temperature: 0.7 };
 
-    if (c.noThink && c.model.indexOf('nvidia/') === 0) {
+    if (c.model.indexOf('deepseek-ai/deepseek-v4') === 0) {
+      // V4 系列一定要送這個欄位，省略會讓 NIM 掛住而不是報錯
+      payload.chat_template_kwargs = { thinking: !c.noThink };
+      if (!c.noThink) payload.chat_template_kwargs.reasoning_effort = 'high';
+    } else if (c.model.indexOf('openai/gpt-oss') === 0) {
+      payload.reasoning_effort = c.noThink ? 'low' : 'high';   // top-level，不是 kwargs
+    } else if (c.noThink && c.model.indexOf('nvidia/') === 0) {
       messages.push({ role: 'system', content: '/no_think' });
+    } else if (c.model.indexOf('minimaxai/') === 0) {
+      // 形狀未知，先照 deepseek 的猜一次；沒生效就看 reasoning_content 還在不在
+      payload.chat_template_kwargs = { thinking: !c.noThink };
     }
-    if (c.noThink && c.model.indexOf('openai/gpt-oss') === 0) {
-      payload.chat_template_kwargs = { reasoning_effort: 'low' };
-    }
+
     messages.push({ role: 'user', content: QUESTION });
     payload.messages = messages;
 
@@ -573,17 +590,24 @@ function testNimFaithfulness() {
     '現金：120000 元\n\n' +
     '請用繁體中文寫一段 80 字以內的摘要，說明目前損益狀況。只能使用上面的數字。';
 
+  // 2026-08-09：新主模型候選的決選。`gpt-oss-20b` 留著當對照組 —— 它是現役備援，
+  // 已知會過，用來確認這批的失敗不是環境問題。
+  //
+  // ⚠️ 上一次就是這一關刷掉了兩顆 Nemotron：語氣專業、格式完整、把 68000−65000
+  //    算成 23000。前三關完全看不出來。對一個報損益的機器人這是一票否決。
   var CASES = [
-    { label: 'deepseek-v4-flash（對照組）',
-      model: 'deepseek-ai/deepseek-v4-flash', mode: 'deepseek' },
-    { label: 'nemotron-super-49b  /no_think',
-      model: 'nvidia/llama-3.3-nemotron-super-49b-v1.5', mode: 'nemotron' },
-    { label: 'nemotron-nano-9b    /no_think',
-      model: 'nvidia/nvidia-nemotron-nano-9b-v2', mode: 'nemotron' },
-    { label: 'gpt-oss-20b  effort 放 top-level',
+    { label: 'deepseek-v4-flash-0731（頭號人選）',
+      model: 'deepseek-ai/deepseek-v4-flash-0731', mode: 'deepseek' },
+    { label: 'gpt-oss-20b（對照組，現役備援）',
       model: 'openai/gpt-oss-20b', mode: 'gptoss-top' },
-    { label: 'gpt-oss-20b  effort 放 system',
-      model: 'openai/gpt-oss-20b', mode: 'gptoss-sys' }
+    { label: 'gpt-oss-120b',
+      model: 'openai/gpt-oss-120b', mode: 'gptoss-top' },
+    { label: 'minimax-m3',
+      model: 'minimaxai/minimax-m3', mode: 'deepseek' },
+    { label: 'nemotron-3-super-120b  /no_think',
+      model: 'nvidia/nemotron-3-super-120b-a12b', mode: 'nemotron' },
+    { label: 'llama-3.3-70b',
+      model: 'meta/llama-3.3-70b-instruct', mode: 'plain' }
   ];
 
   var buildRequest = (c) => {
@@ -595,9 +619,9 @@ function testNimFaithfulness() {
     } else if (c.mode === 'nemotron') {
       messages.push({ role: 'system', content: '/no_think' });
     } else if (c.mode === 'gptoss-top') {
-      payload.reasoning_effort = 'low';          // 上一輪放 chat_template_kwargs 沒生效，改試 top-level
-    } else if (c.mode === 'gptoss-sys') {
-      messages.push({ role: 'system', content: 'Reasoning: low' });
+      payload.reasoning_effort = 'low';          // top-level 才生效，見 NvidiaService
+    } else if (c.mode === 'plain') {
+      // 非思考模型，什麼都不加
     }
 
     messages.push({ role: 'user', content: PROMPT });
