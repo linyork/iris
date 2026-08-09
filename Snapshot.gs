@@ -40,6 +40,12 @@ var Snapshot = (() => {
 
   var _ymd = (d) => Utilities.formatDate(d, 'GMT+8', 'yyyy-MM-dd');
 
+  // ⚠️ 不要用 `v instanceof Date`。那個只在「同一個 Date 建構子」下成立 ——
+  //    跨 realm（GAS 的儲存格物件、測試替身裡被替換掉的 Date）就會靜靜地回 false，
+  //    而 false 的後果是走進 `_num()` 拿到 0，也就是這個檢查本來要防的那件事。
+  //    看它會不會走路就好。
+  var _isDate = (v) => !!v && typeof v.getTime === 'function' && !isNaN(v.getTime());
+
   // ─── 子模組 ────────────────────────────────────────────────
 
   /**
@@ -338,9 +344,19 @@ var Snapshot = (() => {
       });
 
       // 空字串 = 算不出來，要傳 null 而不是 0
+      //
+      // ⚠️ Date 也要回 null。比例欄若被 Sheets 誤判成時間格式（0.0706 → 1:41:40），
+      //    讀回來是 Date 物件，而 `AssetSchema.num(Date)` 是 0 —— 「格式壞掉」會偽裝成
+      //    「這一項真的是 0%」，然後一路被當成事實講給主人聽。2026-08-09 的實體佔比
+      //    就是這樣連續錯了好幾天。寫入端已經在每次重算前清格式（見 Position），
+      //    這裡是第二道：真的再發生，要顯示成「不知道」而不是一個篤定的 0。
       var n = (key) => {
         var v = kv[key];
         if (v === '' || v === null || v === undefined) return null;
+        if (_isDate(v)) {
+          Logger.warning('Snapshot._metrics', '指標的數值被誤判成日期格式', key);
+          return null;
+        }
         return _num(v);
       };
 
@@ -362,7 +378,12 @@ var Snapshot = (() => {
         physicalRatio: n('實體佔比'),
         tradeCount:    n('交易筆數'),
         positionCount: n('持倉檔數'),
-        lastRebuild:   _str(kv['最後重算']),
+        // Sheets 常把這個時間字串吃成 Date，而 `_str(Date)` 會吐出
+        // 「Sun Aug 09 2026 18:40:27 GMT+0800 (Taiwan Standard Time)」——
+        // 又長又是英文，還會原封不動進 prompt 與 getHoldings 的【資料時點】。
+        lastRebuild:   _isDate(kv['最後重算'])
+          ? Utilities.formatDate(kv['最後重算'], 'GMT+8', 'yyyy-MM-dd HH:mm:ss')
+          : _str(kv['最後重算']),
         warnings:      warnings
       };
     } catch (e) {

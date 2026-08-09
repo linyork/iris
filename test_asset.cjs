@@ -2480,6 +2480,51 @@ console.log('\nT37  評估的判定函式');
     Eval.DEFAULT_SET.filter(q => q[2].split(',').some(n => !Eval.CHECKS[n.trim()])).map(q => q[0]).join(','));
 }
 
+// ─── T38  指標的數值被誤判成日期時，不能偽裝成 0 ────────────────────
+//
+// 2026-08-09 線上實況：「實體佔比」那格被 Sheets 認成時間格式，0.0706 顯示成
+// 1899-12-30 1:41:40，讀回來是 Date，AssetSchema.num(Date) 給 0，
+// 於是 Facts 每天告訴主人「實體 0.00%」——實際上那是 7%、一百多萬。
+// 三個佔比加起來只有 92.94% 是唯一線索，而沒有人會去加那三個數字。
+console.log('\nT38  格式壞掉不能偽裝成 0');
+{
+  const ms = target.getSheetByName('指標');
+  const map = AssetSchema.headerMap(ms);
+  const rows = AssetSchema.readObjects(ms);
+  const at = rows.findIndex(r => String(r['指標']).trim() === '實體佔比');
+  check('指標表裡有實體佔比這一列', at >= 0, String(at));
+
+  const cell = ms.getRange(at + 2, map['數值'] + 1);
+  const saved = cell.getValue();
+
+  // 模擬被誤判成時間格式：那一格讀回來會是 Date
+  cell.setValue(new Date('2026-08-09T01:41:40+08:00'));
+  const broken = Snapshot._metrics(target);
+  check('讀到 Date 時回 null（不知道），不是 0（篤定的假答案）',
+    broken.physicalRatio === null, JSON.stringify(broken.physicalRatio));
+
+  // Facts 也要跟著顯示成「—」而不是 0.00%
+  const fb = Facts.build(target);
+  check('事實區塊把它印成 — 而不是 0.00%',
+    /實體 —/.test(fb), (fb.split('\n').find(l => l.indexOf('佔比') >= 0) || ''));
+
+  cell.setValue(saved);
+  check('還原後又讀得到正常數值',
+    Snapshot._metrics(target).physicalRatio !== null, '');
+
+  // 最後重算被吃成 Date 時要格式化，不能吐 JS 的 toString
+  const rAt = rows.findIndex(r => String(r['指標']).trim() === '最後重算');
+  if (rAt >= 0) {
+    const rCell = ms.getRange(rAt + 2, map['數值'] + 1);
+    const rSaved = rCell.getValue();
+    rCell.setValue(new Date('2026-08-09T18:40:27+08:00'));
+    const lr = Snapshot._metrics(target).lastRebuild;
+    check('最後重算是 Date 時格式化成 yyyy-MM-dd HH:mm:ss',
+      /^2026-08-09 18:40:27$/.test(lr), JSON.stringify(lr));
+    rCell.setValue(rSaved);
+  }
+}
+
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);

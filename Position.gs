@@ -683,7 +683,25 @@ var Position = (() => {
       ['交易筆數',     trades.length, ''],
       ['持倉檔數',     positions.filter(x => _num(x['股數']) > 0).length, '']
     ]);
-    AssetSchema.writeBlock(ss.getSheetByName('指標'), panelRows, 3);
+    // ⚠️ 寫之前要把「數值」欄的**格式**也清掉，不能只清內容。
+    //
+    // `writeBlock` 用的是 `clearContent()` —— 數字沒了，儲存格格式還在。
+    // 2026-08-09 的實況：B 欄某一格不知何時被 Sheets 判定成時間格式，之後每次
+    // 重算寫進去的「實體佔比 0.0706」都顯示成 `1899-12-30 1:41:40`（0.0706 天 =
+    // 1 小時 41 分 40 秒），而讀回來是 Date 物件、`AssetSchema.num()` 給 0。
+    // 於是 `Facts` 每天告訴主人「實體 0.00%」，實際上是 7% 的一百萬。
+    // 唯一的線索是三個佔比加起來只有 92.94%，而沒有人會去加那三個數字。
+    //
+    // ⚠️ 只清「指標」的 B 欄，不要整張清。`持倉` 的代號欄是刻意設成純文字的
+    //    （台股代號的前導零，見 AssetSchema 的 textColumns），整張 clearFormat
+    //    會把那道保護一起洗掉，換來另一個更難查的 bug。
+    var metricSheet = ss.getSheetByName('指標');
+    try {
+      metricSheet.getRange(2, 2, Math.max(metricSheet.getMaxRows() - 1, 1), 1).clearFormat();
+    } catch (e) {
+      Logger.warning('Position._writePanelAndAllocation', '清指標數值欄格式失敗', e.message);
+    }
+    AssetSchema.writeBlock(metricSheet, panelRows, 3);
 
     // ── 配置：大類 / 區域 / 類型 三個維度 ──
     var held = positions.filter(x => _num(x['股數']) > 0);
