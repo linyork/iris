@@ -78,7 +78,7 @@ Telegram Bot API ───┤        │
              │
              ▼
 ┌──────────────────────────────────────────────┐
-│  ChatBot.gs · ReAct Loop (最多 3 turns)       │
+│  ChatBot.gs · ReAct Loop (最多 5 turns)       │
 │  - 注入：SYSTEM_PROMPT + STM + 相關長期知識      │
 │          + Facts 事實區塊（程式算好的關鍵數字）    │
 │  - 工具呼叫快取（同一輪不重複叫同樣的 tool）        │
@@ -390,8 +390,9 @@ TWSE 的 `STOCK_DAY_AVG` 端點硬解析收盤價。
 | `logAdvice(topic, advice)` | 登記 Iris 自己剛給出的**具體建議**，寫進 `advice_log`。之後會注入對話，並在讀取時現算「當時 → 現在」的變化 —— 見[回饋閉環](#回饋閉環) |
 | `searchWeb(query)` | Google Custom Search 取得即時時事 |
 
-ReAct 迴圈上限 `Config.TOOL_MAX_ITERATIONS = 3`，且**最後一輪不帶工具定義**，
-所以實際上只有 2 輪能呼叫工具；同一輪相同參數的工具呼叫會被快取避免重複。
+ReAct 迴圈上限 `Config.TOOL_MAX_ITERATIONS = 5`，且**最後一輪不帶工具定義**，
+所以實際上有 4 輪能呼叫工具；同一輪相同參數的工具呼叫會被快取避免重複。
+上限不是時間保護：每一輪開始前會檢查 `Utils.execElapsedMs()`，超過 200s 就不再開新輪。
 
 ---
 
@@ -650,7 +651,7 @@ shouldAlert? → Line.pushMsg + AlertLog.append
 ```js
 CHAT_MAX_TURNS:      5     // 注入給 LLM 的近期對話輪數
 CHAT_CLEANUP_DAYS:   30    // chat 工作表保留天數
-TOOL_MAX_ITERATIONS: 3     // ReAct 上限（最後一輪不帶工具，實際可呼叫工具的只有 2 輪）
+TOOL_MAX_ITERATIONS: 5     // ReAct 上限（最後一輪不帶工具，實際可呼叫工具的有 4 輪）
 ALERT_ETF_DROP:      0.03  // 盤中警報觸發閾值（日跌幅 3%）
 ```
 
