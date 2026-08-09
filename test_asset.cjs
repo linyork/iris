@@ -2344,6 +2344,18 @@ console.log('\nT35  ReAct 迴圈');
   out = ChatBot.reply(ev('記一筆'));
   check('工具回 invalid_args 時迴圈照常往下走', /參數不齊/.test(out), out);
 
+  // ⑦-b 「記憶注入」那行 log 必須報出 facts 的真實長度。
+  //      2026-08-09 線上實測：那行排在 factsBlock 賦值**之前**，var 提升讓它永遠讀到
+  //      undefined，於是每一則都寫「無（讀不到或出錯）」—— Facts 明明是好的，
+  //      log 卻讓人以為它壞了，害我去查了一個不存在的問題。
+  reset(); AI_QUEUE.push(say('好。'));
+  const logsBefore = LOGS.length;
+  ChatBot.reply(ev('隨便問'));
+  const inject = LOGS.slice(logsBefore).find(l => l[2] === '記憶注入');
+  check('記憶注入的 log 有記到 facts 的真實長度',
+    !!inject && /\d+ 字/.test(String(inject[3].facts)),
+    inject ? JSON.stringify(inject[3].facts) : '(沒有這行 log)');
+
   // ⑧ 時間預算才是真正的守門員（輪數上限放寬到 5 的前提）
   reset();
   const realElapsed = Utils.execElapsedMs;

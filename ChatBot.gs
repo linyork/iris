@@ -29,15 +29,6 @@ var ChatBot = (() => {
       // searchKnowledge 仍然是模型主動查詢時用的工具。
       var relevantKnowledge = GoogleSheet.knowledgeForPrompt(message);
 
-      Logger.info('ChatBot.reply', '記憶注入', {
-        stm:       stm ? stm.split('\n').length + ' 筆 STM' : '無',
-        knowledge: (relevantKnowledge && !/沒有找到|尚無資料/.test(relevantKnowledge))
-                   ? relevantKnowledge.slice(0, 60) + '...' : '無相關知識',
-        // 事實區塊會進每一則 prompt，長度失控是最先要看見的訊號
-        facts:     factsBlock ? factsBlock.length + ' 字' : '無（讀不到或出錯）',
-        advice:    adviceBlock ? adviceBlock.length + ' 字' : '無先前建議'
-      });
-
       // 事實區塊：程式算好的關鍵數字，直接進 prompt。模型因此不必為了「我總資產多少」
       // 跑一整輪 ReAct，也沒有機會把百分比算錯（見 Facts.gs）。
       // 只讀三張表、不打外部 API，所以每則訊息都付得起這個成本。
@@ -52,6 +43,20 @@ var ChatBot = (() => {
       } catch (e) {
         Logger.warning('ChatBot.reply', '讀先前建議失敗（已略過）', e.message);
       }
+
+      // ⚠️ 這行一定要在上面兩個區塊**算完之後**。原本它排在前面，而 `var` 會提升宣告
+      //    卻不提升賦值 —— 於是它讀到的永遠是 undefined，log 每一則都寫
+      //    「無（讀不到或出錯）」，不管 Facts 實際上跑得多好。
+      //    2026-08-09 就是這樣讓人以為 Facts 壞了，實際上它一直是對的。
+      //    **記錄一個變數之前，先確認那個變數已經有值了。**
+      Logger.info('ChatBot.reply', '記憶注入', {
+        stm:       stm ? stm.split('\n').length + ' 筆 STM' : '無',
+        knowledge: (relevantKnowledge && !/沒有找到|尚無資料/.test(relevantKnowledge))
+                   ? relevantKnowledge.slice(0, 60) + '...' : '無相關知識',
+        // 事實區塊會進每一則 prompt，長度失控是最先要看見的訊號
+        facts:     factsBlock ? factsBlock.length + ' 字' : '無（讀不到或出錯）',
+        advice:    adviceBlock ? adviceBlock.length + ' 字' : '無先前建議'
+      });
 
       var systemContext = Prompt.systemContext({
         scope:     '回覆',
