@@ -2,12 +2,9 @@
  * DailyReport
  * @description 排程產生的三份報告：每日早報、每週週報、每月月報
  *
- * 三份報告的骨架完全相同 —— 蒐資料 → 組 system context → 三段式 contents →
- * SMART 檔次跑一趟 → 推給所有主人。以前三支函式各寫了一遍這個骨架，
- * 於是「日期與年份規則」那段被抄了三份，動一次要改三個地方。
- *
- * 現在骨架只有一份（`_generateReport`），三份報告各自只描述**自己不一樣的地方**：
- * 期間怎麼稱呼、要餵哪些資料、要問什麼。加第四份報告只要再寫一個 spec。
+ * 骨架只有一份（_generateReport）：蒐資料 → 組 system context → 三段式 contents →
+ * SMART 檔次跑一趟 → 推給所有主人。三份報告各自只描述自己不同的地方
+ * （期間名稱、餵哪些資料、問什麼）。加第四份報告只要再寫一個 spec。
  *
  * ⚠️ `dailyReport` / `weeklyReport` / `monthlyReport` 是 Trigger 以**名稱**綁定的
  *    進入點（見 `Cron.SCHEDULE`），`buildDailyReport` 則被 `Commands.gs` 的

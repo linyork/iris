@@ -316,24 +316,25 @@ may not exist yet.
 - **Long-term** (`knowledge` sheet): keyword-search only (no vectors), searched against current user message before each prompt
 
 ### Google Sheet Tabs
+
+System tabs (this file's other sections cover the asset tabs, which are defined by
+`AssetSchema.TABS` — that array is the spec, do not copy it here):
+
 | Tab | Purpose |
 |-----|---------|
 | `env` | B2: DEBUG_MODE, B3: AI_PROVIDER |
-| `consolelog` | Runtime logs written by `Logger.gs` |
-| `chat` | Conversation history per userId |
+| `consolelog` | Runtime logs written by `Logger.gs`, purged after 10 days |
+| `chat` | Conversation history per userId, purged after 30 days |
 | `short_term_memory` | Temporary context entries with expiry |
 | `knowledge` | Persistent user preferences/facts |
-| `alert_log` | Proactive-notification history, used by `AdvisorCheck` for dedup |
-| `所有股票` | Holdings — row2: 0000 aggregate, row3+: individual ETFs |
-| `面板` | Dashboard — B1:B8 summary, C1:D4 net value, E1:F8 cash by account |
-| `配置` | Asset allocation — rows 2-21 |
-| `@所有股票紀錄` | Legacy wide-format snapshots |
-| `@股利` | Dividend ledger — date, code, amount |
-| `@固定` | Fixed assets (gold weights) |
+| `alert_log` | Proactive-notification history, used by `AdvisorCheck` for dedup (60 days) |
+| `advice_log` | What Iris advised, for follow-up (180 days). Self-creating. |
+| `metrics` | Daily rollup of `consolelog`, written by `Metrics`. Self-creating. |
+| `eval_set` | Evaluation questions and their latest verdict. Self-creating. |
 
 ### Legacy sheet
 
-The table above is the **legacy** 股票 sheet, and it is **entirely frozen** — no code reads or
+The legacy 股票 sheet is **entirely frozen** — no code reads or
 writes it in production. The 資產管理 sheet's own tabs are defined in `AssetSchema.TABS`; that
 array is the spec, not a copy of it kept here.
 

@@ -2,16 +2,14 @@
  * DevTools
  * @description 所有「在 GAS 編輯器下拉選單手動執行」的進入點，一律集中在這裡
  *
- * 為什麼集中：編輯器的函式下拉選單是扁平的，**不顯示函式定義在哪個檔案**。
- * 散在十個檔案裡時，想跑某支診斷函式卻找不到它在哪，要改也不知道從哪改起。
+ * 集中的原因：編輯器的函式下拉選單是扁平的，不顯示函式定義在哪個檔案。
  *
- * ⚠️ 兩類頂層函式**不可以**搬進來 —— 它們是被名稱綁定的，改名或搬走會靜默失效：
- *
+ * ⚠️ 兩類頂層函式不可搬進來，它們以名稱綁定，改名或搬走會靜默失效：
  *   Trigger 進入點   setData / dailyReport / weeklyReport / monthlyReport /
  *                    marketAlert / dailyCleanUp / advisorCheckEvening
  *   Web 進入點       doPost / doGet / dashboardData / miniAppData / miniAppAsk
  *
- * 這裡的每支函式都只做「呼叫模組 + 印結果」，邏輯留在各自的模組裡。
+ * 這裡每支函式只做「呼叫模組 + 印結果」，邏輯留在各自的模組。
  */
 
 // ─── 系統 ─────────────────────────────────────────────────────────
@@ -209,21 +207,12 @@ function renderPanel() {
 // ─── NIM 模型測試 ─────────────────────────────────────────────────
 
 /**
- * 一次掃過一整排 NIM 候選模型，找出誰能當 NVIDIA_FALLBACK_MODEL 或替換各 tier。
+ * 關卡一：掃一整排 NIM 候選模型的可用性。只讀不寫，可重跑。
  *
- * ⚠️ **`/v1/models` 列得出來 ≠ 這個帳號打得到。**
- * 2026-08-05 實測 `nv-mistralai/mistral-nemo-12b-instruct`，目錄上有，實打回
- * `404 Function '<uuid>': Not found for account '<hash>'` —— NIM 的目錄是全域的，
- * 可用性卻是綁帳號的。所以第一關永遠是「打不打得到」，能力測試排在後面。
- *
- * ⚠️ **一律用 `UrlFetchApp.fetchAll()` 並行，不要串列 for 迴圈。**
- * GAS 單次執行上限 6 分鐘，而 NIM 的單次呼叫**遠比想像慢**：2026-08-05 實測，
- * 冷啟動或壅塞時單顆探測要 36~46 秒，還遇過一顆卡住 4 分半直到逾時。串列跑 10 顆
- * 必爆，而且逾時會把整段 log 一起吃掉，等於白跑。並行後總耗時等於最慢那一顆。
- *
- * 兩階段，只讀不寫，可以放心重跑：
- *   關卡一 探測  全部並行打一次最小請求，只看 HTTP 狀態碼
- *   關卡二 能力  只有探測過關的才測：中文對話 + 真實工具定義的 Function Calling
+ * ⚠️ /v1/models 列得出來不代表這個帳號打得到（目錄是全域的、可用性綁帳號，
+ *    會回 404 Function not found for account）。所以第一關永遠是可用性。
+ * ⚠️ 一律用 UrlFetchApp.fetchAll() 並行，不要串列迴圈：NIM 單顆冷啟動要
+ *    36~46 秒，串列跑 10 顆會撞上 GAS 的 6 分鐘上限，而逾時會把整段 log 吃掉。
  */
 function testNimCandidateModels() {
   var DEADLINE_MS = 4.5 * 60 * 1000;   // 6 分鐘上限留 1.5 分鐘餘裕收尾
@@ -231,18 +220,10 @@ function testNimCandidateModels() {
   var timeLeft    = () => DEADLINE_MS - (Date.now() - startedAt);
   var elapsed     = () => Math.round((Date.now() - startedAt) / 1000) + 's';
 
-  // 候選清單。deepseek-v4-flash 是現役主模型，放在這裡當**對照組** ——
-  // 它若也失敗，代表是 API key / 網路 / NIM 整體壅塞，不是候選模型的問題。
-  // 2026-08-09 更新：主模型 deepseek-v4-flash 已於 08-07 EOL（410 Gone），
-  // 目錄上也查無此 id。這批要找的是**新的主模型**（FAST 要關思考求快、
-  // SMART 要能開思考，都要原生 function calling 與可用的繁中）。
-  //
-  // 對照組是 `openai/gpt-oss-20b` —— 它是現役備援，21:42 才剛成功接手過，
-  // 所以它若在這裡失敗，代表是 API key／網路／NIM 整體壅塞，不是候選的問題。
-  //
-  // ⚠️ 已知地雷，刻意不放進來：`mistral-medium-3.5-128b` 與 `z-ai/glm-5.2`
-  //    各卡死過一次整批（單顆吃滿 NIM 的 ~300s 閘道逾時，fetchAll 會等整批）。
-  //    要測它們請單獨跑一次，不要跟其他候選綁在同一批。
+  // ⚠️ 清單裡一定要有一顆現役模型當對照組（目前是 gpt-oss-20b）。
+  //    它若也失敗，代表是 API key／網路／NIM 整體壅塞，不是候選的問題。
+  // ⚠️ 已知會拖垮整批的不要放進來：mistral-medium-3.5-128b、z-ai/glm-5.2，
+  //    單顆會吃滿 NIM 的 ~300s 閘道逾時，而 fetchAll 等整批。要測請單獨跑。
   var CANDIDATES = [
     'deepseek-ai/deepseek-v4-flash-0731',        // ★ 最可能的直接替代：同家族的日期版
     'openai/gpt-oss-20b',                        // 對照組（現役備援）
@@ -333,29 +314,17 @@ function testNimCandidateModels() {
 }
 
 /**
- * 關卡二：對「已知打得到」的模型測能力 —— Function Calling 與中文。
+ * 關卡二：對已知打得到的模型測 Function Calling 與中文。
  *
- * 跟探測分開兩支函式，是因為 `fetchAll` 會等**整批**都回來才返回，
- * 一顆卡住就綁死全部：2026-08-05 探測那批被 `mistral-medium-3.5-128b`
- * 拖到 504（約 5 分鐘），10 顆的批次因此吃掉 303 秒，關卡二連跑都跑不了。
- * 所以這裡只放已確認可用的模型，把探測到的壞蘋果留在上一支。
- *
- * 先測工具呼叫再測中文 —— 工具呼叫才是能不能接手的決定性條件，
- * 時間不夠時要保住的是它。
+ * ⚠️ 必須與關卡一分成兩支函式：fetchAll 會等整批都回來，一顆卡住就綁死全部。
+ *    這裡只放探測已通過的模型。
+ * 先測工具呼叫再測中文：工具呼叫才是能不能接手的決定性條件。
  */
 function testNimModelCapability() {
-  // 填 testNimCandidateModels() 探測結果中 ✅ 的那些。
-  //
-  // 已剔除（2026-08-05 實測）：
-  //   z-ai/glm-5.2               探測過得了，實際帶工具呼叫時 504，整批被它拖滿 303s
-  //   mistralai/mistral-nemotron 回「好的，我現在幫你查詢…」卻沒發出 tool_calls ——
-  //                              最危險的失敗模式，接手早報會產出語氣正常但數字全編的內容
-  // 2026-08-09 探測結果（6/10 可用）。剔除的四顆：
-  //   moonshotai/kimi-k2.6           404 —— 目錄有，這個帳號無權（NIM 目錄是全域的）
-  //   nvidia/nemotron-nano-3-30b-a3b 404 Model not found
-  //   stepfun-ai/step-3.7-flash      504
-  //   google/gemma-4-31b-it          504
-  // 那兩顆 504 就是把整批拖到 303 秒的兇手；要再試請單獨跑，不要併進這批。
+  // 填 testNimCandidateModels() 探測結果中通過的那些。
+  // ⚠️ 探測過關不代表扛得住真實請求：帶工具 schema 的請求重得多，
+  //    有模型在這一關才 504 並拖滿整批（已見過 z-ai/glm-5.2、llama-3.3-70b）。
+  //    在這裡 504 的模型下次就別再放進批次。
   var MODELS = [
     'deepseek-ai/deepseek-v4-flash-0731',
     'openai/gpt-oss-20b',
@@ -462,16 +431,13 @@ function testNimModelCapability() {
 }
 
 /**
- * 三顆思考模型的關思考測試。
+ * 關卡三：關思考測試。確認兩件事 —— 關得掉嗎？關掉後正文出得來嗎？
  *
- * 2026-08-05 實測：`nemotron-super-49b-v1.5`、`nemotron-nano-9b-v2`、`gpt-oss-20b`
- * 在 max_tokens=160 時 `content` 全是 null —— 推理文字走 `reasoning_content`，
- * 而且**吃掉 max_tokens 預算**，正文因此擠不出來。備援模型是使用者在等的路徑，
- * 思考關不掉就不能用。這支確認兩件事：關得掉嗎？關掉後正文出得來嗎？
- *
- * 各家關法不同（NIM 沒有統一開關）：
- *   nvidia/nemotron*  system 訊息放 `/no_think`
- *   openai/gpt-oss*   `chat_template_kwargs.reasoning_effort = 'low'`
+ * ⚠️ 推理文字走 reasoning_content 且會吃掉 max_tokens 預算，預算不夠時
+ *    content 直接是 null。所以每個案例都要印 finish_reason / completion_tokens /
+ *    reasoning 長度，才分得清「關不掉」與「預算不夠」。
+ * ⚠️ NIM 沒有統一開關，每家形狀不同，見 NvidiaService 的分支。
+ *    測試的寫法必須與那裡一致，否則測出來的結論套不到線上。
  */
 function testNimThinkingOff() {
   var url     = Config.NVIDIA_API_BASE + '/chat/completions';
@@ -564,16 +530,14 @@ function testNimThinkingOff() {
 }
 
 /**
- * 決選：測「iris 實際要模型做的事」——拿到資料後忠實地用繁體中文轉述。
- *
- * 前一輪問「台股交易時間」測的是模型內建知識，那個對 iris 沒意義：數字一律
- * 從試算表與 searchWeb 餵進 prompt。真正要驗的是三件事，都寫在下面的檢查點裡：
+ * 關卡四（決選）：拿到資料後能不能忠實地用繁體中文轉述。驗三件事：
  *   1 忠實  只能用給它的數字，不能自己編、不能算錯
- *   2 繁中  要繁體、要台灣用語（前一輪 nemotron 冒出「通义万相」這種簡體殘留）
- *   3 收斂  不要長篇大論，早報是推到手機上看的
+ *   2 繁中  要繁體、要台灣用語
+ *   3 收斂  不要長篇大論
  *
- * ⚠️ 下面的持股數字全是**捏造的**，不是主人的真實部位 —— DevTools.gs 會進 git，
- *    真實金額不得入庫（見 CLAUDE.md「No real figures in git」）。
+ * ⚠️ 不要考模型的內建知識，那對 iris 沒意義：數字一律從試算表與 searchWeb 餵進去。
+ * ⚠️ 下面的持股數字全是捏造的。DevTools.gs 會進 git，真實金額不得入庫
+ *    （見 CLAUDE.md「No real figures in git」）。
  */
 function testNimFaithfulness() {
   var url     = Config.NVIDIA_API_BASE + '/chat/completions';
@@ -669,13 +633,11 @@ function testNimFaithfulness() {
 }
 
 /**
- * 驗證備援鏈真的會動。改了 NVIDIA_FALLBACK_MODEL 或 NvidiaService 的思考分流之後跑這支。
- *
- * 測三件事，最後一件才是重點：
- *   1 備援模型本身活著、關思考有效（reasoning 應該很短）
+ * 驗證備援鏈會動。改了 NVIDIA_FALLBACK_MODEL 或思考分流之後跑這支。測三件事：
+ *   1 備援模型活著、關思考有效
  *   2 備援模型帶工具定義時會發出 tool_calls
- *   3 **主模型故意給一個不存在的名字**，確認 AIServiceFactory 真的接手換成備援 ——
- *     前兩項全過但這項掛掉的話，等於保底仍然不存在（2026-08-05 就是這樣爆的）
+ *   3 主模型故意給不存在的名字，確認 AIServiceFactory 真的接手 ——
+ *     前兩項全過而這項掛掉的話，保底等於不存在
  */
 function verifyFallbackChain() {
   var FB = Config.NVIDIA_FALLBACK_MODEL;
