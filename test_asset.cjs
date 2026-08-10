@@ -2499,8 +2499,16 @@ console.log('\nT37  評估的判定函式');
     C.citesStanding('你原本就有預留 38% 的戰略現金等機會').ok === true, '');
   check('「照你訂的紀律」算引用',
     C.citesStanding('照你訂的紀律，現在不動。').ok === true, '');
+  // 第二輪基準線又漏掉的兩種說法
+  check('「與您設定的…水位接近」算引用',
+    C.citesStanding('與您設定的「現金＋黃金約 38%」戰略水位接近').ok === true, '');
+  check('「違反您自己的紀律」算引用',
+    C.citesStanding('現在硬買股票，反而違反您自己的紀律。').ok === true, '');
   check('完全沒提到主人設過什麼 → 仍然擋下',
     C.citesStanding('這檔最近漲很多，建議減碼。').ok === false, '');
+  // ⚠️ 名詞不能放太泛的詞，否則問句也會被當成引用
+  check('「你要不要看一下配置」不算引用（避免放寬過頭）',
+    C.citesStanding('你要不要看一下配置？').ok === false, '');
 
   check('預設題組有東西', Eval.DEFAULT_SET.length >= 10, Eval.DEFAULT_SET.length + ' 題');
   check('每題的期望性質都是真的存在的檢查',

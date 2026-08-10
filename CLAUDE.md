@@ -593,9 +593,11 @@ better to do two questions than to be killed mid-question having written nothing
 
 Two things that would quietly ruin the results:
 
-- **Each question uses its own `userId`** (`EVAL:<id>`). Chat history is read per user, so a
-  shared id would let question 2 see question 1 — results would then depend on run order and the
-  same set could grade differently on a re-run.
+- **Each question uses its own `userId`, and it carries a per-run stamp** (`EVAL:<id>:<ms>`).
+  Per-question alone is not enough, and the second baseline run proved it: `EVAL:Q04` re-read
+  its own answer from the previous run's chat history and quoted 300,000 shares without calling
+  `getHoldings` again. That is exactly the behaviour the system prompt forbids and the eval is
+  supposed to catch — and the eval had built the conditions for it.
 - **`platform` is not `TELEGRAM`.** It would otherwise fire the typing indicator at the owner;
   an eval is background work and should not appear in his chat.
 
