@@ -117,54 +117,45 @@ thinking silently stays on, which mostly shows up as latency rather than an erro
 
 **Resilience.** deepseek-v4-flash-0731 is popular on NIM and overloads often (503 `ResourceExhausted`, 504, 529, and dropped connections). Two layers cover this: `NvidiaService.callAPI` retries 3× with 2s→4s backoff, counting **both** bad status codes and thrown connection exceptions as retryable; if it still returns null, `AIServiceFactory` falls back once to `Config.NVIDIA_FALLBACK_MODEL` (`openai/gpt-oss-20b`, 21B MoE, native function calling, thinking dialled down to `low`).
 
-⚠️ **The fallback never announces its own death.** The previous one was delisted by NVIDIA on
-2026-07-27 and that only surfaced on 08-05, when the primary happened to overload and the report
-failed with both layers dead. Verify the fallback when changing the primary — and whenever a report
-fails. The `find-nim-model` skill drives the search-and-test loop; `testNimCandidateModels()` /
-`testNimModelCapability()` in `DevTools.gs` are its entry points.
+⚠️ **The fallback never announces its own death.** A delisted fallback is invisible until the
+primary also fails, and then both layers are gone at once. Verify it whenever you change the
+primary, and whenever a report fails. The `find-nim-model` skill drives that; entry points are
+`testNimCandidateModels()` / `testNimModelCapability()` in `DevTools.gs`.
 
-⚠️ **Retrying is gated on remaining time, not remaining attempts.** NIM's gateway gives up around
-**300s**; GAS kills any execution at **360s**. Those are close enough that *one* slow failure spends
-the whole budget, so the retry ladder (3 attempts × 2 models) only ever fits when failures are cheap.
-On 2026-08-07 the 09:00 report sent at 09:41:20, got a 504 at 09:46:23 — 303s in a single call — and
-was terminated mid-retry. The GAS kill is **uncatchable**: no `catch`, no `finally`, no final log
-line. What it leaves behind is a log that simply stops, and none of the failure records you'd expect
-(no attempt-2 warning, no final error, no fallback line — the fallback was never reached).
+⚠️ **Retrying is gated on remaining time, not remaining attempts.** NIM's gateway gives up near
+**300s** and GAS kills the execution at **360s**, so one slow failure can spend the whole budget —
+the retry ladder (3 attempts × 2 models) only fits when failures are cheap. The GAS kill is
+**uncatchable**: no `catch`, no `finally`, no final log line, just a log that stops mid-way with
+none of the failure records you would expect.
 
-So `NvidiaService.callAPI` now requires `backoff + as-slow-as-last-time + 45s cleanup` to fit in
-`Utils.execTimeLeftMs()` before spending another attempt, and `AIServiceFactory` requires 90s before
-starting the fallback. `UrlFetchApp` has no timeout parameter — a single call can take arbitrarily
-long and cannot be capped — so the only place to hold the line is the decision to spend another one.
+So `NvidiaService.callAPI` requires `backoff + as-slow-as-last-time + 45s cleanup` to fit in
+`Utils.execTimeLeftMs()` before spending another attempt, and `AIServiceFactory` requires 90s
+before starting the fallback. `UrlFetchApp` has no timeout parameter, so the only place to hold
+the line is the decision to spend another call.
 
-`Utils.execElapsedMs()` / `execTimeLeftMs()` measure from **file load**, which in GAS is the start of
-the execution (every run reloads all `.gs`). That's deliberately not a `startTime` threaded down from
-the entry point: the code that needs the clock sits three layers below it.
+`Utils.execElapsedMs()` / `execTimeLeftMs()` measure from **file load** — in GAS that is the start
+of the execution, since every run reloads all `.gs`. Deliberately not a `startTime` threaded down
+from the entry point: the code that needs the clock sits three layers below it.
 
-Failing gracefully is only half of it — a scheduled report that returns `null` used to `return`
-silently, and "didn't arrive" looks exactly like "wasn't due" (weekend, holiday). `_handleReportFailure()`
-in `DailyReport.gs` is now the single exit for all three reports: it schedules **one** retry 15
-minutes out and pushes a notice saying which of the two situations you're in. `/report` already had
-its own path back to the caller via `Commands.gs`; this is the scheduled equivalent.
+A scheduled report that returns `null` must not fail silently — "didn't arrive" looks exactly like
+"wasn't due" (weekend, holiday). `_handleReportFailure()` in `DailyReport.gs` is the single exit
+for all three reports: one retry 15 minutes out, plus a notice saying which situation you are in.
 
-Buying more time means **starting a second execution** — 6 minutes is a hard per-execution cap, so
-there is no way to extend the one that just failed. Three things keep that from going wrong:
+Buying more time means **starting a second execution**; 6 minutes is a hard per-execution cap.
+Three things keep that from going wrong:
 
-- **Only one retry.** `dailyReportRetry` raises the `_isReportRetry` global before delegating, and
-  that path won't schedule another. A sustained outage would otherwise mint a trigger every 15
-  minutes against a **20-trigger-per-user quota** — and once it's full, the *real* schedule can't be
-  rebuilt either.
+- **Only one retry.** `dailyReportRetry` raises the `_isReportRetry` global before delegating and
+  that path schedules no further retry. A sustained outage would otherwise mint a trigger every 15
+  minutes against a **20-trigger-per-user quota**, and once full the real schedule cannot be rebuilt.
 - **The flag cannot be a parameter.** GAS passes an event object as the first argument to every
-  trigger handler, so `function dailyReport(isRetry)` is always truthy — the 09:00 run would classify
-  itself as a retry and silently stop scheduling them. A global is safe precisely because GAS reloads
-  every `.gs` per execution, so it starts `false` every time.
-- **Each retry deletes its own trigger first, before doing any work.** One-shot triggers don't
-  disappear after firing. Deleting at the end would never run in exactly the case being defended
-  against — the execution getting killed — and the trigger would leak.
+  trigger handler, so `function dailyReport(isRetry)` is always truthy — the 09:00 run would
+  classify itself as a retry. A global is safe because GAS reloads every `.gs` per execution.
+- **Each retry deletes its own trigger before doing any work.** One-shot triggers do not disappear
+  after firing, and deleting at the end would not run in the case being defended against.
 
-The retry entry points are registered in `Cron.ONESHOT`, not `SCHEDULE`: they have no fixed time.
-That registration exists only so `Cron.list()` prints a pending retry as `⏳` instead of reporting it
-as a rogue hand-made trigger. Seeing one briefly is normal; one that never goes away means
-`_deleteTriggersFor` didn't run and it can be deleted by hand.
+Retry entry points live in `Cron.ONESHOT`, not `SCHEDULE` — they have no fixed time. That
+registration exists so `Cron.list()` prints a pending retry as `⏳` rather than as a rogue
+hand-made trigger. One that never goes away means `_deleteTriggersFor` did not run; delete it by hand.
 
 ### Slash Commands
 
