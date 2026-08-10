@@ -128,12 +128,13 @@ Telegram Bot API ───┤        │
 
 | 檔案 | 職責 |
 |---|---|
-| `Main.gs` | `doPost` / `doGet` 入口、`dailyCleanUp`、`setupAllTriggers`、各項一次性 setup 函式 |
+| `Main.gs` | `doPost` / `doGet` 入口、`dailyCleanUp` |
+| `Cron.gs` | 排程登記處：`SCHEDULE` 是唯一事實來源，`Cron.list()` 與 GAS 實際註冊的比對 |
 | `Commands.gs` | 斜線指令攔截層（定義 + 分派，與 Telegram 選單共用同一份清單） |
 | `MessagingServiceFactory.gs` | 依 userId 前綴分派到 LINE 或 Telegram |
 | `Line.gs` | LINE 事件正規化、reply / push 訊息封裝 |
 | `Telegram.gs` | Telegram update 正規化、訊息推送、webhook 與指令選單註冊 |
-| `ChatBot.gs` | ReAct 對話迴圈，注入記憶、處理工具呼叫與 XML 清理 |
+| `ChatBot.gs` | ReAct 對話迴圈：注入記憶／知識／`Facts`／先前建議，執行工具，攔截「說已記錄卻沒寫」，剝除 Markdown |
 | `Prompt.gs` | `SYSTEM_PROMPT`（對話人設）、`ADVISOR_PROMPT`（感知層 prompt）、`systemContext()`（四個 LLM 迴圈共用的開頭與日期規則） |
 | `Facts.gs` | 程式算好的關鍵數字，注入每一則對話 prompt 要求原樣引用。**刻意只收不用打外部 API 的數字**（讀 指標／現金／每日快照），逐檔持倉留給 `getHoldings` —— 這個區塊每則訊息都要組一次 |
 | `Tools.gs` | 工具定義與分派 |
@@ -141,8 +142,11 @@ Telegram Bot API ───┤        │
 | `GeminiService.gs` | Gemini API 呼叫（含 function calling） |
 | `NvidiaService.gs` | NVIDIA NIM OpenAI 相容 API 呼叫，含 3 次退避重試 |
 | `AIAdapter.gs` | Gemini ⇄ OpenAI 格式相互轉換、分離 `reasoning_content` |
-| `GoogleSheet.gs` | 所有 Sheet 讀寫：持倉、儀表板、歷史、股利、記憶、知識 |
-| `Snapshot.gs` | 結構化資料層：總資產、持倉、現金、配置、股利、黃金，供顧問層與儀表板共用 |
+| `GoogleSheet.gs` | 系統分頁讀寫（chat／記憶／知識／log），以及資產查詢的**格式化層**（資料向 Snapshot 拿）|
+| `AssetSchema.gs` | 分頁與欄位定義、建表、交易表公式、`readTrades` / `appendTrade` 等共用存取 |
+| `Position.gs` | **計算核心**：重放交易算持倉、已實現損益、現金、配置、指標（加權平均法）|
+| `AssetMigrate.gs` | 舊表 → 新表的遷移程式。production 不再使用，現為 `test_asset.cjs` 的 fixture |
+| `Snapshot.gs` | **唯一的結構化讀取層**：總資產、持倉、現金、配置、股利、實體資產。四個消費端共用（儀表板、Mini App、`GoogleSheet` 的格式化層、`AdvisorCheck`）|
 | `Dashboard.gs` | 網頁儀表板的 payload 組裝、快取與存取控制 |
 | `DashboardPage.html` | 儀表板前端單頁 |
 | `MiniApp.gs` | Telegram Mini App 的 `initData` 驗簽與後端進入點 |
@@ -155,13 +159,13 @@ Telegram Bot API ───┤        │
 | `DataSync.gs` | 每日 18:00 寫入 `每日快照`（長表，同日冪等，見「每日快照」） |
 | `StockPrice.gs` | 即時台股股價查詢（TWSE API，僅上市） |
 | `WebSearch.gs` | Google Custom Search 包裝 |
-| `Utils.gs` | 文字格式化、`stripToolCallXml`、`formatForLine` |
+| `Utils.gs` | 執行時間預算（`execElapsedMs`）、帳本寫入計數（`noteLedgerWrite`）、「說已完成」偵測（`claimsWriteDone`）、文字格式化與分段 |
 | `Logger.gs` | 寫入 `consolelog` 工作表 |
 | `Eval.gs` | 固定題組 + 可自動判定的性質。**判定是純函式（測得起來），執行才需要 LLM 且一次只跑幾題**，重複執行 `runEval()` 直到整組跑完 |
-| `Metrics.gs` | 把 `consolelog` 聚合成每日一列（輪數、耗時、逾時、備援接手、假宣稱攜截、錯誤數）。**在 `dailyCleanUp` 清 consolelog 之前跑**，否則等於丟掉再算 |
+| `Metrics.gs` | 把 `consolelog` 聚合成每日一列（輪數、耗時、逾時、備援接手、假宣稱攔截、錯誤數）。**在 `dailyCleanUp` 清 consolelog 之前跑**，否則等於丟掉再算 |
 | `AssetTools.gs` | 新表**輸入層**的用例層：`recordTrade` 驗證後 append 一列並重算；`voidTrade` 作廢記錯的列；`updateInstrument` / `updateAccount` 改主檔；`listTrades` / `listAccounts` / `listInstruments` 讀主檔（計算層的讀取在 `Snapshot`） |
 | `Panel.gs` | 「面板」分頁的排版：整張都是指向持倉／現金／實體資產的公式，由 `Position.rebuild()` 最後呼叫。程式讀的數字在「指標」那張，不在這裡 |
-| `AssetImport.gs` | 券商已實現損益 CSV 匯入（Telegram 傳檔進來），**只記賣出**、內容去重 |
+| `AssetImport.gs` | 券商 CSV 匯入（Telegram 傳檔進來）。認得兩種格式：**證券對帳單**（有「委託書號」，買賣都記，首選）與**已實現損益**（有「賣出日期」，只記賣出）。兩種格式互相去重 |
 | `DevTools.gs` | **所有在 GAS 編輯器手動執行的進入點**：建表、重算、dry run、診斷。編輯器的函式下拉選單不顯示檔案來源，所以集中在這裡；trigger 與 web 進入點因為綁定名稱，仍留在各自的檔案。遷移相關的進入點已移除 —— 遷移做完了，留在選單裡只會被誤觸 |
 | `Config.gs` | 集中讀取 Script Properties 與 `env!B2/B3`，含 cache |
 
@@ -180,12 +184,30 @@ Telegram Bot API ───┤        │
 | `eval_set` | 評估題組與每題的最新判定（PASS / FAIL 與未通過的性質）。**不存在時自己建立並寫入預設題組** |
 | `metrics` | 每日執行指標，由 `Metrics.rollupDaily()` 寫入（同日覆蓋）。**不存在時自己建立** |
 | `advice_log` | Iris 給過的建議：時間／來源／主題／建議／當下總資產／使用者反應。保留 180 天，**不存在時由 `AdviceLog` 自己建立** |
-| `所有股票` | 持倉資料：row2 為 0000 合計列，row3+ 為個別 ETF |
-| `面板` | 儀表板：B1:B8 摘要、C1:D4 淨值、E1:F8 現金分布 |
-| `配置` | 資產配置（rows 2-21，台股/全球/息/指 比例） |
-| `@所有股票紀錄` | 舊的寬表快照，已凍結，不再寫入 |
-| `@股利` | 股利收入明細（日期、代號、金額） |
-| `@固定` | 固定資產（黃金重量），由 `Snapshot._gold()` 讀取 |
+
+### 資產分頁
+
+分頁與欄位的定義在 `AssetSchema.TABS`，那份是規格，這裡只說明各自的角色。
+
+| 工作表 | 層 | 用途 |
+|---|---|---|
+| `標的` | 輸入 | 投資標的主檔。區域／類型／目標配置% 空著的話不會進「配置」的分組 |
+| `帳戶` | 輸入 | 帳戶主檔。期初餘額只填一次，之後的水位由交易推導 |
+| `實體資產` | 輸入 | 黃金這類非證券資產 |
+| `交易` | 輸入 | **唯一的事實來源**。只新增不改；記錯用 `voidTrade` 把「狀態」設成作廢 |
+| `持倉` | 計算 | 股數、成本、累計股利、已實現損益、市價、市值 |
+| `已實現損益` | 計算 | 每一筆賣出的沖銷結果 |
+| `現金` | 計算 | 餘額 = 帳戶期初 + 交易現金流 |
+| `配置` | 計算 | 三個維度：大類／區域／類型，含目標與偏離 |
+| `指標` | 計算 | 直式 key-value，**程式讀的是這張** |
+| `面板` | 計算 | 人看的橫式儀表板，每一格都是公式 |
+| `每日快照` | 歷史 | 每日 18:00 寫入的長表，一列一個項目 |
+
+⚠️ 計算層的分頁由 `Position.rebuild()` 整段覆寫，手改活不過下一次重算。
+要修正數字請改「交易」那一列。
+
+⚠️ 舊的「股票」試算表（`所有股票` / `@所有股票紀錄` / `@股利` / `@固定`）**已凍結**，
+production 完全不讀不寫，只有 `AssetMigrate.gs` 在測試裡當 fixture 用。
 
 ### 每日快照（長表）
 
@@ -574,7 +596,7 @@ expected_hash     = hex(HMAC_SHA256(訊息 = data_check_string, 金鑰 = secret_
 
 | 時間 | 函式 | 用途 |
 |---|---|---|
-| 每日 04:00 | `dailyCleanUp` | 清過期 STM、超過 10 天的 log、超過 30 天的 chat |
+| 每日 04:00 | `dailyCleanUp` | **先**把 consolelog 聚合進 `metrics`，再清過期 STM、60 天前的 alert_log、180 天前的 advice_log、10 天前的 log、30 天前的 chat |
 | 每日 09:00 | `dailyReport` | 個人化財經早報（週六改發週報） |
 | 每日 10:00 | `marketAlert` | 盤中異動警報（單檔跌幅 > 3% 推播） |
 | 每日 14:00 | `marketAlert` | 盤中異動警報（第二次） |
@@ -584,7 +606,9 @@ expected_hash     = hex(HMAC_SHA256(訊息 = data_check_string, 金鑰 = secret_
 | 每日 18:00 | `setData` | 寫入當日快照至新表的 `每日快照`（長表，同日覆寫） |
 | 每日 19:00 | `advisorCheckEvening` | 主動顧問感知（讀快照 + 決策，LLM 判斷是否推播） |
 
-所有報告與警報任務週末會自動跳過（非交易日）。
+⚠️ 這張表是 `Cron.SCHEDULE` 的副本，會漂移。以實際註冊的為準時跑 `listTriggers()`，它會拿 `Cron.SCHEDULE` 與 GAS 上真正的 trigger 逐項比對。
+
+週末跳過的是 `dailyReport`／`weeklyReport`／`marketAlert`／`advisorCheckEvening`；`setData` 仍會寫入並把當天標成「休市」。
 
 ---
 
@@ -694,16 +718,18 @@ CLAUDE.md 是精簡地圖、README 是完整說明、SKILL 是流程與地雷。
 
 ## 首次安裝
 
-1. 建立 Google Sheet，填入下列工作表名稱（內容欄位請參考 `GoogleSheet.gs`）：
-   `env`、`consolelog`、`chat`、`short_term_memory`、`knowledge`、`alert_log`、
-   `所有股票`、`面板`、`配置`、`@所有股票紀錄`、`@股利`、`@固定`
-2. 在 GAS 編輯器設定上述 Script Properties。
-3. 在 GAS 執行 `setup()`，確認所有工作表與環境變數齊備。
-4. 在 GAS 執行 `setupAllTriggers()`，建立全部排程任務。
-5. 設定訊息平台的 webhook，指向部署的 `/exec` 結尾網址：
+1. 建立一份空的 Google Sheet，把它的 ID 填進 Script Property `SHEET_ID`。
+   **所有分頁都在這一份裡**，不需要第二份試算表。
+2. 在 GAS 編輯器設定其餘 Script Properties（見上一節的表格）。
+3. 在 GAS 執行 `setupAssetSheet()` —— 依 `AssetSchema.TABS` 建立／補齊所有分頁、
+   標題列與公式。冪等，重跑不會疊加。
+4. 在 GAS 執行 `setup()`，確認系統分頁與環境變數齊備。
+   （`advice_log` / `metrics` / `eval_set` 不必先建，第一次用到時會自己建。）
+5. 在 GAS 執行 `setupAllTriggers()`，依 `Cron.SCHEDULE` 建立全部排程。
+6. 設定訊息平台的 webhook，指向部署的 `/exec` 結尾網址：
    - **Telegram** — 在 GAS 執行 `setupTelegramWebhook()`
    - **LINE** — 將 `/exec` 網址貼進 LINE Developers 主控台並啟用 webhook
-6. 在 GAS 執行 `setupTelegramCommands()`，註冊斜線指令選單（僅 Telegram 需要）。
+7. 在 GAS 執行 `setupTelegramCommands()`，註冊斜線指令選單（僅 Telegram 需要）。
 7. 建立第二個 deployment 給儀表板，取得其 `/dev` 網址並填入 Script Property `DASHBOARD_URL`；
    執行 `checkDashboardAuth()` 確認認證閘門看得到你的身分。
 8. 用管理員帳號傳訊息到 Bot，驗證 `doPost` → `ChatBot` → AI 路徑全通。
