@@ -699,6 +699,17 @@ forbidden syntax instead of demonstrating it.
 `T33` also pins the ordering (behaviour before tools, formatting last) and the prompt's total
 length, since it ships with every single message.
 
+⚠️ **提示詞勸不動它，所以改用剭的。** Three baseline runs in a row had 3 of 10 replies
+carrying `**bold**` despite the ban, so `ChatBot.reply` now runs `Utils.stripMarkdown` before
+returning. Previously only `Telegram.pushMsg` stripped it, which meant the owner saw clean text
+while the chat history, the eval, and any future consumer saw the asterisks — two versions of the
+same reply. Stripping here makes all of them agree, and fixes LINE as a side effect
+(`Line.pushMsg` never stripped at all).
+
+Keep the strip in `Telegram.pushMsg`: reports, market alerts and `AdvisorCheck` pushes do not go
+through `ChatBot`. The cost, stated plainly: the eval can no longer see whether the model obeys
+the no-Markdown rule. That signal was traded for one consistent version of the text.
+
 ### 回饋閉環
 
 `alert_log` records what was pushed, for dedup. Nothing reads it back, so Iris never knew what it

@@ -2367,6 +2367,13 @@ console.log('\nT35  ReAct 迴圈');
     !!inject && /\d+ 字/.test(String(inject[3].facts)),
     inject ? JSON.stringify(inject[3].facts) : '(沒有這行 log)');
 
+  // ⑦-c Markdown 在 ChatBot 就剝掉，不留到平台層 —— 否則 chat 歷史與評估拿到的
+  //      是帶星號的版本，跟主人看到的不一樣。
+  reset(); AI_QUEUE.push(say('▸ 結論：**不建議加碼。**\n理由是 `現金` 還夠。'));
+  out = ChatBot.reply(ev('可以加碼嗎'));
+  check('回傳值已經沒有 Markdown 粗體', out.indexOf('**') < 0, out);
+  check('但字還在（不是整段被吃掉）', /不建議加碼/.test(out) && /現金/.test(out), out);
+
   // ⑧ 時間預算才是真正的守門員（輪數上限放寬到 5 的前提）
   reset();
   const realElapsed = Utils.execElapsedMs;

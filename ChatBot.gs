@@ -297,7 +297,20 @@ var ChatBot = (() => {
           cleanedResponse = Utils.extractText(retryResp) || '抱歉，我有點混亂，請再試一次。';
         }
       }
-      finalResponse = Utils.formatForLine(cleanedResponse || finalResponse);
+      // Markdown 在這裡就剝掉，不要留到平台層才處理。
+      //
+      // 人設明文禁止 Markdown，而 2026-08-09 連續三輪基準線都有 3/10 的回覆帶著
+      // `**粗體**` —— 提示詞勸不動這顆模型，再加字只會讓 prompt 更長。
+      //
+      // 以前只有 `Telegram.pushMsg` 會剝，於是同一段文字有兩個版本：主人看到的是
+      // 乾淨的，而寫進 chat 歷史、送進評估、將來任何新的消費端拿到的都還帶著星號。
+      // 在這裡剝，四個地方就一致了 —— 順帶把 LINE 也修好（`Line.pushMsg` 從來沒剝過）。
+      //
+      // ⚠️ `Telegram.pushMsg` 那道**不要拿掉**：早報、盤中警報、AdvisorCheck 的推播
+      //    不經過這裡，仍然需要它。重複剝一次是無害的。
+      // ⚠️ 代價講明：評估從此看不到「模型有沒有輸出 Markdown」這個指令遵循度訊號。
+      //    這是選擇 —— 使用者拿到一致的乾淨文字，比留著一個勸不動的指標重要。
+      finalResponse = Utils.formatForLine(Utils.stripMarkdown(cleanedResponse || finalResponse));
 
       // 打回去之後還是那樣講（或根本沒機會打回去 —— 最後一輪沒有工具可用），
       // 那就至少不要讓主人以為記好了。這裡用加註而不是整段換掉：萬一是誤判
