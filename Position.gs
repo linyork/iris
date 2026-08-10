@@ -671,9 +671,13 @@ var Position = (() => {
     //    會把那道保護一起洗掉，換來另一個更難查的 bug。
     var metricSheet = ss.getSheetByName('指標');
     try {
-      metricSheet.getRange(2, 2, Math.max(metricSheet.getMaxRows() - 1, 1), 1).clearFormat();
+      // ⚠️ 用 setNumberFormat('General') 明確設回自動，不要用 clearFormat()。
+      //    clearFormat() 清的是字型那類的樣式，**不會重設數值格式** ——
+      //    2026-08-09 先用它修過一次，隔天重算後那一格仍是 1899-12-30 1:40:13。
+      metricSheet.getRange(2, 2, Math.max(metricSheet.getMaxRows() - 1, 1), 1)
+        .setNumberFormat('General');
     } catch (e) {
-      Logger.warning('Position._writePanelAndAllocation', '清指標數值欄格式失敗', e.message);
+      Logger.warning('Position._writePanelAndAllocation', '重設指標數值欄格式失敗', e.message);
     }
     AssetSchema.writeBlock(metricSheet, panelRows, 3);
 
