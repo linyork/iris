@@ -2,17 +2,13 @@
  * Snapshot
  * @description 資產狀態的結構化讀取層 —— 「現在手上是什麼」只從這裡出去
  *
- * 讀「資產管理」表（指令碼屬性 `SHEET_ID`）的當下狀態、預先算好關鍵指標，
- * 產出結構化 JSON。不做判斷、不做通知、不做排版，只做資料整理。
+ * 讀「資產管理」表的當下狀態、算好關鍵指標，產出結構化 JSON。
+ * 不做判斷、不做通知、不做排版。
  *
- * ⚠️ **四個消費端吃同一份輸出**，改欄位形狀要四個一起看：
- *   Dashboard.getPayload → DashboardPage.html
- *                        → MiniAppPage.html
- *   GoogleSheet.getHoldings / getDashboard / getHistory（格式化成給 LLM 讀的文字）
+ * ⚠️ 四個消費端吃同一份輸出，改欄位形狀要四個一起看：
+ *   Dashboard.getPayload → DashboardPage.html / MiniAppPage.html
+ *   GoogleSheet.getHoldings / getDashboard / getHistory（格式化給 LLM）
  *   AdvisorCheck（collectAll，整包序列化進 prompt）
- *
- * 它最初只是 AdvisorCheck 的「備料」模組，後來儀表板與聊天工具都改成讀它 ——
- * 那正是重點：一份數字，四個地方看到的一樣。
  */
 var Snapshot = (() => {
   var snap = {};
@@ -20,11 +16,7 @@ var Snapshot = (() => {
   /** 資料一律讀「資產管理」表。走 AssetSchema.open() 才會經過 SHEET_ID 的守門。 */
   snap._open = () => AssetSchema.open();
 
-  // ─── 工具函式 ──────────────────────────────────────────────
-  //
-  // 儲存格取值一律走 AssetSchema.str / .num（見那裡的註解）。包成區域別名只是
-  // 讓下面的程式短一點；用箭頭函式而不是直接指派，是因為 GAS 的檔案載入順序
-  // 沒有保證，指派會在 AssetSchema 還沒定義時就爆掉。
+  // ⚠️ 包成箭頭函式而非直接指派：GAS 不保證檔案載入順序
   var _str = (v) => AssetSchema.str(v);
   var _num = (v) => AssetSchema.num(v);
 
@@ -40,10 +32,8 @@ var Snapshot = (() => {
 
   var _ymd = (d) => Utilities.formatDate(d, 'GMT+8', 'yyyy-MM-dd');
 
-  // ⚠️ 不要用 `v instanceof Date`。那個只在「同一個 Date 建構子」下成立 ——
-  //    跨 realm（GAS 的儲存格物件、測試替身裡被替換掉的 Date）就會靜靜地回 false，
-  //    而 false 的後果是走進 `_num()` 拿到 0，也就是這個檢查本來要防的那件事。
-  //    看它會不會走路就好。
+  // ⚠️ 不可用 instanceof Date：跨 realm 會是 false，然後落到 _num() 拿到 0,
+  //    正是這個檢查要防的事。用鴨子型別。
   var _isDate = (v) => !!v && typeof v.getTime === 'function' && !isNaN(v.getTime());
 
   // ─── 子模組 ────────────────────────────────────────────────
@@ -70,9 +60,8 @@ var Snapshot = (() => {
           date:  r[0] instanceof Date ? _ymd(r[0]) : _str(r[0]),
           total: _num(r[6])
         };
-        // 狀態只在「不是正常交易日」時才帶出去（休市／資料未更新／報價異常）。
-        // 一年 365 個 "交易日" 字串會白白吃掉 Dashboard 那 90KB 的快取額度，
-        // 而會影響判讀的本來就只有異常的那幾天 —— 平的那一段是假日還是抓取失敗。
+        // 狀態只在非正常交易日時帶出（休市／資料未更新／報價異常）。
+        // 一年 365 個 "交易日" 字串會吃掉 Dashboard 的 90KB 快取額度。
         var st = _str(r[8]);
         if (st && st !== '交易日') o.status = st;
         return o;
@@ -82,10 +71,9 @@ var Snapshot = (() => {
   };
 
   /**
-   * 總資產指標：今日 vs 昨日 vs 上週 vs 上月
-   *
-   * 「今天」取的是`指標`的即時總資產，不是快照的最後一列 —— 快照一天只寫一次，
-   * 盤中拿它當今天會落後一整天；歷史比較才用快照。
+   * 總資產指標：今日 vs 昨日 vs 上週 vs 上月。
+   * 「今天」取「指標」的即時總資產而非快照最後一列 —— 快照一天只寫一次，
+   * 盤中拿它當今天會落後一整天。
    */
   snap._totals = (ss) => {
     var rows = _totalHistory(ss, 40);
@@ -124,14 +112,10 @@ var Snapshot = (() => {
   };
 
   /**
-   * 持倉明細：每檔當日漲跌、市值、佔比、累計股利
-   *
-   * 來源改成「持倉」—— 那張表本身就是 Position.rebuild() 從交易推導出來的，
-   * 股數、成本、累計股利、已實現損益都是算好的，不必再自己拼。
-   * 市價與市值是表上的 GOOGLEFINANCE 公式；抓不到時市值會是 0，標記 priceMissing
-   * 讓 LLM 知道這檔的數字不可信，而不是默默當成歸零。
-   *
-   * 當日漲跌幅仍然走 StockPrice（TWSE 即時報價），試算表公式沒有這個欄位。
+   * 持倉明細：每檔當日漲跌、市值、佔比、累計股利。
+   * 來源是「持倉」表（Position.rebuild() 推導出來的）。市價與市值是表上的
+   * GOOGLEFINANCE 公式，抓不到時市值為 0 並標記 priceMissing。
+   * 當日漲跌走 StockPrice（TWSE 即時報價），試算表公式沒有這個欄位。
    */
   snap._holdings = (ss) => {
     var sheet = ss.getSheetByName('持倉');
@@ -170,9 +154,8 @@ var Snapshot = (() => {
       var live = livePrices[h.code];
       var pnl = h.marketValue && h.costBasis ? h.marketValue - h.costBasis : null;
       var pnlPct = h.costBasis > 0 ? (h.marketValue - h.costBasis) / h.costBasis : null;
-      // 盤中才用 MIS 的即時價；非交易時段它給的 current 是**昨收**，
-      // 而表上的 GOOGLEFINANCE 值多半已經是今日收盤，比它新，也與同列的
-      // 市值同源（市值讀的是表，不是這裡）——拿昨收當市價會讓兩者對不起來。
+      // ⚠️ 只在盤中用 MIS 的即時價。非交易時段它的 current 是昨收，
+      //    而表上的 GOOGLEFINANCE 值多半已是今日收盤，且與同列市值同源。
       var liveUsable   = live && live.current > 0 && !live.isClosed;
       var displayPrice = liveUsable ? live.current : (h.price || (live ? live.current : 0));
       var result = {
@@ -185,9 +168,8 @@ var Snapshot = (() => {
         totalDividendReceived: _round(h.totalDividend),
         pnl: pnl !== null ? _round(pnl) : null,
         pnlPct: pnlPct !== null ? _round(pnlPct, 4) : null,
-        // ⚠️ 不可以寫成 `live ? _round(live.changePct, 4) : null` —— `_round(null)`
-        //    是 `Math.round(null * 10000) / 10000`，也就是 **0**。「不知道」會在
-        //    這一步靜靜地變回「今天平盤」，而 StockPrice 特地回 null 就白費了。
+        // ⚠️ 不可寫成 `live ? _round(live.changePct, 4) : null`：_round(null) 是 0，
+        //    「不知道」會變成「今天平盤」。要檢查值，不是檢查物件。
         dayChangePct: (live && live.changePct !== null && live.changePct !== undefined)
           ? _round(live.changePct, 4) : null,
         ratioOfPortfolio: totalMarketValue > 0 ? _round(h.marketValue / totalMarketValue, 4) : 0,
@@ -343,13 +325,10 @@ var Snapshot = (() => {
         note[k] = _str(r['說明']);
       });
 
-      // 空字串 = 算不出來，要傳 null 而不是 0
-      //
-      // ⚠️ Date 也要回 null。比例欄若被 Sheets 誤判成時間格式（0.0706 → 1:41:40），
-      //    讀回來是 Date 物件，而 `AssetSchema.num(Date)` 是 0 —— 「格式壞掉」會偽裝成
-      //    「這一項真的是 0%」，然後一路被當成事實講給主人聽。2026-08-09 的實體佔比
-      //    就是這樣連續錯了好幾天。寫入端已經在每次重算前清格式（見 Position），
-      //    這裡是第二道：真的再發生，要顯示成「不知道」而不是一個篤定的 0。
+      // 空字串 = 算不出來，回 null 而不是 0。
+      // ⚠️ Date 也要回 null：比例欄若被 Sheets 誤判成時間格式（0.0706 → 1:41:40），
+      //    讀回來是 Date，而 AssetSchema.num(Date) 是 0 —— 格式壞掉會偽裝成真的 0%。
+      //    寫入端每次重算前會清格式（見 Position），這裡是第二道防線。
       var n = (key) => {
         var v = kv[key];
         if (v === '' || v === null || v === undefined) return null;
@@ -378,9 +357,8 @@ var Snapshot = (() => {
         physicalRatio: n('實體佔比'),
         tradeCount:    n('交易筆數'),
         positionCount: n('持倉檔數'),
-        // Sheets 常把這個時間字串吃成 Date，而 `_str(Date)` 會吐出
-        // 「Sun Aug 09 2026 18:40:27 GMT+0800 (Taiwan Standard Time)」——
-        // 又長又是英文，還會原封不動進 prompt 與 getHoldings 的【資料時點】。
+        // Sheets 常把這個時間字串吃成 Date，而 _str(Date) 會吐出 JS 的 toString，
+        // 那會原封不動進 prompt 與 getHoldings 的【資料時點】。
         lastRebuild:   _isDate(kv['最後重算'])
           ? Utilities.formatDate(kv['最後重算'], 'GMT+8', 'yyyy-MM-dd HH:mm:ss')
           : _str(kv['最後重算']),

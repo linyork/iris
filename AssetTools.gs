@@ -1,21 +1,15 @@
 /**
  * AssetTools
- * @description 「資產管理」新表的**輸入層**用例層 —— Iris 的工具會呼叫這裡
+ * @description 輸入層（標的／帳戶／交易）的用例層，供 Tools.execute 呼叫
  *
- * 設計上刻意讓「說一句話」對應「append 一列」：
- *   「今天賣掉 3000 股 0056，49.5，手續費 21」→ 交易表加一列 → Position.rebuild()
- * 持倉、成本、已實現損益、現金餘額全都是那一列的推導結果，不需要另外改任何格子。
+ * 寫入一律是「交易表 append 一列 + Position.rebuild()」；持倉、成本、已實現損益、
+ * 現金餘額都是那一列的推導結果。
  *
- * **讀取的分工**：計算層（持倉／指標／現金／每日快照）走 `Snapshot` 與
- * `GoogleSheet.getHoldings / getDashboard / getHistory`；輸入層（標的／帳戶／交易）
- * 這三張表的內容走這裡的 `listInstruments` / `listAccounts` / `listTrades`。
- * 分在兩邊是因為它們回答的是不同的問題：計算層答「我現在有多少」，輸入層答
- * 「這筆是怎麼記進去的、要改哪一列」—— 後者是每個寫入工具的前置條件。
+ * 讀取分工：計算層（持倉／指標／現金／每日快照）走 Snapshot 與 GoogleSheet；
+ * 輸入層三張表走這裡的 listInstruments / listAccounts / listTrades。
  *
- * **修改與撤銷**（見各函式的註解）：
- *   - 交易是 append-only，記錯了用 `voidTrade` 打作廢記號，不刪列、不改金額
- *   - 主檔（標的／帳戶）沒有「再記一筆」可以退，改錯只能靠 `updateInstrument` /
- *     `updateAccount`；帳戶不提供刪除，只有停用
+ * 修改規則：交易 append-only，記錯用 voidTrade 打作廢記號；
+ * 主檔只能 updateInstrument / updateAccount 改，帳戶不可刪除只能停用。
  */
 var AssetTools = (() => {
   var t = {};
@@ -74,10 +68,8 @@ var AssetTools = (() => {
   };
 
   /**
-   * 在某一欄裡找出值等於 value 的那一列，回傳 1-based 列號（找不到 0）。
-   *
-   * `readObjects` 會跳過空白列，所以它的陣列索引 +2 不保證等於實際列號 ——
-   * 而更新主檔一定要寫回**正確的那一格**，猜錯就是改到別人的資料。
+   * 在某一欄裡找出值等於 value 的列，回傳 1-based 列號（找不到 0）。
+   * ⚠️ 不可用 readObjects 的索引 +2 代替：它會跳過空白列，對不上實際列號。
    */
   var _findRow = (sheet, colName, value) => {
     var map = AssetSchema.headerMap(sheet);
@@ -186,20 +178,13 @@ var AssetTools = (() => {
         }
       }
 
-      // ── 賣出：帳本裡真的有這些股票嗎 ──
-      //
-      // 擋在寫入之前，不是寫完再警告。兩套帳對同一列的看法不一致才是問題所在：
-      // `Position.replay` 知道你沒持股，會把那筆跳過（股數不動、不產生已實現損益）；
-      // 但「現金流」是那一列**自己的試算表公式**算出來的，它只讀這列寫了幾股幾塊，
-      // 看不到持倉。放進去的結果是股票沒動、錢卻入帳 —— 帳戶餘額與總資產都會多。
-      //
-      // 判斷讓 replay 本人跑一次「到這個日期為止」的重放，不自己算持股：加權平均是
-      // 路徑相依的，另外寫一份判斷邏輯遲早會和真正的重放分岔。日期一併考慮，
-      // 是因為補記的賣出要看的是**那一天**手上有多少，不是今天有多少。
-      //
-      // ⚠️ 這道關卡只在 recordTrade。券商匯入不擋 —— 對帳單說賣了就是賣了，
-      //    那裡缺的是買進（見 AssetImport 的「只記賣出」註解），擋下來只會讓
-      //    真實成交進不了帳。手改與匯入進來的賣超仍然靠 replay 的警告收尾。
+      // ── 賣出：檢查該日期當下的持股是否足夠 ──
+      // 擋在寫入前。放行的話 Position.replay 會跳過這筆（股數不動），但「現金流」是
+      // 該列自己的試算表公式、看不到持倉，結果是股票沒動而錢入帳。
+      // 用 replay 重放到該日期來判斷，不自行計算：加權平均是路徑相依的，
+      // 第二份實作會與真正的重放分岔。
+      // ⚠️ 只在 recordTrade 擋。券商匯入不擋（見 AssetImport），
+      //    匯入與手改造成的賣超由 replay 的警告收尾。
       if (action === '賣出') {
         var upto = AssetSchema.readTrades(ss).filter(x => {
           var d = _str(x['日期']) ? _normalizeDate(x['日期'], tz) : '';
@@ -240,14 +225,12 @@ var AssetTools = (() => {
         return action + ' 要記在哪個帳戶？目前有：' + names.join('、');
       }
 
-      // 幣別跟著帳戶走。餘額是 SUMIF 出來的、不看這一欄，所以寫死 TWD 不會讓
-      // 餘額算錯 —— 但外幣戶的每一列都會在說謊，之後任何想按幣別分群的讀者都會踩到。
+      // 幣別取自帳戶。餘額是 SUMIF 算的、不讀這一欄，但寫死 TWD 會讓外幣戶的
+      // 每一列幣別都是錯的，之後按幣別分群的讀者會拿到錯的結果。
       var accRow = accounts.filter(x => _str(x['帳戶']) === val.account)[0];
       var currency = (accRow && _str(accRow['幣別'])) || 'TWD';
 
-      // ── 寫入 ──
-      // ⚠️ 一定要走 appendTrade：它會補上「現金流」公式，少了那欄這筆錢永遠
-      //    不會進到任何帳戶餘額（見 AssetSchema 的註解）。
+      // ⚠️ 必須走 appendTrade：它會補上「現金流」公式，缺了那欄這筆錢不會進帳戶餘額。
       var row = AssetSchema.appendTrade({
         '日期': dateStr,
         '動作': action,
@@ -319,15 +302,10 @@ var AssetTools = (() => {
   var ACCOUNT_TYPES = ['證券', '現金', '外幣'];
 
   /**
-   * 開一個新帳戶（往「帳戶」主檔加一列）。
+   * 開一個新帳戶（往「帳戶」主檔加一列）。唯一會寫「帳戶」主檔的新增路徑。
    *
-   * 「帳戶」跟「標的」一樣是輸入層，`現金` 是它加上交易推導出來的結果。這裡是
-   * 全部程式碼裡**唯一**會寫它的地方 —— 在此之前它只能手改，於是模型被要求
-   * 「開一個新戶頭」時無路可走，就自己編了一句「已建立完成」出來（2026-08-05）。
-   * 缺工具的代價不是它拒絕，是它說謊。
-   *
-   * ⚠️ 期初餘額的語意是「期初日期那天的餘額」，建完就不該再動：之後的水位一律
-   *    由交易推導，要修正請用 setCashBalance。
+   * ⚠️ 期初餘額＝「期初日期那天的餘額」，建完不應再動。
+   *    之後的水位由交易推導，要修正用 setCashBalance。
    *
    * @param {object} a
    * @param {string} a.name          帳戶名稱，之後記交易、查餘額都用這個名字
@@ -353,8 +331,7 @@ var AssetTools = (() => {
                '取跟你平常講法一致的稱呼最好認。';
       }
 
-      // 重複要連停用的一起比：只看啟用中的會長出第二列同名帳戶，而現金表是
-      // SUMIF(帳戶) 出來的 —— 兩列同名會各自把同一筆錢算一次
+      // 重名要連停用的一起比對：現金表是 SUMIF(帳戶)，兩列同名會把同一筆錢算兩次
       var exist = AssetSchema.readObjects(sheet).filter(x => _str(x['帳戶']) === name)[0];
       if (exist) {
         return '「' + name + '」已經在「帳戶」表裡了（狀態：' + (_str(exist['狀態']) || '啟用') +
@@ -370,8 +347,7 @@ var AssetTools = (() => {
       if (type && ACCOUNT_TYPES.indexOf(type) < 0) {
         return '帳戶類型只能是：' + ACCOUNT_TYPES.join('、') + '。';
       }
-      // 沒講就推，規則與 AssetMigrate 當初分類舊帳戶的一致；推錯只影響
-      // 「買賣沒指定帳戶時自動採用唯一證券戶」這件事，而且回覆會講明是推的
+      // 未指定就依名稱與幣別推斷（規則同 AssetMigrate），回覆會標明是推斷的
       var inferred = !type;
       if (!type) type = /證券|券商/.test(name) ? '證券' : (currency === 'TWD' ? '現金' : '外幣');
 
@@ -380,7 +356,7 @@ var AssetTools = (() => {
 
       var balance = _num(a.balance);
 
-      // 欄位靠標題文字對位，不寫死欄號 —— 「帳戶」是人會去動的表
+      // 欄位以標題文字對位，不寫死欄號（「帳戶」是人工維護的表）
       var map = AssetSchema.headerMap(sheet);
       var row = new Array(map.__header.filter(h => h !== '').length).fill('');
       var put = (col, v) => { if (map[col] !== undefined && map[col] >= 0) row[map[col]] = v; };
@@ -435,15 +411,13 @@ var AssetTools = (() => {
   /**
    * 把某個現金帳戶的餘額校正成指定的數字。
    *
-   * 「現金」表是 `Position.rebuild()` 整段覆寫出來的（餘額 = 帳戶期初 + SUMIF 現金流），
-   * 手改那一格活不過下一次重算；改「帳戶」的期初餘額則是竄改歷史起點，跟期初日期
-   * 對不起來又不留痕跡。所以**絕對值只活在對話裡，帳本記的仍然是一列差額**：
-   *
+   * 「現金」表由 Position.rebuild() 整段覆寫（餘額 = 帳戶期初 + SUMIF 現金流），
+   * 手改那一格活不過下次重算。所以絕對值會被翻譯成一列差額：
    *     差額 = 指定餘額 − 現在餘額 → 交易表一列「調整」→ Position.rebuild()
    *
-   * ⚠️ 這個減法一定要在這裡做，不能讓 LLM 自己算好差額再去叫 recordTrade：
-   *    模型手上的數字來自 `Snapshot._cash`，那是**台幣值**，這裡比的卻是「現金」
-   *    表的原幣餘額 —— 外幣戶會整整差一個匯率，而且兩邊都不會報錯。
+   * ⚠️ 減法必須在這裡做，不可讓 LLM 算好差額再呼叫 recordTrade：
+   *    模型看到的是 Snapshot._cash 的台幣值，這裡比的是原幣餘額，
+   *    外幣戶會差一個匯率，且兩邊都不會報錯。
    *
    * @param {object} a
    * @param {string} a.account 帳戶名稱，需與「帳戶」表完全一致

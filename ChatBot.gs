@@ -100,13 +100,9 @@ var ChatBot = (() => {
       var NEW_TURN_DEADLINE_MS  = 200000; // 200s 後不再開新一輪（單輪思考可能要 60~90s）
       var TAIL_CALL_DEADLINE_MS = 280000; // 280s 後不再做補救型 API 呼叫，留 80s 收尾
 
-      // ⚠️ 錶要跟底下兩層同一支：`Utils.execElapsedMs()` 從**檔案載入**起算，
-      // 那才是本次執行的真正起點。以前這裡自己 `new Date()` 從進 reply() 起算，
-      // 於是「280s + 留 80s 收尾 = 360s」這個算式少掉了前面那一段 —— GAS 載入
-      // 三十個 .gs、doPost 去重、checkMaster、一次 indicateTyping，走 miniAppAsk
-      // 還要多一次驗簽與一次 push。少多少沒人量過，而 NvidiaService 與
-      // AIServiceFactory 判斷「還夠不夠再打一次」用的一直都是 Utils 這支錶。
-      // 同一次執行裡有兩個對剩餘時間意見不同的來源，正是 Utils 那段註解要消滅的。
+      // ⚠️ 必須用 Utils.execElapsedMs()，不要自己 new Date()。它從檔案載入起算，
+      //    那才是本次執行的起點；NvidiaService 與 AIServiceFactory 判斷
+      //    「還夠不夠再打一次」用的也是同一支錶。用兩支錶會讓上面的預算算式失準。
 
       for (var turn = 0; turn < maxTurns; turn++) {
         if (elapsed() > NEW_TURN_DEADLINE_MS) {
@@ -297,19 +293,10 @@ var ChatBot = (() => {
           cleanedResponse = Utils.extractText(retryResp) || '抱歉，我有點混亂，請再試一次。';
         }
       }
-      // Markdown 在這裡就剝掉，不要留到平台層才處理。
-      //
-      // 人設明文禁止 Markdown，而 2026-08-09 連續三輪基準線都有 3/10 的回覆帶著
-      // `**粗體**` —— 提示詞勸不動這顆模型，再加字只會讓 prompt 更長。
-      //
-      // 以前只有 `Telegram.pushMsg` 會剝，於是同一段文字有兩個版本：主人看到的是
-      // 乾淨的，而寫進 chat 歷史、送進評估、將來任何新的消費端拿到的都還帶著星號。
-      // 在這裡剝，四個地方就一致了 —— 順帶把 LINE 也修好（`Line.pushMsg` 從來沒剝過）。
-      //
-      // ⚠️ `Telegram.pushMsg` 那道**不要拿掉**：早報、盤中警報、AdvisorCheck 的推播
-      //    不經過這裡，仍然需要它。重複剝一次是無害的。
-      // ⚠️ 代價講明：評估從此看不到「模型有沒有輸出 Markdown」這個指令遵循度訊號。
-      //    這是選擇 —— 使用者拿到一致的乾淨文字，比留著一個勸不動的指標重要。
+      // Markdown 在這裡剝掉，不留到平台層 —— 否則 chat 歷史、評估與其他消費端
+      // 拿到的版本會跟主人看到的不一樣。順帶修好 LINE（Line.pushMsg 從不剝）。
+      // ⚠️ Telegram.pushMsg 的那一道不可移除：早報、盤中警報、AdvisorCheck
+      //    的推播不經過這裡。重複剝一次無害。
       finalResponse = Utils.formatForLine(Utils.stripMarkdown(cleanedResponse || finalResponse));
 
       // 打回去之後還是那樣講（或根本沒機會打回去 —— 最後一輪沒有工具可用），
