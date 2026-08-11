@@ -8,8 +8,11 @@
 
 ## 待執行（需要在 GAS 編輯器或 Telegram 操作）
 
-- [ ] **跑 `runEval()` 直到 `eval_set` 每列都有新的「最後執行」**
-      改 `Prompt.gs` 之前要有可比較的基準線。一次跑 3 題，重複執行即可。
+- [ ] **再跑一輪完整的 `eval_set`（4 次 `runEval()`），確認下列失敗不是變異**
+      2026-08-11 的基準線是 5 PASS / 5 FAIL，其中三個判定為真：
+      Q04／Q10 的 `hasAsOf` —— `getHoldings` 開頭已經有【資料時點】，模型沒有轉述；
+      Q05 的 `citesStanding` —— 這一輪沒引用主人設過的規矩（前一輪有）。
+      **兩輪都失敗的才動 `Prompt.gs`**，只有一輪的當雜訊。
 
 - [ ] **累積數天後跑 `rollupMetrics()`**
       確認 `TOOL_MAX_ITERATIONS` 由 3 放寬到 5 的實際代價（看 `avgTurns` / `maxTurns` /
