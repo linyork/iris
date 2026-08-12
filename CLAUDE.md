@@ -208,13 +208,16 @@ provides. The function stays (covered by `test_asset.cjs`) for whoever wants tho
 | 投資績效 | `metrics` (指標) | 未實現／已實現／累計股利／淨損益／XIRR were computed at every rebuild and displayed nowhere. The page could say how much you have, never how much you made. |
 | 目標配置偏離 | `allocation` (配置) | The only block that answers "where does the next dollar go". |
 
-Two things that must stay true there:
+Three things that must stay true there:
 
 - **The 偏離 bars do not use `--up` / `--down`.** Red-up/green-down is the *P&L* convention; over-
   weighting a good holding is not a loss. Deviation gets its own neutral `--over` / `--under` pair.
 - **"No target set" is not "target is 0".** `配置` writes an empty string for a group with no target
   (see 目標配置%), so `renderDeviation` filters on **whether the `偏離%` key exists**, not on its value —
   `_allocation` drops empty cells, which is exactly what makes that distinction survive.
+- **The deviation chart's denominator is 股票市值; the donut right above it is 總資產.** Two ratios,
+  same visual form, different meaning (see 目標配置%). That is why `devHint` has to spell the basis
+  out — the numbers alone cannot.
 
 The allocation **donut** is still derived from `holdings` + `cash`, **not** from the `配置` sheet,
 because that sheet's columns are read dynamically by header name and have changed before. The
@@ -391,10 +394,23 @@ and immune to that quota.
 目標都變 0 而且不報錯。同一個坑在 [`AssetSchema.gs`](AssetSchema.gs) 的
 `TRADE_FORMULAS` 還在（`名稱` 寫死 `標的!$A:$B,2`），只是第 2 欄幾乎不會被推走。
 
-⚠️ **填比例不是百分比。** `佔總資產%`、`配置` 的 `實際%` 都是 0..1 的比例，
-`偏離` = `佔總資產%` − `目標配置%`。填 12.5 而不是 0.125，偏離會差一百倍。
-`updateInstrument` 因此**擋下所有 > 1 的值而不是自己 ÷100** —— 12.5 到底是 12.5%
-還是有人手滑多打一位，程式分不出來，猜錯不會報錯。
+⚠️ **基準是股票市值，不是總資產。** 目標只填在 `標的`，而那張表裡全部都是股票 ——
+現金與實體資產沒有 `目標配置%` 這一欄，也不可能有。所以那些目標加起來的 100% 講的是
+**股票這一塊**的 100%。因此 `持倉!偏離` = `佔股票%`（N 欄）− `目標配置%`，`配置` 的
+`區域` / `類型` 兩維也用股票市值當分母；只有 `大類`（股票／現金／實體）那三列在講
+總資產怎麼切，分母才是總資產。`Position._writePanelAndAllocation` 的 `pushGroup` 收
+`base` 參數就是為了這件事，不是漏改。
+
+拿總資產去減目標的話，每一組都會固定低配 `目標×(1−股票佔比)`，全部加起來剛好是
+−(現金＋實體佔比) —— 憑空長出來的低配。而這個錯誤**沒有難看的症狀**：每一組偏的方向
+都一樣，圖上只是整排藍的「都買太少」，沒有任何一根 bar 會站出來說分母錯了。2026-08-12
+發現它的方式不是哪個數字看起來不對，是主人講出「我填的加起來就是以股票為 100%」。
+`T5` 現在釘住三個維度各自的分母（各維實際% 相加 = 1），`T20`／`T35` 釘住 `持倉!偏離`
+減的是哪一欄。
+
+⚠️ **填比例不是百分比。** `佔股票%`、`佔總資產%`、`配置` 的 `實際%` 都是 0..1 的比例。
+填 12.5 而不是 0.125，偏離會差一百倍。`updateInstrument` 因此**擋下所有 > 1 的值而不是
+自己 ÷100** —— 12.5 到底是 12.5% 還是有人手滑多打一位，程式分不出來，猜錯不會報錯。
 
 ⚠️ 留空讀到 0，而 `配置` 用 `target > 0` 判斷「有沒有設目標」—— 所以某個
 區域／類型分組全部留空時，`目標%` / `偏離%` / `偏離金額` 三欄寫成空字串，

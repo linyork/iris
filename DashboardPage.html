@@ -651,6 +651,10 @@ function sizeBarh(canvasId, count) {
 // 資料讀「配置」sheet（Position.rebuild 算好的），不是從 holdings 現推 ——
 // 目標只有那張表知道，甜甜圈那張圖跟目標完全無關。
 //
+// ⚠️ 這張圖的分母是**股票市值**，不是總資產（上面的甜甜圈才是總資產）。目標填在
+// 「標的」，那張表裡全是股票，所以目標的 100% 指的是股票這一塊。兩個比例長得
+// 一樣、意思不同，所以標題旁邊那行提示一定要把基準寫出來。
+//
 // ⚠️ 沒設目標的分組，配置表寫的是空字串而不是 0（「沒設」與「目標是 0」在
 // 畫面上長得一樣是原本就有的坑），所以這裡用「有沒有偏離% 這個 key」來濾。
 function renderDeviation(d) {
@@ -662,7 +666,7 @@ function renderDeviation(d) {
   if (charts.dev) charts.dev.destroy();
   document.getElementById('devEmpty').hidden = rows.length > 0;
   document.getElementById('devHint').textContent =
-    rows.length ? '正 = 超配　負 = 低配' : '';
+    rows.length ? '佔股票市值　正 = 超配　負 = 低配' : '';
   if (!rows.length) {
     document.getElementById('devChart').parentNode.style.height = '0px';
     return;

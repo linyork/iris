@@ -562,7 +562,6 @@ check('已實現損益 0 筆（還沒賣過）', reb.realized === 0, reb.realize
   const alloc = AssetSchema.readObjects(target.getSheetByName('配置'));
   const region = alloc.filter(a => a['維度'] === '區域');
   const tw = region.find(a => a['分組'] === '台');
-  // 舊表配置：台股佔股票市值 56.73%，這裡分母是總資產，所以會小一些
   check('區域維度有 台/美/歐/日 四組', region.length === 4, region.map(x => x['分組']).join(','));
   check('台股市值 = 舊表配置表裡區域為台的合計', near(num(tw['市值']), EXP.twValue, 2), money(num(tw['市值'])));
   const kinds = alloc.filter(a => a['維度'] === '類型');
@@ -570,6 +569,16 @@ check('已實現損益 0 筆（還沒賣過）', reb.realized === 0, reb.realize
   const major = alloc.filter(a => a['維度'] === '大類');
   check('大類三組相加 = 總資產', near(major.reduce((s, x) => s + num(x['市值']), 0), EXP.totalAssets, 3),
     money(major.reduce((s, x) => s + num(x['市值']), 0)));
+
+  // ⚠️ 兩個維度、兩個分母。這兩條就是在釘那件事：區域／類型要跟「標的」的目標
+  //    比，而那張表裡全是股票，目標的 100% 是股票的 100%，所以分母是股票市值；
+  //    大類在講總資產怎麼切，分母是總資產。分母寫成一樣的話，其中一條會壞。
+  const sumPct = (rows) => rows.reduce((s, x) => s + num(x['實際%']), 0);
+  check('區域各組實際% 相加 = 1（分母是股票市值，不是總資產）',
+    near(sumPct(region), 1, 1e-3), sumPct(region));
+  check('類型各組實際% 相加 = 1（同上）', near(sumPct(kinds), 1, 1e-3), sumPct(kinds));
+  check('大類三組實際% 相加 = 1（這一維的分母才是總資產）',
+    near(sumPct(major), 1, 1e-3), sumPct(major));
 }
 
 // ─── T6  加一筆真實賣出，驗證全鏈路 ──────────────────────────────
@@ -1211,7 +1220,7 @@ console.log('\nT20  目標配置% 跟著「標的」走');
   const instSheet = target.getSheetByName('標的');
   const TARGET_COL = AssetSchema.expected('持倉').indexOf('目標配置%') + 1;
   const DEV_COL    = AssetSchema.expected('持倉').indexOf('偏離') + 1;
-  const SHARE_COL  = AssetSchema.expected('持倉').indexOf('佔總資產%') + 1;
+  const SHARE_COL  = AssetSchema.expected('持倉').indexOf('佔股票%') + 1;
 
   const at   = AssetSchema.readObjects(posSheet).findIndex(x => num(x['股數']) > 0) + 2;
   const code = String(posSheet.getRange(at, 1).getValue());
@@ -1226,14 +1235,16 @@ console.log('\nT20  目標配置% 跟著「標的」走');
   const instCol = AssetSchema.expected('標的').indexOf('目標配置%') + 1;
   const savedTarget = instSheet.raw(instAt, instCol);
 
-  // 比例，不是 12.5 —— 佔總資產% 與配置的實際% 都是 0..1 的比例
+  // 比例，不是 12.5 —— 佔股票% 與配置的實際% 都是 0..1 的比例
   instSheet.getRange(instAt, instCol).setValue(0.125);
 
   // ⚠️ 這裡刻意**不跑** rebuild
   const row = AssetSchema.readObjects(posSheet)[at - 2];
   check('改「標的」之後不必重算，持倉就跟著變',
     num(row['目標配置%']) === 0.125, row['目標配置%']);
-  check('偏離 = 佔總資產% − 目標配置%',
+  // ⚠️ 減的是佔股票%，不是佔總資產%。目標填在「標的」，那張表裡全是股票，
+  //    所以目標的 100% 是股票這一塊的 100%；拿總資產去比，每一檔都固定低配。
+  check('偏離 = 佔股票% − 目標配置%（不是佔總資產%）',
     Math.abs(num(posSheet.getRange(at, DEV_COL).getValue()) -
              (num(posSheet.getRange(at, SHARE_COL).getValue()) - 0.125)) < 1e-9);
 
@@ -1588,8 +1599,8 @@ console.log('\nT24  主檔的修改');
   check('比例寫進「標的」', near(num(instOf(code)['目標配置%']), 0.15, 1e-9), instOf(code)['目標配置%']);
   check('「持倉」的目標配置% 跟著（指回去的公式，不是抄過來的死值）',
     near(num(posOf(code)['目標配置%']), 0.15, 1e-9), posOf(code)['目標配置%']);
-  check('偏離 = 佔總資產% − 目標配置%',
-    near(num(posOf(code)['偏離']), num(posOf(code)['佔總資產%']) - 0.15, 1e-6), posOf(code)['偏離']);
+  check('偏離 = 佔股票% − 目標配置%',
+    near(num(posOf(code)['偏離']), num(posOf(code)['佔股票%']) - 0.15, 1e-6), posOf(code)['偏離']);
 
   check('未知代號被擋下並列出現有的',
     /沒有 XXXX/.test(AssetTools.updateInstrument({ symbol: 'XXXX', name: 'x' })), '');

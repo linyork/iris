@@ -385,7 +385,12 @@ var Position = (() => {
         _str(ins['類型']),
         '=IFERROR(VLOOKUP($A' + r + ',' + _targetRef + ',' + _targetIdx + ',FALSE),0)',
         "=IFERROR($I" + r + "/VLOOKUP(\"總資產\",指標!$A:$B,2,FALSE),0)",
-        '=$R' + r + '-$Q' + r
+        // ⚠️ 偏離減的是 $N（佔股票%），不是 $R（佔總資產%）。
+        //    目標填在「標的」，而「標的」裡全部都是股票 —— 現金與實體資產沒有
+        //    那一欄，也不可能有。所以那些目標加起來的 100% 指的是股票這一塊的
+        //    100%。減佔總資產% 的話，每一檔都固定低配 目標×(1−股票佔比)，
+        //    整排往同一邊偏，看起來還很合理，只是全部都是低配。
+        '=$N' + r + '-$Q' + r
       ];
     });
 
@@ -685,19 +690,29 @@ var Position = (() => {
     var held = positions.filter(x => _num(x['股數']) > 0);
     var allocRows = [];
 
-    var pushGroup = (dim, label, cost, value, target) => {
-      var actual = pct(value, totalAssets);
+    // ⚠️ 兩種維度、兩個分母，這是刻意的，不是漏改。
+    //
+    // 大類（股票／現金／實體）講的是總資產怎麼切，分母就是總資產。
+    // 區域／類型的分母是**股票市值**，因為它們要跟目標比，而目標只存在於「標的」，
+    // 「標的」裡全部都是股票 —— 現金與實體資產沒有目標配置% 那一欄，也不可能有。
+    // 那些目標加起來的 100% 指的是股票這一塊的 100%。
+    //
+    // 用總資產當分母去減目標，每一組都會固定低配 目標×(1−股票佔比)，全部加起來
+    // 剛好是 −(現金＋實體佔比)：一筆憑空的低配。而且每組偏的方向一樣，圖上看起來
+    // 只是「都買太少」，不會有任何一根 bar 站出來說分母錯了。
+    var pushGroup = (dim, label, cost, value, target, base) => {
+      var actual = pct(value, base);
       allocRows.push([
         dim, label, _round(cost), _round(value), _round(actual, 4),
         target === null ? '' : _round(target, 4),
         target === null ? '' : _round(actual - target, 4),
-        target === null ? '' : _round((actual - target) * totalAssets)
+        target === null ? '' : _round((actual - target) * base)
       ]);
     };
 
-    pushGroup('大類', '股票', stockCost, stockValue, null);
-    pushGroup('大類', '現金', cashValue, cashValue, null);
-    pushGroup('大類', '實體', physicalCost, physicalValue, null);
+    pushGroup('大類', '股票', stockCost, stockValue, null, totalAssets);
+    pushGroup('大類', '現金', cashValue, cashValue, null, totalAssets);
+    pushGroup('大類', '實體', physicalCost, physicalValue, null, totalAssets);
 
     [['區域', '區域'], ['類型', '類型']].forEach(([dim, key]) => {
       var groups = {};
@@ -710,7 +725,7 @@ var Position = (() => {
       });
       Object.keys(groups).sort().forEach(g => {
         pushGroup(dim, g, groups[g].cost, groups[g].value,
-          groups[g].target > 0 ? groups[g].target : null);
+          groups[g].target > 0 ? groups[g].target : null, stockValue);
       });
     });
 
