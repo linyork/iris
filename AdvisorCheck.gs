@@ -202,7 +202,9 @@ var AdvisorCheck = (() => {
 
   // ─── Trigger 入口（GAS Time-based Trigger 直接呼叫）────────
 
-  ac.runEvening = () => ac.run('18:00');
+  // ⚠️ 這個字串會原封不動寫進 alert_log 的 trigger_source 與 advice_log 的 topic，
+  //    所以它要對得上 Cron.SCHEDULE 實際排的時間（19:00），不是隨手寫的標籤。
+  ac.runEvening = () => ac.run('19:00');
 
   return ac;
 })();

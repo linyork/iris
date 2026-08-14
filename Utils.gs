@@ -42,9 +42,27 @@ var Utils = (() => {
     try { JSON.parse(str); return true; } catch (e) { return false; }
   };
 
+  // ─── 主人允許清單 ────────────────────────────────────────────────
+  //
+  // ⚠️ 拆解 ADMIN_STRING 的地方只能有一個。以前這裡是裸的 `split(',')`，而
+  //    `MessagingServiceFactory.pushToMasters` 有 `.map(trim)` —— 兩份抄本差一個
+  //    字元，方向卻剛好相反：ADMIN_STRING 寫成 "a, b" 時，第二個人**收得到早報、
+  //    講話卻沒人理**。推播那條路認得他，驗身分這條不認得。
+  //
+  //    而且它不會報錯。`doPost` 對非主人是靜默 continue（不回覆、不寫 chat、
+  //    不花配額），consolelog 只留一行「忽略非主人事件」—— 那正是這條路正常
+  //    運作時該有的樣子。症狀只剩下「bot 不理我」。
+  //
+  //    這就是 CLAUDE.md〈Shared seams〉在講的第五個縫：誰是主人，不該取決於是
+  //    哪支程式在問。
+  utils.masterList = () => String((typeof Config !== 'undefined' && Config.ADMIN_STRING) || '')
+    .split(',').map(s => s.trim()).filter(s => s);
+
   utils.checkMaster = (userId) => {
     try {
-      return Config.ADMIN_STRING.split(',').includes(userId);
+      var id = String(userId === null || userId === undefined ? '' : userId).trim();
+      if (!id) return false;
+      return utils.masterList().indexOf(id) >= 0;
     } catch (ex) {
       return false;
     }
@@ -67,9 +85,14 @@ var Utils = (() => {
   };
 
   // 剝除 Markdown 標記 — Telegram 未設 parse_mode 時 ** 會顯示成字面星號
+  //
+  // ⚠️ 刻意不碰 `- ` 開頭的項目符號：一行 `- 500` 到底是項目還是負數，這裡分不出來，
+  //    而項目符號在純文字裡本來就讀得通。標題與分隔線沒有這個歧義，所以剝掉。
   utils.stripMarkdown = (str) => {
     if (typeof str !== 'string') return str;
     return str
+      .replace(/^[ \t]*#{1,6}[ \t]+/gm, '')          // # 標題（只吃後面有空白的，不誤傷 #1）
+      .replace(/^[ \t]*(?:\*{3,}|-{3,}|_{3,})[ \t]*$/gm, '')  // --- 分隔線
       .replace(/\*\*([^*]+)\*\*/g, '$1')   // **粗體**
       .replace(/\*([^*\n]+)\*/g, '$1')     // *斜體*
       .replace(/__([^_\n]+)__/g, '$1')     // __底線粗體__
@@ -120,6 +143,44 @@ var Utils = (() => {
     // 清理超過兩個連續空行
     result = result.replace(/\n{3,}/g, '\n\n');
     return result.trim();
+  };
+
+  // ─── 過期列清理 ──────────────────────────────────────────────────
+  //
+  // consolelog 與 chat 只由 appendRow 寫入，所以過期的列必定是**開頭連續的一整段**。
+  // 舊版一列一次 deleteRow()，n 列就是 n 次 API round-trip —— 而 n 跟著日誌量成長，
+  // 等於清理的成本被寫入量推著走。這裡把要刪的列併成連續區段整段刪：
+  // 正常情況只有一段，就是一次呼叫。
+  //
+  // ⚠️ 由後往前刪。先刪小的列號，後面每一段的位置都會整片往上位移。
+  // ⚠️ 日期讀不出來的列一律**保留**（沿用舊行為）。標題錯位、有人手動插了一列時，
+  //    寧可留著讓人看見，也不要安靜地刪掉 —— 這支的工作是清過期，不是清不認得的東西。
+  //
+  // @param {Sheet}  sheet
+  // @param {number} dateCol 1-based 的日期欄
+  // @param {Date}   cutoff  早於這個時間的列要刪
+  // @returns {number} 實際刪掉幾列
+  utils.purgeRowsBefore = (sheet, dateCol, cutoff) => {
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return 0;
+
+    var values = sheet.getRange(2, dateCol, lastRow - 1, 1).getValues();
+    var ranges = [];   // 每項是 [起始列, 列數]
+    values.forEach((r, i) => {
+      var v = r[0];
+      if (!v || !(new Date(v) < cutoff)) return;   // 讀不出日期 → Invalid Date → 比較為 false
+      var row  = i + 2;
+      var tail = ranges[ranges.length - 1];
+      if (tail && tail[0] + tail[1] === row) tail[1]++;
+      else ranges.push([row, 1]);
+    });
+
+    var removed = 0;
+    for (var k = ranges.length - 1; k >= 0; k--) {
+      sheet.deleteRows(ranges[k][0], ranges[k][1]);
+      removed += ranges[k][1];
+    }
+    return removed;
   };
 
   // 將長訊息依換行點切成 ≤ limit 字元的陣列，供 pushMsg 分段發送

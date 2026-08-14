@@ -42,11 +42,20 @@ var Facts = (() => {
 
       if (totals) {
         lines.push('總資產：' + money(totals.today) + '（' + totals.todayDate + '）');
+        // ⚠️ 三個變動都要把**基準日期**寫出來。快照一天寫一次，而 18:00 那班被砍掉、
+        //    或整天抓不到價，那天就沒有列 —— 「近一週」實際上可能是近兩週。
+        //    Snapshot 現在按日期找基準，但差幾天仍然只有它知道；不印出來的話，
+        //    模型只能照著「近一週」講，而那句話有時候是錯的。
+        var since = (d) => d ? '（基準 ' + d + '）' : '';
         if (totals.dayChange !== null && totals.dayChange !== undefined) {
-          lines.push('　較前一筆快照：' + money(totals.dayChange) + '（' + pct(totals.dayChangePct) + '）');
+          lines.push('　較前一筆快照' + since(totals.yesterdayDate) + '：' +
+            money(totals.dayChange) + '（' + pct(totals.dayChangePct) + '）');
         }
         if (totals.weekChangePct !== null && totals.weekChangePct !== undefined) {
-          lines.push('　近一週：' + pct(totals.weekChangePct) + '　近一月：' + pct(totals.monthChangePct));
+          lines.push('　近一週' + since(totals.weekBaseDate) + '：' + pct(totals.weekChangePct));
+        }
+        if (totals.monthChangePct !== null && totals.monthChangePct !== undefined) {
+          lines.push('　近一月' + since(totals.monthBaseDate) + '：' + pct(totals.monthChangePct));
         }
       }
 

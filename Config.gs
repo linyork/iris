@@ -135,11 +135,10 @@ var Config = (() => {
         _debugModeCache = true;
       }
       return _debugModeCache;
-    },
-
-    clearAllCaches() {
-      _debugModeCache  = null;
-      _aiProviderCache = null;
     }
+
+    // 這裡以前有一支 clearAllCaches()，沒有任何呼叫端，也不會有 ——
+    // 上面兩個快取是模組層級變數，而 GAS 每次執行都重載全部 .gs，
+    // 它們在每一次新執行的起點本來就是 null。清它沒有可用的場合。
   };
 })();

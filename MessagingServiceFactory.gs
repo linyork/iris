@@ -50,8 +50,9 @@ var MessagingServiceFactory = (() => {
    * @returns {number} 實際推播的人數
    */
   factory.pushToMasters = (message) => {
-    var masters = String(Config.ADMIN_STRING || '').split(',')
-      .map(s => s.trim()).filter(s => s);
+    // ⚠️ 不要在這裡自己 split ADMIN_STRING。這份拆解與 Utils.checkMaster 曾經是
+    //    兩份抄本、差一個 trim，於是「收得到推播」與「講話被當成主人」變成兩件事。
+    var masters = Utils.masterList();
     masters.forEach(userId => factory.push(userId, message));
     return masters.length;
   };

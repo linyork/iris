@@ -2587,6 +2587,214 @@ console.log('\nT38  格式壞掉不能偽裝成 0');
   }
 }
 
+// ─── T39  主人允許清單只有一份 ────────────────────────────────────
+//
+// checkMaster 以前是裸的 split(',')，pushToMasters 有 trim。差一個字元，方向卻
+// 相反：ADMIN_STRING 寫成 "a, b" 時第二個人收得到早報、講話卻沒人理。
+// doPost 對非主人是靜默 continue，所以症狀只有「bot 不理我」，什麼都查不到。
+console.log('\nT39  主人允許清單只有一份');
+{
+  const savedAdmin = global.Config.ADMIN_STRING;
+
+  global.Config.ADMIN_STRING = 'TELEGRAM:111,TELEGRAM:222';
+  check('沒有空白時照樣認得', Utils.checkMaster('TELEGRAM:222'), '');
+
+  // 這一行是整個 T39 的重點：逗號後面多一個空白
+  global.Config.ADMIN_STRING = 'TELEGRAM:111, TELEGRAM:222';
+  check('逗號後有空白時仍然是主人', Utils.checkMaster('TELEGRAM:222'), '');
+  check('推播清單看到的是同一批',
+    Utils.masterList().join('|') === 'TELEGRAM:111|TELEGRAM:222',
+    Utils.masterList().join('|'));
+
+  check('不在清單上的不是主人', !Utils.checkMaster('TELEGRAM:999'), '');
+  check('空字串不是主人', !Utils.checkMaster(''), '');
+  check('undefined 不是主人', !Utils.checkMaster(undefined), '');
+
+  // 空的／沒設定的 ADMIN_STRING 不可以變成「誰都是主人」
+  global.Config.ADMIN_STRING = '';
+  check('ADMIN_STRING 空的時候沒有人是主人', !Utils.checkMaster('TELEGRAM:111'), '');
+  check('ADMIN_STRING 空的時候推播清單也是空的', Utils.masterList().length === 0, '');
+
+  global.Config.ADMIN_STRING = savedAdmin;
+}
+
+// ─── T40  過期列一次刪一段，不是一列一次 ──────────────────────────
+//
+// consolelog 與 chat 只由 appendRow 寫入，過期列必定是開頭連續的一整段。
+// 舊版 n 列刪 n 次，而 n 跟著日誌量長 —— 清理成本被寫入量推著走。
+console.log('\nT40  過期列整段刪');
+{
+  const mk = (rows) => {
+    const sh = new Sheet('purge_test', [['timestamp', 'v']].concat(rows));
+    let calls = 0;
+    const real = sh.deleteRows.bind(sh);
+    sh.deleteRows = (r, n) => { calls++; return real(r, n); };
+    return { sh, calls: () => calls };
+  };
+  const cutoff = new Date('2026-08-10T00:00:00+08:00');
+  const older  = ['2026/08/01 09:00:00', '2026/08/02 09:00:00', '2026/08/03 09:00:00'];
+  const newer  = ['2026/08/12 09:00:00', '2026/08/13 09:00:00'];
+
+  {
+    const { sh, calls } = mk(older.concat(newer).map((t, i) => [t, i]));
+    check('刪掉的是過期那幾列', Utils.purgeRowsBefore(sh, 1, cutoff) === 3, '');
+    check('整段只花一次 deleteRows', calls() === 1, String(calls()));
+    check('留下來的是未過期的那些',
+      AssetSchema.readObjects(sh).map(r => r['timestamp']).join('|') === newer.join('|'),
+      AssetSchema.readObjects(sh).map(r => r['timestamp']).join('|'));
+  }
+
+  {
+    // 全部都還沒過期 → 一列都不刪，也不該白花一次呼叫
+    const { sh, calls } = mk(newer.map((t, i) => [t, i]));
+    check('沒有過期列時不刪也不呼叫', Utils.purgeRowsBefore(sh, 1, cutoff) === 0 && calls() === 0, '');
+  }
+
+  {
+    // 日期讀不出來的列一律保留 —— 這支的工作是清過期，不是清不認得的東西
+    const { sh } = mk([[older[0], 0], ['', 1], ['不是日期', 2], [older[1], 3], [newer[0], 4]]);
+    Utils.purgeRowsBefore(sh, 1, cutoff);
+    const left = AssetSchema.readObjects(sh).map(r => String(r['timestamp']));
+    check('空白與非日期的列不會被刪掉',
+      left.indexOf('不是日期') >= 0 && left.indexOf(older[0]) < 0 && left.indexOf(older[1]) < 0,
+      left.join('|'));
+  }
+
+  {
+    // 由後往前刪：先刪小列號的話，後面每一段的位置都會整片位移
+    const { sh, calls } = mk([[older[0], 0], [newer[0], 1], [older[1], 2], [newer[1], 3]]);
+    check('不連續的兩段都刪得掉', Utils.purgeRowsBefore(sh, 1, cutoff) === 2, '');
+    check('不連續時分成兩次呼叫', calls() === 2, String(calls()));
+    check('剩下的正是未過期那兩列',
+      AssetSchema.readObjects(sh).map(r => r['timestamp']).join('|') === newer.join('|'),
+      AssetSchema.readObjects(sh).map(r => r['timestamp']).join('|'));
+  }
+
+  {
+    // 只有標題列
+    const { sh } = mk([]);
+    check('空表回 0 不丟例外', Utils.purgeRowsBefore(sh, 1, cutoff) === 0, '');
+  }
+}
+
+// ─── T41  「近一週」要真的是一週，而且基準日期要講出來 ──────────────
+//
+// 舊版是 rows[len-6] / rows[len-22] —— 往回數 6 列、22 列。那等於假設每個交易日
+// 都剛好留下一筆快照，而 18:00 那班被 GAS 砍掉、或整天抓不到價，那天就沒有列，
+// 「近一週」於是靜靜變成近兩週。而 Facts 把它標成「近一週」餵給模型，旁邊還寫著
+// 「必須原樣引用」。同一種病：下層算得出差別，排版時掉了。
+console.log('\nT41  近一週是按日期找的，不是往回數幾列');
+{
+  const snapSheet = target.getSheetByName('每日快照');
+  const savedRows = snapSheet.rows.map(r => r.slice());
+  const hdr = snapSheet.rows[0].slice();
+
+  // 自己鋪一段有缺口的快照：只有 5 筆，但橫跨 40 天。
+  // 往回數列的話「近一月」會落在第 1 筆之外而回 null；按日期找則找得到。
+  const mk = (date, total, status) => {
+    const row = new Array(hdr.length).fill('');
+    row[0] = date; row[1] = '合計'; row[2] = '總資產'; row[6] = total; row[8] = status;
+    return row;
+  };
+  snapSheet.rows = [hdr,
+    mk('2026-07-05', 1000000, '交易日'),
+    mk('2026-07-28', 1100000, '交易日'),   // 一月前的基準
+    mk('2026-08-01', 1200000, '交易日'),   // 一週前的基準
+    mk('2026-08-06', 1250000, '報價異常'), // 不可信，不能當前一筆
+    mk('2026-08-07', 1300000, '交易日')
+  ];
+  EVAL.reset();
+
+  // 指標的即時總資產會蓋掉「今天」，這裡要測的是快照之間的比較，先讓它讀不到
+  const ms = target.getSheetByName('指標');
+  const savedMetrics = ms.rows.map(r => r.slice());
+  ms.rows = [ms.rows[0].slice()];
+  EVAL.reset();
+
+  const t = Snapshot._totals(target);
+  check('今天取到最後一筆快照', t.todayDate === '2026-08-07', String(t.todayDate));
+  check('前一筆跳過報價異常那天', t.yesterdayDate === '2026-08-01', String(t.yesterdayDate));
+  check('近一週的基準至少七天前', t.weekBaseDate === '2026-07-28', String(t.weekBaseDate));
+  check('近一月的基準至少三十天前', t.monthBaseDate === '2026-07-05', String(t.monthBaseDate));
+  check('缺口大也算得出近一月（舊版往回數 22 列會是 null）',
+    t.monthChangePct !== null, String(t.monthChangePct));
+
+  // 基準日期一路帶到 Facts，模型才講得出自己在跟哪一天比
+  const fb = Facts.build(target);
+  check('事實區塊寫出近一週的基準日', fb.indexOf('近一週（基準 2026-07-28）') >= 0,
+    (fb.split('\n').find(l => l.indexOf('近一週') >= 0) || ''));
+  check('事實區塊寫出近一月的基準日', fb.indexOf('近一月（基準 2026-07-05）') >= 0,
+    (fb.split('\n').find(l => l.indexOf('近一月') >= 0) || ''));
+
+  // 只有一筆快照時三個基準都是 null，不可以拿自己跟自己比生出 0%
+  snapSheet.rows = [hdr, mk('2026-08-07', 1300000, '交易日')];
+  EVAL.reset();
+  const one = Snapshot._totals(target);
+  check('只有一筆時不生出 0% 的假變動',
+    one.dayChangePct === null && one.weekChangePct === null && one.monthChangePct === null,
+    JSON.stringify([one.dayChangePct, one.weekChangePct, one.monthChangePct]));
+
+  snapSheet.rows = savedRows; ms.rows = savedMetrics; EVAL.reset();
+}
+
+// ─── T42  工具失敗不進快取 ────────────────────────────────────────
+//
+// 同一輪內快取工具結果是對的（省一次呼叫），但把**失敗**也快取起來，等於把一次
+// 偶發失敗（TWSE 抽風、試算表鎖住）釘死成這一輪的定論 —— 模型再叫一次本來可能成功。
+console.log('\nT42  工具失敗不進快取');
+{
+  const AI_QUEUE = [];
+  global.AIServiceFactory = { callAPI: () => AI_QUEUE.length ? AI_QUEUE.shift() : null };
+  global.MessagingServiceFactory = { reply: () => {}, push: () => {}, indicateTyping: () => {} };
+
+  const say  = (text) => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text }] } }] });
+  const call = (n) => ({ candidates: [{ content: { parts: [{ functionCall: { name: n, args: {} } }] } }] });
+  const ev   = (text) => ({ platform: 'TELEGRAM', replyToken: '1', sourceId: '1',
+    source: { type: 'user', userId: 'TELEGRAM:1' }, message: { type: 'text', text }, isMaster: true });
+
+  const savedExecute = Tools.execute;
+
+  // 第一次失敗、第二次成功。模型在下一輪用同樣的參數再試一次 ——
+  // 失敗被快取的話它只會拿到同一則錯誤，然後照著跟主人說查不到。
+  let calls = 0;
+  Tools.execute = () => {
+    calls++;
+    return calls === 1
+      ? { ok: false, status: 'error', text: '第一次故意失敗' }
+      : { ok: true, status: 'ok', text: '第二次成功了' };
+  };
+  AI_QUEUE.push(call('getHoldings'), call('getHoldings'), say('持倉查到了。'));
+  const out = ChatBot.reply(ev('我有哪些持倉'));
+  check('同一組參數失敗後會真的再打一次', calls === 2, String(calls));
+  check('第二次成功後答得出來', /持倉查到了/.test(out), out);
+
+  // 成功的仍然要快取，否則「同一輪不要重複呼叫同一個工具」就白講了（T35 ③-b 的反面）
+  calls = 0;
+  Tools.execute = () => { calls++; return { ok: true, status: 'ok', text: '成功' }; };
+  AI_QUEUE.length = 0;
+  AI_QUEUE.push(call('getHoldings'), call('getHoldings'), say('好了。'));
+  ChatBot.reply(ev('查兩次一樣的'));
+  check('成功的結果仍然只執行一次', calls === 1, String(calls));
+
+  Tools.execute = savedExecute;
+  delete global.AIServiceFactory;
+  delete global.MessagingServiceFactory;
+}
+
+// ─── T43  stripMarkdown 也要吃掉標題與分隔線 ──────────────────────
+console.log('\nT43  Markdown 剝除');
+{
+  const s = Utils.stripMarkdown;
+  check('# 標題只剝記號、留文字', s('## 投資組合摘要') === '投資組合摘要', s('## 投資組合摘要'));
+  check('--- 分隔線整行消掉', s('上\n---\n下') === '上\n\n下', JSON.stringify(s('上\n---\n下')));
+  check('*** 分隔線同樣消掉', s('上\n***\n下') === '上\n\n下', JSON.stringify(s('上\n***\n下')));
+  check('#1 這種不是標題，不可以動', s('第 #1 名') === '第 #1 名', s('第 #1 名'));
+  check('項目符號刻意保留（- 500 分不出是項目還是負數）',
+    s('- 500') === '- 500', s('- 500'));
+  check('粗體與行內程式碼照舊剝掉',
+    s('**總資產**是 `100`') === '總資產是 100', s('**總資產**是 `100`'));
+}
+
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);

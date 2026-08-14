@@ -52,19 +52,22 @@ function doPost(e) {
       // document 是上傳的檔案（目前只有 Telegram 會送），下面會分流給 AssetImport
       if (!event.message || (event.message.type !== 'text' && event.message.type !== 'document')) continue;
 
+      // 非主人事件靜默忽略：Telegram bot 公開可搜尋，任何人都能 DM。
+      // 不回覆（避免反射放大）、不寫 chat history、不消耗 LLM 配額。
+      //
+      // ⚠️ 這一關要在記訊息內容**之前**。consolelog 是主人的日誌，不該裝滿
+      //    陌生人送進來的文字；記下 userId 就足以知道有人來過。
+      if (!event.isMaster) {
+        Logger.info('doPost', '忽略非主人事件', event.source.userId);
+        continue;
+      }
+
       Logger.info('doPost', '收到訊息', {
         userId: event.source.userId,
         msg:    event.message.type === 'document'
                   ? '[檔案] ' + (event.message.document || {}).fileName
                   : event.message.text.slice(0, 80)
       });
-
-      // 非主人事件靜默忽略：Telegram bot 公開可搜尋，任何人都能 DM。
-      // 不回覆（避免反射放大）、不寫 chat history、不消耗 LLM 配額。
-      if (!event.isMaster) {
-        Logger.info('doPost', '忽略非主人事件', event.source.userId);
-        continue;
-      }
 
       // 開始處理就先送「正在輸入…」，讓使用者馬上看到反應
       MessagingServiceFactory.indicateTyping(event);
@@ -152,39 +155,27 @@ function dailyCleanUp() {
 
     var ss = SpreadsheetApp.openById(Config.SHEET_ID);
 
-    // 清除超過 10 天的 consolelog
+    // 兩張表都走 Utils.purgeRowsBefore：它把要刪的列併成連續區段整段刪掉。
+    // 這兩張只由 appendRow 寫入，過期列必定是開頭連續的一段，所以正常情況
+    // 各只花一次 API 呼叫 —— 舊版是一列一次 deleteRow()，而列數跟著日誌量長。
+
+    // 清除超過 10 天的 consolelog（時間戳在第 1 欄）
     var logSheet = ss.getSheetByName('consolelog');
     if (logSheet) {
       var logCutoff = new Date();
       logCutoff.setDate(logCutoff.getDate() - 10);
-      var logLastRow = logSheet.getLastRow();
-      if (logLastRow >= 2) {
-        var logData   = logSheet.getRange(2, 1, logLastRow - 1, 1).getValues();
-        var logDelete = [];
-        for (var i = logData.length - 1; i >= 0; i--) {
-          if (logData[i][0] && new Date(logData[i][0]) < logCutoff) logDelete.push(i + 2);
-        }
-        logDelete.forEach(r => logSheet.deleteRow(r));
-        if (logDelete.length > 0) Logger.info('dailyCleanUp', '清除過期 consolelog ' + logDelete.length + ' 筆');
-      }
+      var logRemoved = Utils.purgeRowsBefore(logSheet, 1, logCutoff);
+      if (logRemoved > 0) Logger.info('dailyCleanUp', '清除過期 consolelog ' + logRemoved + ' 筆');
     }
 
-    // 清除超過 30 天的 chat 紀錄
+    // 清除超過 30 天的 chat 紀錄（時間戳在第 4 欄）
     var chatSheet = ss.getSheetByName('chat');
     if (chatSheet) {
-      var cutoff  = new Date();
+      var cutoff = new Date();
       cutoff.setDate(cutoff.getDate() - Config.CHAT_CLEANUP_DAYS);
-      var lastRow = chatSheet.getLastRow();
-      if (lastRow >= 2) {
-        var data    = chatSheet.getRange(2, 4, lastRow - 1, 1).getValues();
-        var toDelete = [];
-        for (var i = data.length - 1; i >= 0; i--) {
-          if (data[i][0] && new Date(data[i][0]) < cutoff) toDelete.push(i + 2);
-        }
-        toDelete.forEach(r => chatSheet.deleteRow(r));
-        if (toDelete.length > 0) {
-          Logger.info('dailyCleanUp', '清除過期對話 ' + toDelete.length + ' 筆');
-        }
+      var chatRemoved = Utils.purgeRowsBefore(chatSheet, 4, cutoff);
+      if (chatRemoved > 0) {
+        Logger.info('dailyCleanUp', '清除過期對話 ' + chatRemoved + ' 筆');
       }
     }
   } catch (ex) {

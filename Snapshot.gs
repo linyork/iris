@@ -71,9 +71,56 @@ var Snapshot = (() => {
   };
 
   /**
-   * 總資產指標：今日 vs 昨日 vs 上週 vs 上月。
+   * 這幾種狀態的那一天不能拿來當比較基準（狀態的定義見 DataSync）：
+   *   報價異常   — 有持股抓不到市價，總資產是短計的
+   *   資料未更新 — 每一檔都和前一次快照一模一樣，可能是國定假日，也可能是整批抓價失敗
+   * 「休市」不在內：週末的收盤價本來就是週五那一筆，拿它當基準是對的。
+   * 這份名單與 GoogleSheet.getHistory 對主人講的那句話一致 —— 那裡已經說了
+   * 這兩種「不可信，算波動或漲跌前要先排除」，這裡是同一條規則的執行面。
+   */
+  var UNTRUSTED_STATUS = { '報價異常': true, '資料未更新': true };
+
+  /**
+   * 'yyyy-MM-dd' 加減天數，純字串運算。
+   * ⚠️ 不走 Utilities.formatDate：那要指定時區，而這些日期本來就是試算表的本地日，
+   *    繞一趟時區只會多一個對不齊的機會。用 UTC 當算盤，進出都是同一種字串。
+   */
+  var _shiftYmd = (ymd, days) => {
+    var m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    var d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    d.setUTCDate(d.getUTCDate() + days);
+    var p2 = (n) => (n < 10 ? '0' : '') + n;
+    return d.getUTCFullYear() + '-' + p2(d.getUTCMonth() + 1) + '-' + p2(d.getUTCDate());
+  };
+
+  /**
+   * 往回找一筆可以當基準的快照：日期距離 today 至少 days 天，且那天的狀態可信。
+   * days = 0 就是「前一筆可信的快照」。
+   *
+   * ⚠️ 不可以改回「往回數 N 列」。那等於假設每一個交易日都剛好留下一筆快照，
+   *    而 18:00 那班被 GAS 砍掉、或整天抓不到價，那天就沒有列 —— 於是「近一週」
+   *    會靜靜地變成近兩週，而數字照樣印得跟真的一樣。這正是這個專案一再遇到的
+   *    那種病：下層算得出差別，排版時掉了，模型只能照著講。
+   *    所以基準的**日期**要一路帶到 Facts，讓它講得出來自己在跟哪一天比。
+   */
+  var _baseline = (rows, todayDate, days) => {
+    var cutStr = _shiftYmd(todayDate, -days);
+    for (var i = rows.length - 2; i >= 0; i--) {
+      if (cutStr && rows[i].date > cutStr) continue;        // 還太近
+      if (UNTRUSTED_STATUS[rows[i].status]) continue;       // 那天的數字不可信
+      return rows[i];
+    }
+    return null;
+  };
+
+  /**
+   * 總資產指標：今日 vs 前一筆 vs 一週前 vs 一月前。
    * 「今天」取「指標」的即時總資產而非快照最後一列 —— 快照一天只寫一次，
    * 盤中拿它當今天會落後一整天。
+   *
+   * 三個基準都是**按日期**往回找的，而且會跳過不可信的那幾天，
+   * 各自的實際日期也一併回傳（yesterdayDate / weekBaseDate / monthBaseDate）。
    */
   snap._totals = (ss) => {
     var rows = _totalHistory(ss, 40);
@@ -95,15 +142,20 @@ var Snapshot = (() => {
 
     if (rows.length === 0) return null;
 
-    var today = rows[rows.length - 1];
-    var yesterday = rows.length >= 2 ? rows[rows.length - 2] : null;
-    var weekAgo = rows.length >= 6 ? rows[rows.length - 6] : null;     // 約 5 個交易日前
-    var monthAgo = rows.length >= 22 ? rows[rows.length - 22] : null;  // 約 21 個交易日前
+    var today     = rows[rows.length - 1];
+    var yesterday = _baseline(rows, today.date, 0);    // 前一筆可信的快照
+    var weekAgo   = _baseline(rows, today.date, 7);
+    var monthAgo  = _baseline(rows, today.date, 30);
 
     return {
       todayDate: today.date,
       today: _round(today.total),
       yesterday: yesterday ? _round(yesterday.total) : null,
+      // 基準的日期要跟著比例一起出去。少了它，「近一週」在快照有缺口時
+      // 會是近兩週，而讀的人（與模型）沒有任何辦法察覺。
+      yesterdayDate: yesterday ? yesterday.date : null,
+      weekBaseDate:  weekAgo ? weekAgo.date : null,
+      monthBaseDate: monthAgo ? monthAgo.date : null,
       dayChange: yesterday ? _round(today.total - yesterday.total) : null,
       dayChangePct: yesterday ? _round(_pct(today.total, yesterday.total), 4) : null,
       weekChangePct: weekAgo ? _round(_pct(today.total, weekAgo.total), 4) : null,

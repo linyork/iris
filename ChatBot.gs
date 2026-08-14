@@ -166,7 +166,10 @@ var ChatBot = (() => {
             } else {
               Logger.info('ChatBot.reply', '呼叫工具', { name: name, args: args });
               result = Tools.execute(name, args);
-              calledTools[callKey] = result;
+              // ⚠️ 只快取成功的。失敗多半來自外部（TWSE 抽風、NIM 斷線、試算表鎖住），
+              //    快取起來等於把一次偶發失敗釘死成這一輪的定論 —— 模型再叫一次本來
+              //    可能就成功了，卻只會拿到同一則錯誤，然後照著它跟主人說查不到。
+              if (result.ok) calledTools[callKey] = result;
               Logger.info('ChatBot.reply', '工具回傳', {
                 name:   name,
                 status: result.status,

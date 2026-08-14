@@ -86,7 +86,7 @@ renaming or relocating them fails silently:
 
 ### Request Flow
 1. `Main.gs` — `doPost()` receives the LINE **or** Telegram webhook, normalizes it into a single LINE-shaped event object, deduplicates via `CacheService` (6h TTL), silently drops non-master events, calls `ChatBot.reply()`
-2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 5 turns; the cap is not the time guard — each turn checks `Utils.execElapsedMs()` and stops opening new ones past 200s). Injects short-term memory, standing knowledge, the `Facts` block and recent `AdviceLog` entries into the system context. Caches tool results within a turn, strips Markdown before returning, and blocks a 「已記錄」 claim that the ledger does not corroborate.
+2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 5 turns; the cap is not the time guard — each turn checks `Utils.execElapsedMs()` and stops opening new ones past 200s). Injects short-term memory, standing knowledge, the `Facts` block and recent `AdviceLog` entries into the system context. Caches **successful** tool results within a turn (a failure is not cached — an over-eager cache would pin one flaky TWSE call as this turn's verdict, when the model's retry might well have worked), strips Markdown before returning, and blocks a 「已記錄」 claim that the ledger does not corroborate.
 3. `AIServiceFactory.gs` — Routes to `GeminiService` or `NvidiaService` based on `env!B3`. NVIDIA path goes through `AIAdapter` (Gemini ↔ OpenAI format conversion) so the rest of the codebase always speaks Gemini format.
 4. `Tools.gs` — Defines and executes **22** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. `execute()` returns an envelope, `{ok, status, text}` — `status` is `ok` / `invalid_args` / `error`, and `ChatBot` sends it to the model alongside the text so a failure cannot be read as data (see [工具回傳要分得出成功與失敗](#工具回傳要分得出成功與失敗)). Grouped by which layer they touch:
    - **Computed-layer reads** (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, answering "what do I have now".
@@ -289,7 +289,7 @@ callback because the ReAct loop takes far longer than anyone will hold a sheet o
 
 ### Shared seams — don't re-copy these
 
-Four things used to exist as near-identical copies scattered across modules. Each copy drifted
+Five things used to exist as near-identical copies scattered across modules. Each copy drifted
 slightly from the others, and in every case the drift was unintentional. If you need one of these,
 call it — do not paste a local variant.
 
@@ -298,7 +298,21 @@ call it — do not paste a local variant.
 | `Prompt.systemContext({scope, period, knowledge, stm})` | hand-rolling `[System Info]` + the date/year rules | The date rules existed in 4 places (`ChatBot` + 3 reports). Miss one and that loop quotes last year's news as today's. |
 | `_generateReport(spec)` in `DailyReport.gs` | copying the gather → prompt → SMART → push skeleton | Daily/weekly/monthly differ *only* in what they feed and what they ask. A fourth report is one more spec, not one more function. |
 | `AssetSchema.num()` / `.str()` | a local `_num` / `_str` | Seven modules each carried one, differing by a character or two — some caught `Loading...`, some didn't. An uncaught error value becomes `NaN` and `NaN` propagates through every total without raising anything. |
-| `MessagingServiceFactory.pushToMasters(msg)` | splitting `ADMIN_STRING` yourself | Five copies of the same three lines. Who gets a notification shouldn't depend on which scheduled job sent it. |
+| `Utils.masterList()` | splitting `ADMIN_STRING` yourself | See below — the two copies disagreed about whitespace, and the disagreement split "is a master" from "gets the pushes". |
+| `MessagingServiceFactory.pushToMasters(msg)` | looping the allowlist yourself | Five copies of the same three lines. Who gets a notification shouldn't depend on which scheduled job sent it. |
+
+**The allowlist copy is the one that actually bit, and it shows why this table exists.**
+`pushToMasters` trimmed each entry; `Utils.checkMaster` was a bare `split(',').includes(userId)`.
+One character apart, in opposite directions: write `ADMIN_STRING` as `"a, b"` and the second
+master **receives every scheduled push but is not recognised when they speak**.
+
+Nothing reports it. `doPost` handles a non-master by silently `continue`-ing — no reply, no chat
+row, no LLM spend — and `consolelog` gets one line reading 「忽略非主人事件」, which is exactly
+what that path looks like when it is working correctly. The only symptom is "the bot ignores me".
+
+Both now go through `Utils.masterList()`, which trims and drops empties; `checkMaster` trims the
+incoming id too. `T39` pins the spaced form, and pins that an empty `ADMIN_STRING` makes *nobody*
+a master rather than everybody.
 
 The `AssetSchema.num` / `.str` aliases inside each module are written as
 `var _num = (v) => AssetSchema.num(v);`, **not** `var _num = AssetSchema.num;` — GAS gives no
@@ -675,6 +689,17 @@ retention, 3-day rollup) but the ordering is the invariant, not the slack.
 Each run recomputes the last 3 days and **overwrites** rows for those dates, so a missed schedule
 backfills itself and a manual run never doubles a row.
 
+The purge itself goes through `Utils.purgeRowsBefore(sheet, dateCol, cutoff)`, which groups the
+expired rows into contiguous runs and calls `deleteRows(start, count)` once per run. `consolelog`
+and `chat` are written only by `appendRow`, so the expired rows are always one leading block —
+one API call, not one per row. That matters because the row count is driven by logging volume:
+the old per-row loop made cleanup cost grow with exactly the thing that fills the sheet.
+
+⚠️ **Delete back to front.** Removing a low row number shifts every later run up, so the ranges
+are consumed in reverse. ⚠️ **A row whose date cell won't parse is kept**, not deleted — this
+function's job is expiry, not tidying up rows it doesn't recognise. `T40` pins both, plus the
+call count.
+
 ⚠️ **Do not re-parse the timestamp into a `Date`.** `GoogleSheet.setLog` already wrote it as a
 GMT+8 string; parsing it back with the execution's timezone and re-formatting to GMT+8 shifts the
 whole day when the two conversions don't cancel — and the symptom is "yesterday has no data",
@@ -875,6 +900,28 @@ day-change data after the close. It was equally inert before — the zeros faile
 threshold — so this changed nothing except making the reason visible. Fixing it means changing
 the schedule or the data source, not treating `null` as `0`.
 
+### 比較的基準要按日期找，而且要講出是哪一天
+
+`Snapshot._totals` used to pick its baselines by counting rows back: `rows[len-6]` for 近一週,
+`rows[len-22]` for 近一月. That assumes every trading day left exactly one snapshot — and the
+18:00 job gets killed, or a whole day comes back with no prices and writes nothing. Miss two days
+and 「近一週」 silently becomes 近兩週, printed with the same confidence as ever.
+
+Baselines are now found **by date** (`_baseline(rows, todayDate, days)`), and days whose `狀態` is
+`報價異常` or `資料未更新` are skipped — the same two `GoogleSheet.getHistory` already tells the
+owner are 「不可信，算波動或漲跌前要先排除」. `休市` stays eligible: a weekend's close *is*
+Friday's close.
+
+⚠️ **The baseline date is part of the answer, not metadata.** `_totals` returns `yesterdayDate` /
+`weekBaseDate` / `monthBaseDate` and `Facts` prints them, because how far back the comparison
+actually reaches is knowable only there — and the model is told to quote the block verbatim.
+This is the same failure as 「拿不到就說拿不到」: the lower layer can tell the difference, the
+formatting layer drops it, and the model has no material left to be honest with.
+
+`_shiftYmd` does the date arithmetic on `yyyy-MM-dd` strings via UTC rather than
+`Utilities.formatDate` — these dates are the spreadsheet's local days, and routing them through a
+timezone only adds a place for them to land one day off.
+
 ### 面板 vs 指標
 
 Two tabs, one number set, on purpose:
@@ -1060,11 +1107,10 @@ contains the bot token; never log it.
 fine — that is the owner's own project and where the data lives anyway. The repo is the line.
 
 - Test fixtures pulled from the real spreadsheets live in `*.data`, which `.gitignore`
-  excludes. `legacy_fixture.data` and `datasync_fixture.data` are regenerated by dumping the
-  sheets, not by hand.
+  excludes. `legacy_fixture.data` is regenerated by dumping the sheets, not by hand.
 - Test files **are** committed, so they must contain no balances, share counts, costs or
   totals. Derive every expected value from the fixture at runtime (`EXP`, `HOLD`, `H0` in
-  `test_asset.cjs`; `REC_HDR`, `HOLDINGS`, `CASH` in `test_datasync.cjs`). Synthetic numbers
+  `test_asset.cjs`). Synthetic numbers
   invented by a test are fine.
 - The same applies to docs. Describe *what* is reconciled, not the amounts.
 - Tickers, account names and sheet layout are not covered by this — they do not disclose
