@@ -5,13 +5,15 @@
  * 格式轉換由 AIAdapter 負責，此層純 I/O。
  *
  * 思考模式依模型廠商分流。**NIM 沒有統一開關，每家形狀都不一樣**：
- *   deepseek-ai/deepseek-v4* → chat_template_kwargs.{thinking(bool)[, reasoning_effort]}（現役預設）
- *   z-ai/glm*                → chat_template_kwargs.{enable_thinking, clear_thinking}
+ *   moonshotai/kimi*         → chat_template_kwargs.{thinking(bool)}（現役預設，2026-09-24 起）
+ *   deepseek-ai/deepseek-v4* → chat_template_kwargs.{thinking(bool)[, reasoning_effort]}（已退役，保留分支備查——同家族日後可能再上架）
+ *   z-ai/glm*                → chat_template_kwargs.{enable_thinking, clear_thinking}（實測只降低推理量，關不乾淨，見 Config.gs NVIDIA_MODELS 註解）
  *   openai/gpt-oss*          → **top-level** reasoning_effort（現役備援）
  *   minimaxai/*              → 無開關，恆為 reasoning 模式（該模型已退役，保留說明備查）
  *
  * ⚠️ DeepSeek V4 系列必須明確送出 chat_template_kwargs，否則 NIM 端會 hang（不是回錯，是不回）。
  *    因此該分支無論開或關思考都一定送出這個欄位，不可因 thinking=false 就省略。
+ *    kimi 沒有實測過省略會不會 hang，比照辦理一樣一律送出。
  *
  * ⚠️ gpt-oss 的 reasoning_effort 只有放在 **top-level** 才生效。2026-08-05 實測，
  *    放進 chat_template_kwargs、或改用 system 訊息 `Reasoning: low`，推理量都不降反升
@@ -48,7 +50,12 @@ var NvidiaService = (() => {
             }
 
             // 思考模式控制
-            if (modelName.indexOf('deepseek-ai/deepseek-v4') === 0) {
+            if (modelName.indexOf('moonshotai/kimi') === 0) {
+                // kimi-k3：實測 chat_template_kwargs.thinking 是有效的布林開關
+                // （2026-09-24 find-nim-model：thinking=false 時推理長度乾淨歸零）。
+                // 形狀與 deepseek-v4 相同，但 reasoning_effort 欄位未驗證過，故不送。
+                payload.chat_template_kwargs = { thinking: options.enableThinking === true };
+            } else if (modelName.indexOf('deepseek-ai/deepseek-v4') === 0) {
                 // DeepSeek V4 系列：thinking 為布林開關，開啟時附 reasoning_effort。
                 // 這個欄位一定要送 —— 缺了 NIM 會 hang 住不回應（見檔頭警告）。
                 var dsThinking = options.enableThinking === true;

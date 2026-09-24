@@ -97,7 +97,7 @@ renaming or relocating them fails silently:
 5. `GoogleSheet.gs` — System tabs (chat / memory / knowledge / log) plus the formatting layer for asset queries, which read through `Snapshot`. Single spreadsheet instance cached per execution.
 
 ### AI Provider Switching
-Switch provider by setting `env!B3` in the Google Sheet to `GEMINI` or `NVIDIA`. Model tiers (`LITE`/`FAST`/`SMART`) are defined in `Config.gs` for both providers. Current NVIDIA model: `deepseek-ai/deepseek-v4-flash-0731` for all tiers (284B MoE, 1M context, native function calling, `temperature 1.0` / `top_p 0.95` per NVIDIA's reference). ⚠️ The undated `deepseek-ai/deepseek-v4-flash` **reached EOL on 2026-08-07 and returns 410** — see [下架的症狀是「講話變笨」](#下架的症狀是講話變笨).
+Switch provider by setting `env!B3` in the Google Sheet to `GEMINI` or `NVIDIA`. Model tiers (`LITE`/`FAST`/`SMART`) are defined in `Config.gs` for both providers. Current NVIDIA model: `moonshotai/kimi-k3` for all tiers (native function calling, clean thinking on/off via `chat_template_kwargs.thinking`, no official temperature/top_p guidance so those are left unset). ⚠️ `deepseek-ai/deepseek-v4-flash-0731` (the previous default) **disappeared from `/v1/models` on 2026-09-24 — delisted, not overloaded** — see [下架的症狀是「講話變笨」](#下架的症狀是講話變笨).
 
 **Thinking is controllable on this model, and the tiers use it as the fast/quality dial:**
 
@@ -107,15 +107,17 @@ Switch provider by setting `env!B3` in the Google Sheet to `GEMINI` or `NVIDIA`.
 | `SMART` | daily/weekly/monthly reports, `AdvisorCheck` — scheduled background | `true` |
 | `LITE` | (no caller yet) | `false` |
 
-Control goes out as `chat_template_kwargs: {thinking, reasoning_effort}` from the `deepseek-ai/deepseek-v4` branch in `NvidiaService.gs`. ⚠️ **That field must always be sent for V4 models — omitting it makes NIM hang rather than error.** Reasoning text comes back in `reasoning_content` (separated by `AIAdapter.fromOpenAIResponse`) and consumes the `max_tokens` budget, which is why `SMART` gets a much larger budget than `FAST`.
+Control goes out as `chat_template_kwargs: {thinking}` from the `moonshotai/kimi` branch in `NvidiaService.gs` — same shape as the retired `deepseek-ai/deepseek-v4` branch, verified 2026-09-24 (`thinking: false` takes reasoning length to zero cleanly). Reasoning text comes back in `reasoning_content` (separated by `AIAdapter.fromOpenAIResponse`) and consumes the `max_tokens` budget, which is why `SMART` gets a much larger budget than `FAST`.
 
 ⚠️ **Every model family shapes that switch differently — NIM has no common flag.** `NvidiaService.gs`
-branches per family: deepseek uses `chat_template_kwargs.thinking`, glm uses
-`chat_template_kwargs.{enable_thinking, clear_thinking}`, gpt-oss uses a **top-level**
+branches per family: kimi and deepseek use `chat_template_kwargs.thinking`, glm uses
+`chat_template_kwargs.{enable_thinking, clear_thinking}` — and for `z-ai/glm-5.3` that flag only
+*lowers* reasoning length, it does not zero it out, so don't treat "has a thinking-off branch" as
+"thinking is actually off" without checking the reasoning length — gpt-oss uses a **top-level**
 `reasoning_effort` (nothing else works for it). Adding a model means adding a branch; miss it and
 thinking silently stays on, which mostly shows up as latency rather than an error.
 
-**Resilience.** deepseek-v4-flash-0731 is popular on NIM and overloads often (503 `ResourceExhausted`, 504, 529, and dropped connections). Two layers cover this: `NvidiaService.callAPI` retries 3× with 2s→4s backoff, counting **both** bad status codes and thrown connection exceptions as retryable; if it still returns null, `AIServiceFactory` falls back once to `Config.NVIDIA_FALLBACK_MODEL` (`openai/gpt-oss-20b`, 21B MoE, native function calling, thinking dialled down to `low`).
+**Resilience.** Popular NIM models overload often (503 `ResourceExhausted`, 504, 529, and dropped connections) — this was true of deepseek-v4-flash-0731 and should be assumed of whatever runs as primary. Two layers cover this: `NvidiaService.callAPI` retries 3× with 2s→4s backoff, counting **both** bad status codes and thrown connection exceptions as retryable; if it still returns null, `AIServiceFactory` falls back once to `Config.NVIDIA_FALLBACK_MODEL` (`openai/gpt-oss-20b`, 21B MoE, native function calling, thinking dialled down to `low`).
 
 ⚠️ **The fallback never announces its own death.** A delisted fallback is invisible until the
 primary also fails, and then both layers are gone at once. Verify it whenever you change the
@@ -860,7 +862,16 @@ The replacement is the same model under a dated id, `-0731`. `NvidiaService` mat
 ⚠️ **A dated id can EOL too.** The undated one was supposed to be the stable alias and it was the
 one that died. Nothing here is permanent; the `find-nim-model` skill exists because this recurs.
 
-### 拿不到就說拿不到，不要生一個 0 出來
+**It recurred.** `-0731` itself was gone from `/v1/models` by 2026-09-24 — this time caught before
+a quality complaint, by asking "is it still on the menu" directly rather than waiting for a reply to
+read wrong. The whole deepseek-v4 family was unreachable that day: `deepseek-ai/deepseek-v4.1-flash`
+was still listed but 504'd for the full ~300s gateway timeout, alone and in a batch, so it wasn't a
+same-family same-branch swap this time. `find-nim-model`'s four gates threw out three more of the
+2026-08-09 candidate pool that had since vanished from the catalog entirely
+(`gpt-oss-120b`/`minimax-m3`/`step-3.7-flash`/`llama-3.3-70b-instruct`), and of the fresh candidates
+`z-ai/glm-5.3-flash` failed the decisive faithfulness gate outright (thinking wouldn't turn off,
+burned the whole token budget, no reply) — the new primary is `moonshotai/kimi-k3`, a new family,
+needing its own `NvidiaService` branch. See [AI Provider Switching](#ai-provider-switching).
 
 `StockPrice.getRawPrices` returns `changePct: null`, never `0`, when there is no trade price
 for today (`isClosed` — MIS's `z` field is empty or `-`: outside trading hours, a holiday, or a

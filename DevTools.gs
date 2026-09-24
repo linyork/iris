@@ -222,18 +222,23 @@ function testNimCandidateModels() {
 
   // ⚠️ 清單裡一定要有一顆現役模型當對照組（目前是 gpt-oss-20b）。
   //    它若也失敗，代表是 API key／網路／NIM 整體壅塞，不是候選的問題。
-  // ⚠️ 已知會拖垮整批的不要放進來：mistral-medium-3.5-128b、z-ai/glm-5.2，
-  //    單顆會吃滿 NIM 的 ~300s 閘道逾時，而 fetchAll 等整批。要測請單獨跑。
+  //
+  // 2026-09-24：deepseek-ai/deepseek-v4-flash-0731（原 NVIDIA_DEFAULT_MODEL）已從
+  // /v1/models 目錄消失 —— 下架，不是過載。上一輪（2026-08-09）测过的候選裡，
+  // gpt-oss-120b／minimaxai/minimax-m3／stepfun-ai/step-3.7-flash／
+  // meta/llama-3.3-70b-instruct 這次一併確認也已從目錄消失，換成目錄現有的新面孔。
+  // 已知會拖垮整批的不要放進來：單顆吃滿 NIM 的 ~300s 閘道逾時，而 fetchAll 等整批，
+  // 要測請單獨跑。
   var CANDIDATES = [
-    'deepseek-ai/deepseek-v4-flash-0731',        // ★ 最可能的直接替代：同家族的日期版
+    'deepseek-ai/deepseek-v4.1-flash',           // ★ 最可能的直接替代：同家族的下一版
     'openai/gpt-oss-20b',                        // 對照組（現役備援）
-    'openai/gpt-oss-120b',
-    'minimaxai/minimax-m3',
     'moonshotai/kimi-k2.6',
-    'stepfun-ai/step-3.7-flash',
+    'moonshotai/kimi-k3',
+    'z-ai/glm-5.3',
+    'z-ai/glm-5.3-flash',
     'nvidia/nemotron-3-super-120b-a12b',
     'nvidia/nemotron-nano-3-30b-a3b',
-    'meta/llama-3.3-70b-instruct',
+    'mistralai/mistral-large-2-instruct',
     'google/gemma-4-31b-it'
   ];
 
@@ -314,6 +319,54 @@ function testNimCandidateModels() {
 }
 
 /**
+ * 單獨測一顆模型的可用性，不進 fetchAll 批次。
+ *
+ * 2026-09-24：deepseek-ai/deepseek-v4.1-flash 在 testNimCandidateModels() 的批次裡
+ * 504 了，且耗光整批 302s 預算——批次測試分不出「這顆真的死了」還是「單純比較慢，
+ * 拖累了同批的其他 9 顆」。它是目前最可能的直接替代（同家族），值得單獨確認一次。
+ */
+function testNimSingleModel(modelId) {
+  modelId = modelId || 'deepseek-ai/deepseek-v4.1-flash';
+  console.log('單獨測試: ' + modelId);
+
+  var url     = Config.NVIDIA_API_BASE + '/chat/completions';
+  var payload = {
+    model:      modelId,
+    messages:   [{ role: 'user', content: '請用一句話說明你是哪個模型。' }],
+    max_tokens: 64,
+    temperature: 0.7
+  };
+  if (modelId.indexOf('deepseek-ai/deepseek-v4') === 0) {
+    payload.chat_template_kwargs = { thinking: false };
+  } else if (modelId.indexOf('z-ai/glm') === 0) {
+    payload.chat_template_kwargs = { enable_thinking: false, clear_thinking: true };
+  }
+
+  var t = Date.now();
+  var resp;
+  try {
+    resp = UrlFetchApp.fetch(url, {
+      method:  'post',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': 'Bearer ' + Config.NVIDIA_API_KEY,
+        'Accept':        'application/json'
+      },
+      payload:            JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+  } catch (ex) {
+    console.log('❌ 連線例外（' + (Date.now() - t) + 'ms）: ' + ex);
+    return;
+  }
+
+  var ms   = Date.now() - t;
+  var code = resp.getResponseCode();
+  console.log((code === 200 ? '✅' : '❌') + ' HTTP ' + code + '（' + ms + 'ms）');
+  console.log(resp.getContentText('UTF-8').slice(0, 400));
+}
+
+/**
  * 關卡二：對已知打得到的模型測 Function Calling 與中文。
  *
  * ⚠️ 必須與關卡一分成兩支函式：fetchAll 會等整批都回來，一顆卡住就綁死全部。
@@ -321,17 +374,18 @@ function testNimCandidateModels() {
  * 先測工具呼叫再測中文：工具呼叫才是能不能接手的決定性條件。
  */
 function testNimModelCapability() {
-  // 填 testNimCandidateModels() 探測結果中通過的那些。
+  // 2026-09-24 testNimCandidateModels() 探測結果：10 顆進 5 顆。
+  // 淘汰的：deepseek-v4.1-flash（504，耗光整批預算——已另開 testNimSingleModel()
+  // 單獨確認，不在這裡搶批次)、kimi-k2.6／nemotron-nano-3-30b-a3b／
+  // mistral-large-2-instruct（404，帳號打不到）、nemotron-3-super-120b-a12b（503 過載）。
   // ⚠️ 探測過關不代表扛得住真實請求：帶工具 schema 的請求重得多，
-  //    有模型在這一關才 504 並拖滿整批（已見過 z-ai/glm-5.2、llama-3.3-70b）。
-  //    在這裡 504 的模型下次就別再放進批次。
+  //    有模型在這一關才 504 並拖滿整批。在這裡 504 的模型下次就別再放進批次。
   var MODELS = [
-    'deepseek-ai/deepseek-v4-flash-0731',
     'openai/gpt-oss-20b',
-    'openai/gpt-oss-120b',
-    'minimaxai/minimax-m3',
-    'nvidia/nemotron-3-super-120b-a12b',
-    'meta/llama-3.3-70b-instruct'
+    'moonshotai/kimi-k3',
+    'z-ai/glm-5.3',
+    'z-ai/glm-5.3-flash',
+    'google/gemma-4-31b-it'
   ];
 
   var DEADLINE_MS = 4.5 * 60 * 1000;
@@ -449,41 +503,41 @@ function testNimThinkingOff() {
 
   var QUESTION = '請用一句話說明你是哪個模型，並回答台股的交易時間。';
 
-  // 每個案例 = 一種「模型 × 關思考手法」的組合
-  // 2026-08-09：改測新主模型的候選。每顆都是「預設 vs 嘗試關掉」一對，
-  // 才看得出關思考的寫法有沒有生效（只看單邊會把「本來就不思考」誤判成「關成功」）。
+  // 2026-09-24：deepseek-v4-flash-0731 已下架、v4.1-flash 單獨測也 504，退出候選。
+  // 這裡改測 testNimModelCapability() 通過 Function Calling 的四顆 ——
+  // gemma-4-31b-it 不是思考模型，不需要這一關。
+  // 每個案例 = 一種「模型 × 關思考手法」的組合，「預設 vs 嘗試關掉」成對才看得出
+  // 關的寫法有沒有生效（只看單邊會把「本來就不思考」誤判成「關成功」）。
+  // kimi-k3 形狀未知：中文測那輪 54765ms 的延遲很像在燒推理預算，所以同時試兩種猜法。
   var CASES = [
-    { label: 'deepseek-v4-flash-0731  預設', model: 'deepseek-ai/deepseek-v4-flash-0731', noThink: false },
-    { label: 'deepseek-v4-flash-0731  thinking=false', model: 'deepseek-ai/deepseek-v4-flash-0731', noThink: true },
-    { label: 'gpt-oss-120b            預設', model: 'openai/gpt-oss-120b', noThink: false },
-    { label: 'gpt-oss-120b            effort=low(top)', model: 'openai/gpt-oss-120b', noThink: true },
-    { label: 'minimax-m3              預設', model: 'minimaxai/minimax-m3', noThink: false },
-    { label: 'minimax-m3              thinking=false', model: 'minimaxai/minimax-m3', noThink: true },
-    { label: 'nemotron-3-super-120b   預設', model: 'nvidia/nemotron-3-super-120b-a12b', noThink: false },
-    { label: 'nemotron-3-super-120b   /no_think', model: 'nvidia/nemotron-3-super-120b-a12b', noThink: true }
+    { label: 'gpt-oss-20b   預設',                 model: 'openai/gpt-oss-20b', mode: 'default' },
+    { label: 'gpt-oss-20b   effort=low(top)',      model: 'openai/gpt-oss-20b', mode: 'gptoss-off' },
+    { label: 'glm-5.3       預設',                 model: 'z-ai/glm-5.3', mode: 'default' },
+    { label: 'glm-5.3       enable_thinking=false', model: 'z-ai/glm-5.3', mode: 'glm-off' },
+    { label: 'glm-5.3-flash 預設',                 model: 'z-ai/glm-5.3-flash', mode: 'default' },
+    { label: 'glm-5.3-flash enable_thinking=false', model: 'z-ai/glm-5.3-flash', mode: 'glm-off' },
+    { label: 'kimi-k3       預設',                 model: 'moonshotai/kimi-k3', mode: 'default' },
+    { label: 'kimi-k3       thinking=false(猜)',   model: 'moonshotai/kimi-k3', mode: 'kimi-off-kwargs' },
+    { label: 'kimi-k3       /no_think(猜)',        model: 'moonshotai/kimi-k3', mode: 'kimi-off-system' }
   ];
 
   // ⚠️ 每一家的形狀都不同，而且**寫錯地方不會報錯，只會沒效果**。
   //    這裡刻意跟 `NvidiaService.gs` 的分支對齊 —— 測試用 A 寫法、正式用 B 寫法的話，
-  //    測出來的結論套不到線上。gpt-oss 尤其：舊版這支把 reasoning_effort 放進
-  //    chat_template_kwargs（無效），而 NvidiaService 放 top-level（有效），
-  //    兩邊測的根本不是同一件事。
+  //    測出來的結論套不到線上。
   var buildRequest = (c) => {
     var messages = [];
     var payload  = { model: c.model, max_tokens: 512, temperature: 0.7 };
 
-    if (c.model.indexOf('deepseek-ai/deepseek-v4') === 0) {
-      // V4 系列一定要送這個欄位，省略會讓 NIM 掛住而不是報錯
-      payload.chat_template_kwargs = { thinking: !c.noThink };
-      if (!c.noThink) payload.chat_template_kwargs.reasoning_effort = 'high';
-    } else if (c.model.indexOf('openai/gpt-oss') === 0) {
-      payload.reasoning_effort = c.noThink ? 'low' : 'high';   // top-level，不是 kwargs
-    } else if (c.noThink && c.model.indexOf('nvidia/') === 0) {
+    if (c.mode === 'gptoss-off') {
+      payload.reasoning_effort = 'low';   // top-level，不是 kwargs
+    } else if (c.mode === 'glm-off') {
+      payload.chat_template_kwargs = { enable_thinking: false, clear_thinking: true };
+    } else if (c.mode === 'kimi-off-kwargs') {
+      payload.chat_template_kwargs = { thinking: false };   // 形狀未知，先照 deepseek 猜
+    } else if (c.mode === 'kimi-off-system') {
       messages.push({ role: 'system', content: '/no_think' });
-    } else if (c.model.indexOf('minimaxai/') === 0) {
-      // 形狀未知，先照 deepseek 的猜一次；沒生效就看 reasoning_content 還在不在
-      payload.chat_template_kwargs = { thinking: !c.noThink };
     }
+    // 'default' 什麼都不加，維持模型自身預設
 
     messages.push({ role: 'user', content: QUESTION });
     payload.messages = messages;
@@ -554,26 +608,22 @@ function testNimFaithfulness() {
     '現金：120000 元\n\n' +
     '請用繁體中文寫一段 80 字以內的摘要，說明目前損益狀況。只能使用上面的數字。';
 
-  // 2026-08-09：新主模型候選的決選。`gpt-oss-20b` 留著當對照組 —— 它是現役備援，
-  // 已知會過，用來確認這批的失敗不是環境問題。
-  //
-  // ⚠️ 上一次就是這一關刷掉了兩顆 Nemotron：語氣專業、格式完整、把 68000−65000
-  //    算成 23000。前三關完全看不出來。對一個報損益的機器人這是一票否決。
+  // 2026-09-24：deepseek-v4-flash-0731 下架、v4.1-flash 單獨測也 504，退出候選。
+  // glm-5.3-flash 在 testNimThinkingOff() 兩種模式都 finish_reason=length、正文
+  // null（推理長度 2108／1490 字元，512 token 預算裝不下），一票淘汰，不進決選。
+  // `gpt-oss-20b` 留著當對照組 —— 它是現役備援，已知會過，用來確認這批的失敗不是
+  // 環境問題。`kimi-k3` 用 testNimThinkingOff() 驗過的 chat_template_kwargs.thinking
+  // （推理長度 1204→0，乾淨關掉）；`glm-5.3` 的 enable_thinking=false 只是「降低」
+  // 不是「歸零」（849→355），但仍在 512 token 預算內出得了正文，一併帶進來看實際內容。
   var CASES = [
-    { label: 'deepseek-v4-flash-0731（頭號人選）',
-      model: 'deepseek-ai/deepseek-v4-flash-0731', mode: 'deepseek' },
+    { label: 'kimi-k3（頭號人選，thinking=false 乾淨關掉）',
+      model: 'moonshotai/kimi-k3', mode: 'deepseek' },
+    { label: 'glm-5.3（enable_thinking=false，僅降低未歸零）',
+      model: 'z-ai/glm-5.3', mode: 'glm-off' },
     { label: 'gpt-oss-20b（對照組，現役備援）',
       model: 'openai/gpt-oss-20b', mode: 'gptoss-top' },
-    { label: 'gpt-oss-120b',
-      model: 'openai/gpt-oss-120b', mode: 'gptoss-top' },
-    { label: 'minimax-m3',
-      model: 'minimaxai/minimax-m3', mode: 'deepseek' },
-    { label: 'nemotron-3-super-120b  /no_think',
-      model: 'nvidia/nemotron-3-super-120b-a12b', mode: 'nemotron' }
-    // meta/llama-3.3-70b-instruct 已剔除：探測過得了，帶工具呼叫時 504，
-    // 一顆就把 2026-08-09 那批拖滿 303 秒、害中文測試被時間不足跳過。
-    // 這是第三次同樣的形狀（前兩次是 mistral-medium-3.5、glm-5.2）——
-    // **探測過關不代表扛得住真實請求**，重的那關才會現形。
+    { label: 'gemma-4-31b-it（非思考模型）',
+      model: 'google/gemma-4-31b-it', mode: 'plain' }
   ];
 
   var buildRequest = (c) => {
@@ -582,8 +632,8 @@ function testNimFaithfulness() {
 
     if (c.mode === 'deepseek') {
       payload.chat_template_kwargs = { thinking: false };
-    } else if (c.mode === 'nemotron') {
-      messages.push({ role: 'system', content: '/no_think' });
+    } else if (c.mode === 'glm-off') {
+      payload.chat_template_kwargs = { enable_thinking: false, clear_thinking: true };
     } else if (c.mode === 'gptoss-top') {
       payload.reasoning_effort = 'low';          // top-level 才生效，見 NvidiaService
     } else if (c.mode === 'plain') {
@@ -683,6 +733,52 @@ function verifyFallbackChain() {
     var parts = r3.candidates && r3.candidates[0] && r3.candidates[0].content.parts;
     var text  = (parts || []).filter(p => p.text).map(p => p.text).join('');
     console.log('  ✅ 備援接手成功：' + text.slice(0, 120));
+  }
+
+  console.log('\n=== 驗證結束 ===');
+}
+
+/**
+ * 驗證新主模型走完整路徑（AIServiceFactory → AIAdapter ↔ NvidiaService），
+ * 不是只測 DevTools 自己組的裸 payload。換 Config.NVIDIA_DEFAULT_MODEL /
+ * NVIDIA_MODELS 之後先跑這支，比等 ChatBot 真的接到訊息才發現分支寫錯划算。
+ */
+function verifyPrimaryModel() {
+  console.log('主模型 = ' + Config.NVIDIA_DEFAULT_MODEL + '（env!B3 需為 NVIDIA 才會真的走這條路）\n');
+
+  console.log('【1】FAST tier（關思考，Gemini 格式進出）');
+  var r1 = AIServiceFactory.callAPI(
+    [{ role: 'user', parts: [{ text: '用一句話說明什麼是 ETF。' }] }],
+    { model: 'FAST', caller: 'verifyPrimaryModel' });
+  if (!r1) {
+    console.log('  ❌ 呼叫失敗（若 env!B3 不是 NVIDIA，這裡會走 Gemini，不代表新模型有問題）');
+  } else {
+    var text1 = (r1.candidates[0].content.parts || []).filter(p => p.text).map(p => p.text).join('');
+    console.log('  ✅ ' + text1.slice(0, 150));
+  }
+
+  console.log('\n【2】FAST tier + Function Calling（真實工具定義）');
+  var r2 = AIServiceFactory.callAPI(
+    [{ role: 'user', parts: [{ text: '幫我查最近 7 天的資產走勢' }] }],
+    { model: 'FAST', tools: Tools.getDefinitions().filter(d => d.name === 'getHistory'),
+      caller: 'verifyPrimaryModel' });
+  if (!r2) {
+    console.log('  ❌ 呼叫失敗');
+  } else {
+    var fc = r2.candidates[0].content.parts.find(p => p.functionCall);
+    console.log(fc ? '  ✅ ' + fc.functionCall.name + '(' + JSON.stringify(fc.functionCall.args) + ')'
+                   : '  ⚠️ 沒呼叫工具');
+  }
+
+  console.log('\n【3】SMART tier（開思考，背景排程用）');
+  var r3 = AIServiceFactory.callAPI(
+    [{ role: 'user', parts: [{ text: '用兩句話說明定期定額與單筆投入的差異。' }] }],
+    { model: 'SMART', caller: 'verifyPrimaryModel' });
+  if (!r3) {
+    console.log('  ❌ 呼叫失敗');
+  } else {
+    var text3 = (r3.candidates[0].content.parts || []).filter(p => p.text).map(p => p.text).join('');
+    console.log('  ✅ ' + text3.slice(0, 200));
   }
 
   console.log('\n=== 驗證結束 ===');

@@ -80,7 +80,7 @@ var Config = (() => {
     // ─── NVIDIA ───────────────────────────────────────────────
     get NVIDIA_API_KEY() { return scriptProperties.getProperty(ENV_KEYS.NVIDIA_KEY); },
     NVIDIA_API_BASE:     'https://integrate.api.nvidia.com/v1',
-    NVIDIA_DEFAULT_MODEL: 'deepseek-ai/deepseek-v4-flash-0731',
+    NVIDIA_DEFAULT_MODEL: 'moonshotai/kimi-k3',
 
     // 可用性保底（N-1）：主模型失敗（404/410 下架、503/504/529 過載、重試耗盡回 null）時，
     // AIServiceFactory 會改用這顆重試一次。
@@ -93,14 +93,25 @@ var Config = (() => {
     AI_FALLBACK_ENABLED:   true,
     NVIDIA_FALLBACK_MODEL: 'openai/gpt-oss-20b',
 
-    // 全檔次使用 DeepSeek-V4-Flash-0731（284B MoE、1M context、原生 Function Calling）。
+    // 全檔次使用 Kimi K3（moonshotai/kimi-k3，原生 Function Calling、含繁中）。
     //
-    // ⚠️ 無日期的 `deepseek-ai/deepseek-v4-flash` 已於 2026-08-07 EOL，回 410。
-    //    下架期間備援會完美接手，所以症狀不是報錯而是**回覆品質下降**
-    //    （備援是顆 21B 小模型）。遇到「講話變笨」先查 consolelog 有沒有 410/404。
+    // ⚠️ `deepseek-ai/deepseek-v4-flash-0731` 已於 2026-09-24 從 NIM 目錄消失（下架，
+    //    不是過載 —— 同代的 `deepseek-ai/deepseek-v4.1-flash` 單獨測也整整 302s 504，
+    //    不是候選）。`find-nim-model` 流程重新掃過一輪：同批一起下架的還有
+    //    `openai/gpt-oss-120b`／`minimaxai/minimax-m3`／`stepfun-ai/step-3.7-flash`／
+    //    `meta/llama-3.3-70b-instruct`（2026-08-09 那輪備援候選）。10 顆候選中 5 顆打得
+    //    到帳號，其中 `z-ai/glm-5.3-flash` 在決選關（忠實轉述）兩種思考模式都
+    //    `finish_reason=length`、正文吐不出來，`z-ai/glm-5.3` 的 `enable_thinking=false`
+    //    只降低推理量、沒歸零，一樣在決選關把 512 token 預算燒光。`kimi-k3` 是唯一
+    //    四關全過的新候選：thinking 開關乾淨（`chat_template_kwargs.thinking` 一 false
+    //    推理長度就是 0），忠實轉述與算術都對。
     //
-    // `-0731` 是同一顆的日期版，NvidiaService 比對 `deepseek-ai/deepseek-v4` 前綴，
-    // 不必加新分支。
+    // NvidiaService 新增了 `moonshotai/kimi` 前綴的分支（形狀同 deepseek-v4 的布林
+    // thinking 開關，但 `reasoning_effort` 欄位未驗證過對它有沒有效，故不比照送出）。
+    //
+    // temperature／topP 刻意不覆寫（省略後 NvidiaService 用各模型自身預設）——
+    // 1.0 / 0.95 是 NVIDIA 官方範例**針對 deepseek-v4-flash** 的建議組合，沒有對應
+    // 給 kimi 的官方數字，硬套舊模型的建議值沒有依據。
     //
     // enableThinking 依「使用者是否在等」分流：
     //   FAST  → ChatBot ReAct 迴圈，使用者在等 → 關思考求快
@@ -108,9 +119,9 @@ var Config = (() => {
     //   LITE  → 目前無呼叫端，比照 FAST
     // 思考開啟時 reasoning 會佔用 max_tokens，故 SMART 的預算較寬。
     NVIDIA_MODELS: {
-      LITE:  { model: 'deepseek-ai/deepseek-v4-flash-0731', maxOutputTokens: 3072,  temperature: 1.0, topP: 0.95, enableThinking: false },
-      FAST:  { model: 'deepseek-ai/deepseek-v4-flash-0731', maxOutputTokens: 4096,  temperature: 1.0, topP: 0.95, enableThinking: false },
-      SMART: { model: 'deepseek-ai/deepseek-v4-flash-0731', maxOutputTokens: 12288, temperature: 1.0, topP: 0.95, enableThinking: true  }
+      LITE:  { model: 'moonshotai/kimi-k3', maxOutputTokens: 3072,  enableThinking: false },
+      FAST:  { model: 'moonshotai/kimi-k3', maxOutputTokens: 4096,  enableThinking: false },
+      SMART: { model: 'moonshotai/kimi-k3', maxOutputTokens: 12288, enableThinking: true  }
     },
 
     // ─── 對話管理 ─────────────────────────────────────────────
