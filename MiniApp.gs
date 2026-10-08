@@ -127,7 +127,7 @@ function miniAppData(initData, noCache) {
  * Mini App 送問題給 Iris（前端 google.script.run 呼叫）
  *
  * 組一個與 doPost 相同形狀的中立事件交給 ChatBot，等於使用者在對話裡打了這句話，
- * 因此工具、記憶、對話歷史全部沿用同一條路徑，不需要另一套邏輯。
+ * 因此工具、對話歷史全部沿用同一條路徑，不需要另一套邏輯。
  *
  * 前端送出後會關閉面板不等回呼，答案由 push 送進對話。
  *

@@ -259,7 +259,7 @@ var Eval = (() => {
       message: { type: 'text', text: question, id: 'eval' },
       isMaster: true
     };
-    var context = Facts.build() + '\n' + GoogleSheet.knowledgeForPrompt(question);
+    var context = Facts.build();
     var reply = ChatBot.reply(event);
     // 工具回傳接在後面 —— 模型看得到的數字，判定也要看得到
     return {

@@ -27,7 +27,7 @@ function listTriggers() {
  * - 列印環境變數狀態
  */
 function setup() {
-  var requiredSheets = ['env', 'consolelog', 'chat', 'short_term_memory', 'knowledge'];
+  var requiredSheets = ['env', 'consolelog', 'chat'];
   var ss = SpreadsheetApp.openById(Config.SHEET_ID);
 
   requiredSheets.forEach(name => {

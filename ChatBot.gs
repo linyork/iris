@@ -22,12 +22,6 @@ var ChatBot = (() => {
           parts: [{ text: r.message }]
         }));
 
-      // 讀取短期記憶與知識（搜尋與當前訊息相關的知識）
-      var stm = GoogleSheet.getValidShortTermMemories();
-      // 注入用的知識走 knowledgeForPrompt：查無資料回空字串，整段略過。
-      // searchKnowledge 是模型主動查詢時用的工具。
-      var relevantKnowledge = GoogleSheet.knowledgeForPrompt(message);
-
       // 事實區塊：程式算好的關鍵數字，直接進 prompt。模型因此不必為了「我總資產多少」
       // 跑一整輪 ReAct，也沒有機會把百分比算錯（見 Facts.gs）。
       // 只讀三張表、不打外部 API，所以每則訊息都付得起這個成本。
@@ -38,10 +32,7 @@ var ChatBot = (() => {
       //    「無（讀不到或出錯）」，不管 Facts 實際上跑得多好。
       //    2026-08-09 就是這樣讓人以為 Facts 壞了，實際上它一直是對的。
       //    **記錄一個變數之前，先確認那個變數已經有值了。**
-      Logger.info('ChatBot.reply', '記憶注入', {
-        stm:       stm ? stm.split('\n').length + ' 筆 STM' : '無',
-        knowledge: (relevantKnowledge && !/沒有找到|尚無資料/.test(relevantKnowledge))
-                   ? relevantKnowledge.slice(0, 60) + '...' : '無相關知識',
+      Logger.info('ChatBot.reply', '事實注入', {
         // 事實區塊會進每一則 prompt，長度失控是最先要看見的訊號
         facts:     factsBlock ? factsBlock.length + ' 字' : '無（讀不到或出錯）'
       });
@@ -49,15 +40,12 @@ var ChatBot = (() => {
       var systemContext = Prompt.systemContext({
         scope:     '回覆',
         user:      event.isMaster ? '主人 (Master)' : '訪客 (Guest)',
-        knowledge: relevantKnowledge,
-        stm:       stm,
         facts:     factsBlock
       });
 
       systemContext +=
         '\n\n[工具使用準則]\n' +
-        '- 資訊足夠時立即回覆，勿重複呼叫相同工具\n' +
-        '- 使用者分享偏好、計畫或重要事實時，主動使用 rememberShortTerm 或 saveKnowledge 記下來';
+        '- 資訊足夠時立即回覆，勿重複呼叫相同工具';
 
       var contents = [];
       contents.push({ role: 'user',  parts: [{ text: systemContext }] });

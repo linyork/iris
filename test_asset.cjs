@@ -88,7 +88,7 @@ class Sheet {
   }
   /**
    * 資產層一律走 getRange().setValues()，所以這個 mock 本來沒有 appendRow ——
-   * 但系統層（GoogleSheet 的記憶與日誌）用的是它。
+   * 但系統層（GoogleSheet 的 chat 與日誌）用的是它。
    * 少了它的症狀是那些模組**安靜地回失敗**：它們都包在 try/catch 裡，
    * 例外被吞掉，測試只看到「寫入回傳 false」而看不出原因。
    */
@@ -427,7 +427,7 @@ console.log('\nT2  XIRR');
 console.log('\nT3  建表');
 
 // 試算表 ID 只能有一個來源。這裡以前寫死一個常數，而系統分頁走指令碼屬性 ——
-// 兩者分岔的話資產數字讀舊表、記憶讀新表，不會有任何錯誤。
+// 兩者分岔的話資產數字讀舊表、系統分頁讀新表，不會有任何錯誤。
 {
   check('SHEET_ID 讀的是指令碼屬性，不是寫死的常數',
     AssetSchema.SHEET_ID === Config.SHEET_ID, AssetSchema.SHEET_ID);
@@ -445,7 +445,7 @@ console.log('\nT3  建表');
 const target = SpreadsheetApp.openById(AssetSchema.SHEET_ID);
 target.sheets.push(new Sheet('工作表1'));          // 模擬新試算表的預設分頁
 let r3 = AssetSchema.build();
-check('建立 14 個分頁', r3.created.length === 14, r3.created.length);
+check('建立 12 個分頁', r3.created.length === 12, r3.created.length);
 check('預設的「工作表1」被移除', !target.getSheetByName('工作表1'));
 check('交易表標題正確', target.getSheetByName('交易').raw(1, 2) === '動作', target.getSheetByName('交易').raw(1, 2));
 // 公式只填到有資料的最後一列。空表就該是空的 —— 預灌公式會讓 getLastRow()
@@ -2231,7 +2231,7 @@ console.log('\nT35  ReAct 迴圈');
   // ⑤ 宣稱寫入但帳本沒動 → 打回重做一次，那一輪才是真的寫進去的地方
   reset();
   AI_QUEUE.push(say('好的，已校正。'),
-                call({ name: 'rememberShortTerm', args: { key: 'T35', content: '測試' } }),
+                call({ name: 'addAccount', args: { name: 'T35測試戶' } }),
                 say('已記錄完成。'));
   out = ChatBot.reply(ev('把郵局改成 12000'));
   check('假宣稱被打回，補叫了工具之後才作答', AI_CALLS.length === 3,
@@ -2250,15 +2250,15 @@ console.log('\nT35  ReAct 迴圈');
   out = ChatBot.reply(ev('記一筆'));
   check('工具回 invalid_args 時迴圈照常往下走', /參數不齊/.test(out), out);
 
-  // ⑦-b 「記憶注入」那行 log 必須報出 facts 的真實長度。
+  // ⑦-b 「事實注入」那行 log 必須報出 facts 的真實長度。
   //      2026-08-09 線上實測：那行排在 factsBlock 賦值**之前**，var 提升讓它永遠讀到
   //      undefined，於是每一則都寫「無（讀不到或出錯）」—— Facts 明明是好的，
   //      log 卻讓人以為它壞了，害我去查了一個不存在的問題。
   reset(); AI_QUEUE.push(say('好。'));
   const logsBefore = LOGS.length;
   ChatBot.reply(ev('隨便問'));
-  const inject = LOGS.slice(logsBefore).find(l => l[2] === '記憶注入');
-  check('記憶注入的 log 有記到 facts 的真實長度',
+  const inject = LOGS.slice(logsBefore).find(l => l[2] === '事實注入');
+  check('事實注入的 log 有記到 facts 的真實長度',
     !!inject && /\d+ 字/.test(String(inject[3].facts)),
     inject ? JSON.stringify(inject[3].facts) : '(沒有這行 log)');
 
@@ -2281,58 +2281,6 @@ console.log('\nT35  ReAct 迴圈');
 
   delete global.AIServiceFactory;
   delete global.MessagingServiceFactory;
-}
-
-// ─── T36  知識檢索：中文查得到 ─────────────────────────────────────
-console.log('\nT36  知識檢索');
-{
-  const kn = target.getSheetByName('knowledge') || target.insertSheet('knowledge');
-  kn.clear();
-  kn.getRange(1, 1, 1, 3).setValues([['tags', 'content', 'timestamp']]);
-  kn.appendRow(['[偏好] 投資工具限制', '我不持有單一個股，只買 ETF', '2026/01/01 00:00:00']);
-  kn.appendRow(['[目標] 現金比例-2026年底', '年底前把現金比例降到 20%', '2026/01/01 00:00:00']);
-  kn.appendRow(['[決策] 00631L-加倉條件', '單日跌超過 5% 想加倉', '2026/01/01 00:00:00']);
-  kn.appendRow(['筆記,雜項', '喜歡看晨星的報告', '2026/01/01 00:00:00']);
-  kn.appendRow(['筆記,券商', '主要用富邦證券下單', '2026/01/01 00:00:00']);
-
-  // ① 這是舊版真正壞掉的地方：中文整句當一個詞，只有原文完全出現才算命中
-  const r1 = GoogleSheet.searchKnowledge('現金比例太高了嗎');
-  check('中文整句查詢撈得到（舊版整句當一個詞，一定落空）',
-    /現金比例/.test(r1), r1.slice(0, 60));
-
-  // ①-b 同義詞仍然連不起來，這是 bigram 的天花板，不是 bug。
-  //     「加碼」與知識庫裡的「加倉」沒有共用字，怎麼切都對不上。刻意不做同義詞表：
-  //     那種表沒人維護就會過期。
-  check('同義詞查不到 —— 已知限制',
-    !/加倉/.test(GoogleSheet.searchKnowledge('可以加碼嗎')), '');
-
-  // ② 標籤命中要贏過內文命中
-  const r2 = GoogleSheet.searchKnowledge('券商');
-  check('標籤命中排在前面', r2.split('\n')[0].indexOf('券商') >= 0, r2.split('\n')[0]);
-
-  // ③ 代號、英文照樣查得到
-  check('代號查得到', /00631L-加倉條件/.test(GoogleSheet.searchKnowledge('00631L')), '');
-  check('英文縮寫查得到', /ETF/.test(GoogleSheet.searchKnowledge('ETF 好嗎')), '');
-
-  // ④ 真的無關就要說沒找到，不能因為 bigram 亂撈而永遠有結果
-  check('無關的查詢仍然回沒找到',
-    /沒有找到/.test(GoogleSheet.searchKnowledge('鮭魚壽司')),
-    GoogleSheet.searchKnowledge('鮭魚壽司').slice(0, 40));
-
-  // ⑤ 注入用的區塊只看用字：決策／目標／偏好不再無條件帶上（2026-10-08 起）
-  const inj = GoogleSheet.knowledgeForPrompt('鮭魚壽司');
-  check('與問題無關時什麼都不帶，連 [決策]／[目標]／[偏好] 也不帶', inj === '', inj);
-
-  // ⑥ 相關的一般知識還是撈得進來
-  const inj2 = GoogleSheet.knowledgeForPrompt('我都用哪一家券商下單');
-  check('相關的一般知識會補進來', /富邦證券/.test(inj2), inj2.replace(/\n/g, ' ｜ '));
-
-  // ⑦ 空知識庫不要炸，也不要回一句會被當成內容的廢話
-  kn.clear();
-  kn.getRange(1, 1, 1, 3).setValues([['tags', 'content', 'timestamp']]);
-  check('空知識庫回空字串（呼叫端才好整段略過）',
-    GoogleSheet.knowledgeForPrompt('隨便問') === '', '');
-  target.sheets = target.sheets.filter(s => s.getName() !== 'knowledge');
 }
 
 // ─── T37  評估：判定是純函式，所以測得起來 ────────────────────────

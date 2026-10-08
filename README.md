@@ -2,25 +2,24 @@
 
 > ⚠️ **專案性質聲明 — 請先讀**
 >
-> 本專案目前的實作（ReAct 迴圈、工具分派、AI Provider 切換、記憶系統等）**全部以原生 JavaScript 手刻在 Google Apps Script 上**，目的只是為了**快速驗證概念與演示**（GAS 部署成本為 0、內建排程、Sheet 直接當資料庫，最適合 PoC）。
+> 本專案目前的實作（ReAct 迴圈、工具分派、AI Provider 切換、等）**全部以原生 JavaScript 手刻在 Google Apps Script 上**，目的只是為了**快速驗證概念與演示**（GAS 部署成本為 0、內建排程、Sheet 直接當資料庫，最適合 PoC）。
 >
 > 整套架構在設計上對應的就是 **LangChain / LangGraph** 的標準元件：
 >
 > | 目前手刻 | 對應的 LangChain / LangGraph 概念 |
 > |---|---|
 > | `ChatBot.gs` 的 ReAct 迴圈 | `LangGraph` StateGraph + ToolNode |
-> | `Tools.gs` 的 21 個工具 | `@tool` decorator / `StructuredTool` |
+> | `Tools.gs` 的 16 個工具 | `@tool` decorator / `StructuredTool` |
 > | `AIServiceFactory` + `AIAdapter` | `BaseChatModel` 抽象 + provider 子類 |
-> | `GoogleSheet` 的 chat 讀寫 + STM 注入 | `Memory` / `Checkpointer` |
-> | `searchKnowledge` 關鍵字查 Sheet | `VectorStore` retriever |
+> | `GoogleSheet` 的 chat 讀寫 | `Memory` / `Checkpointer` |
 >
 > 由於每個模組職責切得很乾淨（Provider、Tools、Memory、Retrieval、Graph orchestration 各自獨立），要搬到 **LangChain / LangGraph (Python or TS)** 基本上就是把現有元件一對一換成框架對應的抽象，再接上正式的向量資料庫與可觀測性（LangSmith）即可，不需要重新設計。
 
 ---
 
 Iris 是一個建構在 **Google Apps Script (GAS)** 上的私人資產管理助理，透過 **LINE 或 Telegram** 與使用者互動。
-所有資料以單一 Google Sheet 為唯一資料庫，AI 推論支援 **Gemini** 與 **NVIDIA NIM (DeepSeek-V4-Flash-0731)** 雙引擎熱切換，
-具備 ReAct 工具呼叫、長短期記憶、每日財經早報、盤中異動警報、由 LLM 主導判斷的主動顧問感知層，
+所有資料以單一 Google Sheet 為唯一資料庫，AI 推論支援 **Gemini** 與 **NVIDIA NIM (Kimi K3)** 雙引擎熱切換，
+具備 ReAct 工具呼叫（查資產、記帳）、每日／每週／每月報告、盤中異動警報，
 以及一個唯讀的網頁資產儀表板。
 
 ---
@@ -36,7 +35,6 @@ Iris 是一個建構在 **Google Apps Script (GAS)** 上的私人資產管理助
 - [網頁儀表板](#網頁儀表板)
 - [Telegram Mini App](#telegram-mini-app)
 - [排程任務](#排程任務)
-- [記憶系統](#記憶系統)
 - [環境設定](#環境設定)
 - [部署與開發流程](#部署與開發流程)
 - [首次安裝](#首次安裝)
@@ -48,7 +46,7 @@ Iris 是一個建構在 **Google Apps Script (GAS)** 上的私人資產管理助
 Iris 是「給單一管理員使用」的專屬資產助理，特色：
 
 - **單人服務**：以 `ADMIN_STRING` 比對 userId，非授權使用者靜默忽略（不回覆、不寫歷史、不耗 LLM 配額）。Telegram ID 以 `TELEGRAM:` 前綴與 LINE ID 區分。
-- **零外部資料庫**：全部狀態（持倉、現金、配置、對話歷史、記憶、知識、快照）都在同一份 Google Sheet。
+- **零外部資料庫**：全部狀態（持倉、現金、配置、對話歷史、快照）都在同一份 Google Sheet。
 - **AI Provider 熱切換**：在 Sheet `env!B3` 寫 `GEMINI` 或 `NVIDIA` 即可即時切換後端，無需重新部署。
 
 ---
@@ -77,7 +75,7 @@ Telegram Bot API ───┤        │
              ▼
 ┌──────────────────────────────────────────────┐
 │  ChatBot.gs · ReAct Loop (最多 5 turns)       │
-│  - 注入：SYSTEM_PROMPT + STM + 相關長期知識      │
+│  - 注入：SYSTEM_PROMPT                        │
 │          + Facts 事實區塊（程式算好的關鍵數字）    │
 │  - 工具呼叫快取（同一輪不重複叫同樣的 tool）        │
 │  - 200s 不再開新輪 / 280s 不再補救呼叫            │
@@ -94,7 +92,7 @@ Telegram Bot API ───┤        │
                  │
                  ▼
 ┌──────────────────────────────────────────────┐
-│  Tools.gs · 21 個工具                         │
+│  Tools.gs · 16 個工具                         │
 │   ├─ 資產查詢：getHoldings / getDashboard /    │
 │   │           getHistory / getPrice           │
 │   ├─ 股利：getDividendHistory / recordDividend │
@@ -103,9 +101,6 @@ Telegram Bot API ───┤        │
 │   ├─ 主檔：listTrades / listAccounts /         │
 │   │       listInstruments /                   │
 │   │       updateAccount / updateInstrument    │
-│   ├─ 記憶：rememberShortTerm / saveKnowledge / │
-│   │       searchKnowledge / listMemories /    │
-│   │       deleteMemory                        │
 │   └─ 外部：searchWeb (Google Custom Search)    │
 └────────────────┬─────────────────────────────┘
                  │
@@ -131,7 +126,7 @@ Telegram Bot API ───┤        │
 | `MessagingServiceFactory.gs` | 依 userId 前綴分派到 LINE 或 Telegram |
 | `Line.gs` | LINE 事件正規化、reply / push 訊息封裝 |
 | `Telegram.gs` | Telegram update 正規化、訊息推送、webhook 與指令選單註冊 |
-| `ChatBot.gs` | ReAct 對話迴圈：注入記憶／知識／`Facts`／先前建議，執行工具，攔截「說已記錄卻沒寫」，剝除 Markdown |
+| `ChatBot.gs` | ReAct 對話迴圈：注入 `Facts`，執行工具，攔截「說已記錄卻沒寫」，剝除 Markdown |
 | `Prompt.gs` | `SYSTEM_PROMPT`（對話人設）、`systemContext()`（四個 LLM 迴圈共用的開頭與日期規則） |
 | `Facts.gs` | 程式算好的關鍵數字，注入每一則對話 prompt 要求原樣引用。**刻意只收不用打外部 API 的數字**（讀 指標／現金／每日快照），逐檔持倉留給 `getHoldings` —— 這個區塊每則訊息都要組一次 |
 | `Tools.gs` | 工具定義與分派 |
@@ -139,7 +134,7 @@ Telegram Bot API ───┤        │
 | `GeminiService.gs` | Gemini API 呼叫（含 function calling） |
 | `NvidiaService.gs` | NVIDIA NIM OpenAI 相容 API 呼叫，含 3 次退避重試 |
 | `AIAdapter.gs` | Gemini ⇄ OpenAI 格式相互轉換、分離 `reasoning_content` |
-| `GoogleSheet.gs` | 系統分頁讀寫（chat／記憶／知識／log），以及資產查詢的**格式化層**（資料向 Snapshot 拿）|
+| `GoogleSheet.gs` | 系統分頁讀寫（chat／log），以及資產查詢的**格式化層**（資料向 Snapshot 拿）|
 | `AssetSchema.gs` | 分頁與欄位定義、建表、交易表公式、`readTrades` / `appendTrade` 等共用存取 |
 | `Position.gs` | **計算核心**：重放交易算持倉、現金、配置、指標（加權平均法）|
 | `AssetMigrate.gs` | 舊表 → 新表的遷移程式。production 不再使用，現為 `test_asset.cjs` 的 fixture |
@@ -172,8 +167,6 @@ Telegram Bot API ───┤        │
 | `env` | `B2`：DEBUG_MODE（true/false）<br>`B3`：AI_PROVIDER（`GEMINI` / `NVIDIA`） |
 | `consolelog` | 執行期記錄；超過 10 天自動清除 |
 | `chat` | 對話歷史（每 userId），超過 30 天自動清除 |
-| `short_term_memory` | 短期記憶；有 expiry，每日清除 |
-| `knowledge` | 長期知識；以關鍵字搜尋（非向量） |
 | `eval_set` | 評估題組與每題的最新判定（PASS / FAIL 與未通過的性質）。**不存在時自己建立並寫入預設題組** |
 | `metrics` | 每日執行指標，由 `Metrics.rollupDaily()` 寫入（同日覆蓋）。**不存在時自己建立** |
 
@@ -377,7 +370,7 @@ TWSE 的 `STOCK_DAY_AVG` 端點硬解析收盤價。
 
 ## AI 工具集
 
-`Tools.gs` 共定義 21 個工具，呼叫者為 LLM。
+`Tools.gs` 共定義 16 個工具，呼叫者為 LLM。
 工具以 `definitions` 陣列（給模型看的 schema）加上 `execute()` 內的 `switch` 分派實作，
 **新增工具時兩處都要改**，只加 definitions 會讓模型叫得出來卻一律收到「未知的工具」。
 
@@ -398,11 +391,6 @@ TWSE 的 `STOCK_DAY_AVG` 端點硬解析收盤價。
 | `listInstruments` | 列出「標的」主檔，含已出清與尚未買進的，並點名區域／類型還沒填的 |
 | `updateInstrument(symbol, name, market, currency, quoteSource, region, category, target, status, note)` | 改「標的」主檔。代號不能改；`target` 一律 0..1 的比例，填百分比會被擋下 |
 | `updateAccount(name, newName, type, currency, institution, status, note)` | 改「帳戶」主檔。改名會**連「交易」的每一列一起改寫**；不提供刪除，只有停用，且停用前餘額必須是 0 |
-| `rememberShortTerm(key, content, hours)` | 寫入短期記憶（預設 24h，最長 168h） |
-| `saveKnowledge(tags, content)` | 寫入長期知識（含結構化 tag） |
-| `searchKnowledge(query)` | 關鍵字搜尋長期知識 |
-| `listMemories` | 列出目前所有 STM + knowledge |
-| `deleteMemory(type, key)` | 刪除 STM 或 knowledge |
 | `searchWeb(query)` | Google Custom Search 取得即時時事 |
 
 ReAct 迴圈上限 `Config.TOOL_MAX_ITERATIONS = 5`，且**最後一輪不帶工具定義**，
@@ -571,7 +559,7 @@ expected_hash     = hex(HMAC_SHA256(訊息 = data_check_string, 金鑰 = secret_
 漲跌色不跟主題走，紅漲綠跌是語意不是裝飾。
 
 點某一檔持倉會呼叫 `miniAppAsk()`，它組一個與 `doPost` 相同形狀的合成事件丟進
-`ChatBot.reply()`，因此工具、記憶、對話歷史全部沿用同一條路徑。答案 push 進對話而不是
+`ChatBot.reply()`，因此工具、對話歷史全部沿用同一條路徑。答案 push 進對話而不是
 顯示在面板裡——面板是入口，對話才是 Iris 的主場。前端送出後不等回呼直接關閉面板，
 因為 ReAct 迴圈遠比任何人願意盯著面板的時間長。
 
@@ -586,7 +574,7 @@ expected_hash     = hex(HMAC_SHA256(訊息 = data_check_string, 金鑰 = secret_
 
 | 時間 | 函式 | 用途 |
 |---|---|---|
-| 每日 04:00 | `dailyCleanUp` | **先**把 consolelog 聚合進 `metrics`，再清過期 STM、10 天前的 log、30 天前的 chat |
+| 每日 04:00 | `dailyCleanUp` | **先**把 consolelog 聚合進 `metrics`，再清 10 天前的 log、30 天前的 chat |
 | 每日 09:00 | `dailyReport` | 個人化財經早報（週六改發週報） |
 | 每日 10:00 | `marketAlert` | 盤中異動警報（單檔跌幅 > 3% 推播） |
 | 每日 14:00 | `marketAlert` | 盤中異動警報（第二次） |
@@ -598,15 +586,6 @@ expected_hash     = hex(HMAC_SHA256(訊息 = data_check_string, 金鑰 = secret_
 ⚠️ 這張表是 `Cron.SCHEDULE` 的副本，會漂移。以實際註冊的為準時跑 `listTriggers()`，它會拿 `Cron.SCHEDULE` 與 GAS 上真正的 trigger 逐項比對。
 
 週末跳過的是 `dailyReport`／`weeklyReport`／`marketAlert`；`setData` 仍會寫入並把當天標成「休市」。
-
----
-
-## 記憶系統
-
-### 兩層記憶
-
-- **短期記憶 (STM)**：有時效（最長 7 天），每次對話與快照都會注入，過期自動清除。適合「目前關注標的」「臨時計畫」等。
-- **長期知識 (Knowledge)**：永久保存。每則對話依關鍵字撈最相關的 3 筆注入。中文以 bigram 切詞（舊版整句當一個詞，對中文幾乎等於沒作用），標籤命中加權高於內文。
 
 ---
 

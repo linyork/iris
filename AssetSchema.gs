@@ -120,9 +120,7 @@ var AssetSchema = (() => {
     },
     { name: 'env',               headers: ['name', 'value'] },
     { name: 'consolelog',        headers: ['timestamp', 'level', 'tag', 'message', 'details'] },
-    { name: 'chat',              headers: ['userId', 'role', 'message', 'timestamp'] },
-    { name: 'short_term_memory', headers: ['key', 'content', 'expire_at', 'category'] },
-    { name: 'knowledge',         headers: ['tags', 'content', 'timestamp'] }
+    { name: 'chat',              headers: ['userId', 'role', 'message', 'timestamp'] }
   ];
 
   // ─── 交易表的公式（第 2 列起整欄填滿）─────────────────────────

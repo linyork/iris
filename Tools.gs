@@ -36,42 +36,6 @@ var Tools = (() => {
       }
     },
     {
-      name: 'rememberShortTerm',
-      description: '記住一段有時效性的資訊（例如：使用者當前狀態、臨時交代的事、對話脈絡）。這些記憶會在對話中自動注入，但時效過後自動消失。',
-      parameters: {
-        type: 'object',
-        properties: {
-          key:     { type: 'string', description: '記憶的主題鍵值，例如 "目前關注標的"、"投資計畫"' },
-          content: { type: 'string', description: '記憶內容（簡潔描述）' },
-          hours:   { type: 'number', description: '有效時數（預設 24，最長 168 小時 = 7 天）' }
-        },
-        required: ['key', 'content']
-      }
-    },
-    {
-      name: 'saveKnowledge',
-      description: '儲存使用者的長期知識（偏好、策略原則、重要事實）。這些知識會在相關對話時自動被搜尋出來使用。',
-      parameters: {
-        type: 'object',
-        properties: {
-          tags:    { type: 'string', description: '標籤（逗號分隔），例如 "投資策略,風險偏好"' },
-          content: { type: 'string', description: '知識內容（完整且自解釋的句子）' }
-        },
-        required: ['tags', 'content']
-      }
-    },
-    {
-      name: 'searchKnowledge',
-      description: '在長期知識庫中搜尋相關資訊。',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: '搜尋關鍵字' }
-        },
-        required: ['query']
-      }
-    },
-    {
       name: 'getDividendHistory',
       description: '查詢股利收入歷史統計，包含各 ETF 股利金額、年度合計、月均。可指定年份或查詢全部紀錄。',
       parameters: {
@@ -257,27 +221,6 @@ var Tools = (() => {
       }
     },
     {
-      name: 'listMemories',
-      description: '列出目前所有有效的短期記憶與長期知識，用於確認 Iris 記住了哪些內容。',
-      parameters: {
-        type: 'object',
-        properties: {},
-        required: []
-      }
-    },
-    {
-      name: 'deleteMemory',
-      description: '刪除指定的短期記憶或長期知識條目。',
-      parameters: {
-        type: 'object',
-        properties: {
-          type: { type: 'string', description: '"stm"（短期記憶）或 "knowledge"（長期知識）' },
-          key:  { type: 'string', description: '要刪除的記憶鍵值（STM）或標籤（knowledge），需與 listMemories 回傳的名稱完全一致' }
-        },
-        required: ['type', 'key']
-      }
-    },
-    {
       name: 'searchWeb',
       description: '搜尋即時網路資訊，用於查詢當前國際財經、總體經濟、地緣政治、央行政策、匯率走勢、市場新聞等外部資訊。當分析持倉風險或市場趨勢需要參考外部時事時使用。',
       parameters: {
@@ -324,22 +267,6 @@ var Tools = (() => {
 
         case 'getHistory':
           return GoogleSheet.getHistory(args.days || 30);
-
-        case 'rememberShortTerm':
-          if (!args.key || !args.content) return invalid('缺少必要參數：key 與 content 皆為必填。');
-          return GoogleSheet.addShortTermMemory(
-            args.key,
-            args.content,
-            Math.min(args.hours || 24, 168)
-          );
-
-        case 'saveKnowledge':
-          if (!args.tags || !args.content) return invalid('缺少必要參數：tags 與 content 皆為必填。');
-          return GoogleSheet.addKnowledge(args.tags, args.content);
-
-        case 'searchKnowledge':
-          if (!args.query) return invalid('缺少必要參數：query。');
-          return GoogleSheet.searchKnowledge(args.query);
 
         case 'getDividendHistory':
           return GoogleSheet.getDividendHistory(args.year);
@@ -393,13 +320,6 @@ var Tools = (() => {
         case 'getPrice':
           if (!args.symbols) return invalid('缺少必要參數：symbols。');
           return StockPrice.getPrice(args.symbols);
-
-        case 'listMemories':
-          return GoogleSheet.listMemories();
-
-        case 'deleteMemory':
-          if (!args.type || !args.key) return invalid('缺少必要參數：type 與 key 皆為必填。');
-          return GoogleSheet.deleteMemory(args.type, args.key);
 
         case 'searchWeb':
           if (!args.query) return invalid('缺少必要參數：query。');

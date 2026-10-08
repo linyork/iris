@@ -7,7 +7,7 @@
  * 派發 Gemini/NVIDIA 的模式一致：
  *   - reply / indicateTyping：依 event.platform（doPost 判斷來源時已標記）
  *   - push：依 userId 前綴（"TELEGRAM:" 視為 Telegram，其餘視為 LINE，
- *           向下相容 ADMIN_STRING 與 chat/knowledge 表裡既有的 LINE userId）
+ *           向下相容 ADMIN_STRING 與 chat 表裡既有的 LINE userId）
  */
 var MessagingServiceFactory = (() => {
   var factory = {};

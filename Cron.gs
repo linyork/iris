@@ -22,7 +22,7 @@ var Cron = (() => {
    */
   cron.SCHEDULE = [
     { fn: 'dailyCleanUp',        type: 'daily',    hour: 4,
-      what: '清過期短期記憶、10 天前的 consolelog、30 天前的對話' },
+      what: '聚合 metrics，清 10 天前的 consolelog、30 天前的對話' },
 
     { fn: 'dailyReport',         type: 'daily',    hour: 9,
       what: '財經早報（週末不發）。進入點會自己先 rebuild 一次' },

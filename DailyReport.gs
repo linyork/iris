@@ -24,7 +24,6 @@ var REPORT_FORMAT =
  * @param {string} spec.caller   記進 consolelog 的呼叫者名稱
  * @param {function(): object} spec.gather  蒐集資料，回傳 {標題: 內容} 的物件
  * @param {string} spec.ask      要模型做什麼（資料由 gather 附在後面）
- * @param {string} [spec.knowledgeQuery] 要搜什麼長期知識，預設 '投資策略 配置'
  * @returns {string|null} 報告內文；產生失敗回 null
  */
 function _generateReport(spec) {
@@ -39,9 +38,8 @@ function _generateReport(spec) {
     var data = spec.gather();
 
     var systemContext = Prompt.systemContext({
-      scope:     spec.scope,
-      period:    spec.period,
-      knowledge: GoogleSheet.searchKnowledge(spec.knowledgeQuery || '投資策略 配置')
+      scope:  spec.scope,
+      period: spec.period
     });
 
     var userPrompt = spec.ask + '\n\n' +
@@ -179,7 +177,6 @@ function buildDailyReport() {
   var body = _generateReport({
     scope:  '早報',
     caller: 'dailyReport',
-    knowledgeQuery: '投資策略 風險 配置',
     gather: () => ({
       '我的投資組合': GoogleSheet.getDashboard(),
       '持倉明細':     GoogleSheet.getHoldings(),
@@ -266,7 +263,6 @@ function monthlyReport() {
       scope:  '月報',
       period: label + '（上月）—— 所有事件回顧須屬於該月',
       caller: 'monthlyReport',
-      knowledgeQuery: '投資策略 目標 配置',
       gather: () => ({
         '近 35 天走勢': GoogleSheet.getHistory(35),
         '資產總覽':     GoogleSheet.getDashboard(),

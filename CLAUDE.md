@@ -26,7 +26,7 @@ There is a second, read-only face on the same script: a web dashboard served by 
 See [Web Dashboard](#web-dashboard).
 
 **Everything lives in one spreadsheet, named by one value.** The Script Property `SHEET_ID` is the
-single source — asset tabs (標的/交易/持倉/…) *and* system tabs (chat, memory, knowledge,
+single source — asset tabs (標的/交易/持倉/…) *and* system tabs (chat, consolelog,
 env). `AssetSchema.SHEET_ID` is a getter that returns `Config.SHEET_ID`, not a second constant, so
 repointing the property moves the whole bot. `AssetSchema.open()` throws a named error if the
 property is unset rather than letting `openById(null)` produce GAS's unreadable message.
@@ -86,15 +86,15 @@ renaming or relocating them fails silently:
 
 ### Request Flow
 1. `Main.gs` — `doPost()` receives the LINE **or** Telegram webhook, normalizes it into a single LINE-shaped event object, deduplicates via `CacheService` (6h TTL), silently drops non-master events, calls `ChatBot.reply()`
-2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 5 turns; the cap is not the time guard — each turn checks `Utils.execElapsedMs()` and stops opening new ones past 200s). Injects short-term memory, standing knowledge, and the `Facts` block into the system context. Caches **successful** tool results within a turn (a failure is not cached — an over-eager cache would pin one flaky TWSE call as this turn's verdict, when the model's retry might well have worked), strips Markdown before returning, and blocks a 「已記錄」 claim that the ledger does not corroborate.
+2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 5 turns; the cap is not the time guard — each turn checks `Utils.execElapsedMs()` and stops opening new ones past 200s). Injects the `Facts` block into the system context. Caches **successful** tool results within a turn (a failure is not cached — an over-eager cache would pin one flaky TWSE call as this turn's verdict, when the model's retry might well have worked), strips Markdown before returning, and blocks a 「已記錄」 claim that the ledger does not corroborate.
 3. `AIServiceFactory.gs` — Routes to `GeminiService` or `NvidiaService` based on `env!B3`. NVIDIA path goes through `AIAdapter` (Gemini ↔ OpenAI format conversion) so the rest of the codebase always speaks Gemini format.
-4. `Tools.gs` — Defines and executes **21** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. `execute()` returns an envelope, `{ok, status, text}` — `status` is `ok` / `invalid_args` / `error`, and `ChatBot` sends it to the model alongside the text so a failure cannot be read as data (see [工具回傳要分得出成功與失敗](#工具回傳要分得出成功與失敗)). Grouped by which layer they touch:
+4. `Tools.gs` — Defines and executes **16** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. `execute()` returns an envelope, `{ok, status, text}` — `status` is `ok` / `invalid_args` / `error`, and `ChatBot` sends it to the model alongside the text so a failure cannot be read as data (see [工具回傳要分得出成功與失敗](#工具回傳要分得出成功與失敗)). Grouped by which layer they touch:
    - **Computed-layer reads** (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, answering "what do I have now".
    - **Input-layer reads** (`listTrades`, `listAccounts`, `listInstruments`) — the 交易/帳戶/標的 tabs themselves, answering "how did this get recorded, which row do I change". They live in `AssetTools.gs`, not `Snapshot`, because each one is the precondition for a write: `listTrades` hands out the row number `voidTrade` needs, `listAccounts` is the only surface exposing **原幣** balances (`Snapshot._cash` gives TWD-converted only), `listInstruments` names the instruments whose 區域/類型 are still blank.
    - **Ledger writes** (`recordTrade`, `recordDividend`, `setCashBalance`, `voidTrade`) — all four land in the 交易 tab via `AssetTools.gs`; a dividend, a balance correction and a void are each just one row with a different 動作 or 狀態.
    - **Master writes** (`addAccount`, `updateAccount`, `updateInstrument`) — the only code that writes 帳戶 and 標的.
-   - **Memory** (`rememberShortTerm`, `saveKnowledge`, `searchKnowledge`, `listMemories`, `deleteMemory`), **external** (`searchWeb`).
-5. `GoogleSheet.gs` — System tabs (chat / memory / knowledge / log) plus the formatting layer for asset queries, which read through `Snapshot`. Single spreadsheet instance cached per execution.
+   - **External** (`searchWeb`).
+5. `GoogleSheet.gs` — System tabs (chat / log) plus the formatting layer for asset queries, which read through `Snapshot`. Single spreadsheet instance cached per execution.
 
 ### AI Provider Switching
 Switch provider by setting `env!B3` in the Google Sheet to `GEMINI` or `NVIDIA`. Model tiers (`LITE`/`FAST`/`SMART`) are defined in `Config.gs` for both providers. Current NVIDIA model: `moonshotai/kimi-k3` for all tiers (native function calling, clean thinking on/off via `chat_template_kwargs.thinking`, no official temperature/top_p guidance so those are left unset). ⚠️ `deepseek-ai/deepseek-v4-flash-0731` (the previous default) **disappeared from `/v1/models` on 2026-09-24 — delisted, not overloaded** — see [下架的症狀是「講話變笨」](#下架的症狀是講話變笨).
@@ -312,7 +312,7 @@ call it — do not paste a local variant.
 
 | Use this | Instead of | Why it matters |
 |---|---|---|
-| `Prompt.systemContext({scope, period, knowledge, stm})` | hand-rolling `[System Info]` + the date/year rules | The date rules existed in 4 places (`ChatBot` + 3 reports). Miss one and that loop quotes last year's news as today's. |
+| `Prompt.systemContext({scope, period, facts})` | hand-rolling `[System Info]` + the date/year rules | The date rules existed in 4 places (`ChatBot` + 3 reports). Miss one and that loop quotes last year's news as today's. |
 | `_generateReport(spec)` in `DailyReport.gs` | copying the gather → prompt → SMART → push skeleton | Daily/weekly/monthly differ *only* in what they feed and what they ask. A fourth report is one more spec, not one more function. |
 | `AssetSchema.num()` / `.str()` | a local `_num` / `_str` | Seven modules each carried one, differing by a character or two — some caught `Loading...`, some didn't. An uncaught error value becomes `NaN` and `NaN` propagates through every total without raising anything. |
 | `Utils.masterList()` | splitting `ADMIN_STRING` yourself | See below — the two copies disagreed about whitespace, and the disagreement split "is a master" from "gets the pushes". |
@@ -336,10 +336,6 @@ The `AssetSchema.num` / `.str` aliases inside each module are written as
 guarantee about file load order, and a direct assignment runs at IIFE time, when `AssetSchema`
 may not exist yet.
 
-### Memory System
-- **Short-term** (`short_term_memory` sheet): keyed entries with expiry timestamps, injected into every prompt, cleaned by daily trigger
-- **Long-term** (`knowledge` sheet): keyword-search only (no vectors), searched against current user message before each prompt
-
 ### Google Sheet Tabs
 
 System tabs (this file's other sections cover the asset tabs, which are defined by
@@ -350,8 +346,6 @@ System tabs (this file's other sections cover the asset tabs, which are defined 
 | `env` | B2: DEBUG_MODE, B3: AI_PROVIDER |
 | `consolelog` | Runtime logs written by `Logger.gs`, purged after 10 days |
 | `chat` | Conversation history per userId, purged after 30 days |
-| `short_term_memory` | Temporary context entries with expiry |
-| `knowledge` | Persistent user preferences/facts |
 | `metrics` | Daily rollup of `consolelog`, written by `Metrics`. Self-creating. |
 | `eval_set` | Evaluation questions and their latest verdict. Self-creating. |
 
@@ -497,7 +491,7 @@ moments a false 「已記錄」 is most likely and most costly.
 to `consolelog` constantly and `ChatBot` writes two `chat` rows per reply, so a global counter is
 always true — the guard would be off, and would look fixed. The call sites are deliberately the
 handful of real action boundaries (`AssetSchema.appendTrade`, the 標的/帳戶 master writes,
-`voidTrade`'s 狀態, and the three memory writers).
+and `voidTrade`'s 狀態).
 
 Forgetting a call site makes the guard *over*-fire: a successful write gets the banner anyway.
 That direction is chosen on purpose — a false banner is visible and gets complained about, a
@@ -666,30 +660,6 @@ form, and anything under 10,000 is skipped — years, percentages, share counts 
 live there and are nearly always transcription rather than invention. What it is really hunting is
 a fabricated figure at money scale.
 
-### 知識檢索：中文切得開
-
-`searchKnowledge` used to tokenise with `query.split(/\s+/)`. Chinese has no spaces, so
-「我現在可以加碼嗎」 was **one token** and only matched if those exact seven characters appeared
-in an entry. For the project's primary language, keyword search was effectively inert — and it
-failed by returning 「沒有找到」, which is indistinguishable from an empty knowledge base.
-
-`_tokens` now emits CJK bigrams plus whole latin/numeric runs (so 代號 and ETF still work), and
-scoring weights a tag hit at 3 against a body hit at 1 — tags are the topic someone chose by hand.
-Bigrams do over-match; sorting and a top-5 cap absorb that.撈多一點再排序 beats 撈不到.
-
-`ChatBot` injects `knowledgeForPrompt` — the top 3 keyword matches, or `''` so the block is
-skipped. `searchKnowledge` is the same scoring for the model to call, returning a sentence when
-nothing matches.
-
-`knowledgeForPrompt` used to inject every `[決策]` / `[目標]` / `[偏好]` entry unconditionally, so
-the persona's 「compare against the owner's [目標]」 rule could not be defeated by wording. Both the
-rule and the always-inject layer were removed on 2026-10-08: Iris no longer answers from the owner's
-long-term plans.
-
-⚠️ **Synonyms remain out of reach and that is accepted.** 「加碼」 and a stored 「加倉」 share no
-characters, so no amount of segmenting connects them. A synonym table was considered and rejected:
-it goes stale unnoticed. `T36` pins the limitation.
-
 ### 每日指標：consolelog 在被丟掉之前先算一次
 
 `Metrics.rollupDaily(days)` folds `consolelog` into one row per day in a `metrics` tab: replies,
@@ -757,7 +727,7 @@ Keep the strip in `Telegram.pushMsg`: reports and market alerts do not go
 through `ChatBot`. The cost, stated plainly: the eval can no longer see whether the model obeys
 the no-Markdown rule. That signal was traded for one consistent version of the text.
 
-### 主動顧問已移除：不記建議、不依長期規劃回應
+### 瘦身：主動顧問與記憶系統已移除
 
 2026-10-08，主人把 Iris 的範圍收窄成「讀表報告（含早報／週報／月報）＋ 記帳」，
 以下一起拿掉：
@@ -770,7 +740,11 @@ the no-Markdown rule. That signal was traded for one consistent version of the t
 - **決策注入**：`knowledgeForPrompt` 不再無條件帶 [決策]／[目標]／[偏好]，人設拿掉「主動比對
   [目標]」，提示詞拿掉 [決策偵測]（叫模型把規劃存成結構化 tag 給 AdvisorCheck 讀）。
 
-knowledge 表本身與記憶工具還在 —— 那是另一件事。
+- **記憶系統**（同日稍後）：`short_term_memory` 與 `knowledge` 兩張分頁、5 個工具
+  （`rememberShortTerm` / `saveKnowledge` / `searchKnowledge` / `listMemories` / `deleteMemory`）、
+  每則對話與三份報告的知識注入、`dailyCleanUp` 的過期清理。拔之前看過即時資料：短期記憶是空的，
+  knowledge 6 筆全是投資策略／偏好／[決策] —— 正是範圍外的東西。現在 Iris 只看得到試算表的數字
+  與 30 天內的對話；說「記住 X」它不會記。
 
 ### 工具回傳要分得出成功與失敗
 
