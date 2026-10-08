@@ -4,7 +4,7 @@
  *
  * 一切從交易明細推導：
  *   輸入層（人或 Iris 會寫）  標的 / 帳戶 / 實體資產 / 交易
- *   計算層（程式或公式產生）  持倉 / 已實現損益 / 現金 / 配置 / 指標 / 面板
+ *   計算層（程式或公式產生）  持倉 / 現金 / 配置 / 指標
  *   歷史層                   每日快照（長表）
  *   系統層                   env / consolelog / chat / …
  *
@@ -95,14 +95,6 @@ var AssetSchema = (() => {
                 '佔股票%', '區域', '類型', '目標配置%', '佔總資產%', '偏離']
     },
     {
-      name: '已實現損益',
-      generated: true,
-      textColumns: ['代號'],
-      note: '⚠️ 由 Position.rebuild() 覆寫。每一筆賣出的沖銷結果。',
-      headers: ['賣出日', '代號', '名稱', '股數', '賣出單價', '賣出淨額',
-                '沖銷成本', '已實現損益', '報酬率', '賣出前均價']
-    },
-    {
       name: '現金',
       generated: true,
       note: '⚠️ 由 Position.rebuild() 覆寫。餘額 = 帳戶期初 + 交易現金流。',
@@ -119,16 +111,6 @@ var AssetSchema = (() => {
       generated: true,
       note: '⚠️ 由 Position.rebuild() 覆寫。直式 key-value，程式讀的是這張。',
       headers: ['指標', '數值', '說明']
-    },
-    {
-      // freeform：沒有標題列契約，整張由 Panel.render() 用公式排版。
-      // 人看的版面要能隨時搬動，所以不能同時背著「欄位不准動」的約束 ——
-      // 那份約束留給「指標」。
-      name: '面板',
-      generated: true,
-      freeform: true,
-      note: '⚠️ 由 Panel.render() 覆寫。人看的橫式儀表板，每一格都是公式。',
-      headers: []
     },
     {
       name: '每日快照',
@@ -388,8 +370,6 @@ var AssetSchema = (() => {
         } catch (e) { /* 舊版 API 沒有就算了，資料仍會寫進去 */ }
       });
 
-      // freeform 分頁的第 1 列是版面的一部分，不是標題列 —— 凍結或加粗都是錯的
-      if (tab.freeform) return;
       try {
         sheet.setFrozenRows(1);
         sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).setFontWeight('bold');

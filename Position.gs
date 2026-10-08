@@ -1,6 +1,6 @@
 /**
  * Position
- * @description 從「交易」重算持倉、已實現損益、現金、配置、指標
+ * @description 從「交易」重算持倉、現金、配置、指標
  *
  * 把交易依日期重放，維護每檔的（股數, 總成本），賣出時按加權平均沖銷
  * （與台灣券商對帳單一致）：
@@ -9,8 +9,7 @@
  *
  * 不用試算表公式的原因：加權平均是路徑相依的，SUMIF 這類彙總函式表達不出來。
  *
- * ⚠️ 會整段覆寫「持倉」「已實現損益」「現金」「配置」「指標」，
- *    最後由 Panel.render() 重畫「面板」。那幾張表不可手改。
+ * ⚠️ 會整段覆寫「持倉」「現金」「配置」「指標」，那幾張表不可手改。
  */
 var Position = (() => {
   var p = {};
@@ -134,9 +133,9 @@ var Position = (() => {
   // ─── 交易重放 ──────────────────────────────────────────────────
 
   /**
-   * 依日期重放交易，算出每檔的持倉狀態與每一筆賣出的沖銷結果。
+   * 依日期重放交易，算出每檔的持倉狀態。
    * @param {Array<object>} trades 交易表的物件陣列
-   * @returns {{positions: object, realized: Array, dividends: object}}
+   * @returns {{positions: object, warnings: Array<string>}}
    */
   p.replay = (trades) => {
     var sorted = trades
@@ -152,10 +151,9 @@ var Position = (() => {
       .map(x => x.t);
 
     var positions = {};   // code → { shares, cost, dividend, realized }
-    var realized  = [];
     // 被夾住或跳過的交易。這些**不能只寫進 consolelog**：交易列的「現金流」
     // 公式用的是使用者填的原始股數，程式這邊卻夾到了實際持股 —— 兩邊會對不起來
-    // （持倉正確、現金卻多入帳）。所以要一路往上冒到 rebuild 的結果與面板。
+    // （持倉正確、現金卻多入帳）。所以要一路往上冒到 rebuild 的結果與指標。
     var warnings  = [];
 
     var slot = (code) => {
@@ -202,14 +200,6 @@ var Position = (() => {
         var costOut  = avg * sellQty;
         var proceeds = sellQty * price - fee - tax;
 
-        realized.push({
-          date: t['日期'], code: code, name: _str(t['名稱']),
-          shares: sellQty, price: price, proceeds: proceeds,
-          costOut: costOut, pnl: proceeds - costOut,
-          rate: costOut > 0 ? (proceeds - costOut) / costOut : 0,
-          avgBefore: avg
-        });
-
         ps.shares  -= sellQty;
         ps.cost    -= costOut;
         ps.realized += proceeds - costOut;
@@ -223,7 +213,7 @@ var Position = (() => {
       }
     });
 
-    return { positions: positions, realized: realized, warnings: warnings };
+    return { positions: positions, warnings: warnings };
   };
 
   // ─── XIRR ──────────────────────────────────────────────────────
@@ -314,7 +304,7 @@ var Position = (() => {
     options = options || {};
     var ss = AssetSchema.open();
 
-    var need = ['交易', '標的', '帳戶', '實體資產', '持倉', '已實現損益', '現金', '配置', '指標', '面板'];
+    var need = ['交易', '標的', '帳戶', '實體資產', '持倉', '現金', '配置', '指標'];
     var missing = need.filter(n => !ss.getSheetByName(n));
     if (missing.length) {
       var msg = '缺少分頁：' + missing.join('、') + '，請先執行 setupAssetSheet()';
@@ -394,13 +384,6 @@ var Position = (() => {
       ];
     });
 
-    // ── 已實現損益 ────────────────────────────────────────────
-    var realRows = replayed.realized.map(x => [
-      x.date, x.code, x.name,
-      _round(x.shares, 4), _round(x.price, 4), _round(x.proceeds, 2),
-      _round(x.costOut, 2), _round(x.pnl, 2), _round(x.rate, 6), _round(x.avgBefore, 4)
-    ]);
-
     // ── 現金 ──────────────────────────────────────────────────
     var cashRows = accounts
       .filter(a => _str(a['帳戶']) && _str(a['狀態']) !== '停用')
@@ -420,7 +403,7 @@ var Position = (() => {
     if (options.dryRun) {
       return {
         ok: true, dryRun: true,
-        positions: posRows.length, realized: realRows.length, cash: cashRows.length,
+        positions: posRows.length, cash: cashRows.length,
         warnings: replayed.warnings,
         detail: codes.map(c => ({
           code: c,
@@ -435,7 +418,6 @@ var Position = (() => {
     }
 
     AssetSchema.writeBlock(ss.getSheetByName('持倉'), posRows, 19);
-    AssetSchema.writeBlock(ss.getSheetByName('已實現損益'), realRows, 10);
     AssetSchema.writeBlock(ss.getSheetByName('現金'), cashRows, 8);
 
     SpreadsheetApp.flush();   // 指標要讀上面幾張表算完的值
@@ -444,7 +426,7 @@ var Position = (() => {
     // 下面的指標才讀得到更新後的市值
     var priceFix = p._fillMissingPrices(ss, instByCode);
 
-    // ⚠️ 這一句一定要在 _writePanelAndAllocation 之前 —— 「指標」最上面的
+    // ⚠️ 這一句一定要在 _writeMetricsAndAllocation 之前 —— 「指標」最上面的
     // 「⚠️ 待修正」列就是從 replayed.warnings 生出來的，寫完之後才 push 就只剩
     // 回覆看得到，儀表板的警示條完全不知情
     if (priceFix.filled.length) {
@@ -454,11 +436,7 @@ var Position = (() => {
         '不會自己更新；下次重算會再試一次公式）');
     }
 
-    var summary = p._writePanelAndAllocation(ss, trades, replayed);
-
-    // 面板純粹是公式排版，只有「畫幾列」會變 —— 擺在最後重畫，
-    // 這樣持倉多一檔或出清一檔，版面就跟著對上。
-    Panel.render(ss);
+    var summary = p._writeMetricsAndAllocation(ss, trades, replayed);
 
     // 資料剛動過，儀表板與 Mini App 的快取就過期了。不清的話，記完一筆交易
     // 最久要等 15 分鐘才看得到 —— 而使用者記完通常馬上就會去看。
@@ -467,7 +445,6 @@ var Position = (() => {
     var result = {
       ok: true,
       positions: posRows.length,
-      realized: realRows.length,
       cashAccounts: cashRows.length,
       trades: trades.length,
       totalAssets: summary.totalAssets,
@@ -483,7 +460,7 @@ var Position = (() => {
    * 產生「指標」與「配置」。
    * 這兩張要等持倉的公式算完（市值），所以獨立成一段、在 flush 之後跑。
    */
-  p._writePanelAndAllocation = (ss, trades, replayed) => {
+  p._writeMetricsAndAllocation = (ss, trades, replayed) => {
     var posSheet = ss.getSheetByName('持倉');
     var positions = AssetSchema.readObjects(posSheet);
     var cash      = AssetSchema.readObjects(ss.getSheetByName('現金'));
@@ -627,7 +604,7 @@ var Position = (() => {
     //
     // 寫成公式之後，報價回來的下一秒它自己就對了，不需要任何人跑 rebuild。
     // 其餘各列仍是死值：它們牽涉加權平均成本這類路徑相依的計算，公式表達不出來。
-    var panelRows = warnRows.concat([
+    var metricRows = warnRows.concat([
       ['總資產',       '=SUM(持倉!$I$2:$I)+SUM(現金!$H$2:$H)+SUM(實體資產!$I$2:$I)',
                        '股票市值 + 現金 + 實體資產'],
       ['股票市值',     '=SUM(持倉!$I$2:$I)',      '持倉表市值合計'],
@@ -682,9 +659,9 @@ var Position = (() => {
       metricSheet.getRange(2, 2, Math.max(metricSheet.getMaxRows() - 1, 1), 1)
         .setNumberFormat('General');
     } catch (e) {
-      Logger.warning('Position._writePanelAndAllocation', '重設指標數值欄格式失敗', e.message);
+      Logger.warning('Position._writeMetricsAndAllocation', '重設指標數值欄格式失敗', e.message);
     }
-    AssetSchema.writeBlock(metricSheet, panelRows, 3);
+    AssetSchema.writeBlock(metricSheet, metricRows, 3);
 
     // ── 配置：大類 / 區域 / 類型 三個維度 ──
     var held = positions.filter(x => _num(x['股數']) > 0);

@@ -49,7 +49,7 @@ Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），
 - [ ] **回傳約定**：`tryHandle` 對「不是指令」必須回 `null`（回空字串會讓 `doPost` 誤判為已處理，訊息就此消失）
 - [ ] **耗時指令**：若 handler 會呼叫 LLM，必須先送一則實體訊息（typing 狀態只有 5 秒）
 
-### 如果 `Position._writePanelAndAllocation` 新增了「指標」的列
+### 如果 `Position._writeMetricsAndAllocation` 新增了「指標」的列
 - [ ] **`Snapshot._metrics`**：sheet 的 key → JSON key 是手寫對應的，沒加就讀不出來
 - [ ] **兩個前端**：`DashboardPage.html` 與 `MiniAppPage.html` 的投資績效區塊各加一格
 - [ ] **算不出來時寫空字串，不要寫 0**：`_metrics` 靠空字串回傳 `null`，寫 0 會顯示成「報酬率 0%」

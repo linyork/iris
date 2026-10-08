@@ -29,7 +29,7 @@ var Commands = (() => {
     },
     {
       name: 'refresh',
-      description: '重新計算持倉、面板與配置',
+      description: '重新計算持倉、指標與配置',
       handler: () => handleRefresh()
     }
   ];
@@ -39,7 +39,7 @@ var Commands = (() => {
   /**
    * 手動重算。
    *
-   * `持倉` 與 `面板` 的市價、市值是活公式，但 `指標` 與 `配置` 是重算當下寫死的值，
+   * `持倉` 的市價、市值是活公式，但 `指標` 與 `配置` 是重算當下寫死的值，
    * 而程式讀的「總資產」來自 `指標` —— 盤中想讓它跟上就得重算一次。
    * 排程在 13:00 也有一班，這支是不想等的時候用的。
    */
@@ -50,7 +50,7 @@ var Commands = (() => {
     }
     var lines = [
       '已重新計算。',
-      '▸ 持倉 ' + r.positions + ' 檔（含已出清）、已實現損益 ' + r.realized + ' 筆',
+      '▸ 持倉 ' + r.positions + ' 檔（含已出清）',
       '▸ 交易 ' + r.trades + ' 筆',
       '▸ 總資產 ' + Math.round(r.totalAssets).toLocaleString()
     ];

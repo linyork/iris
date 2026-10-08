@@ -342,7 +342,6 @@ const load = f => (0, eval)(fs.readFileSync(path.join(__dirname, f), 'utf8'));
 // 那是「模型說已記錄到底有沒有寫」的唯一證據，載真的比 stub 有意義（見 T27）
 load('Utils.gs');
 load('AssetSchema.gs');
-load('Panel.gs');        // Position.rebuild() 最後會叫它重畫面板
 load('Position.gs');
 load('AssetMigrate.gs');
 load('AssetTools.gs');
@@ -380,9 +379,7 @@ console.log('\nT1  加權平均成本與已實現損益');
   ]);
   const p = r.positions['X'];
   check('剩餘股數 1500', p.shares === 1500, p.shares);
-  check('賣出前均價 15.03', near(r.realized[0].avgBefore, 15.03, 1e-9), r.realized[0].avgBefore);
-  check('沖銷成本 7,515', near(p.cost, 30060 - 7515, 1e-6) && near(r.realized[0].costOut, 7515, 1e-6), r.realized[0].costOut);
-  check('賣出淨額 12,430', near(r.realized[0].proceeds, 12430, 1e-9), r.realized[0].proceeds);
+  check('沖銷成本 7,515（均價 15.03 × 500）', near(p.cost, 30060 - 7515, 1e-6), p.cost);
   check('已實現損益 4,915', near(p.realized, 4915, 1e-6), p.realized);
   check('剩餘總成本 22,545', near(p.cost, 22545, 1e-6), p.cost);
   check('累計股利 1,234', p.dividend === 1234, p.dividend);
@@ -402,11 +399,14 @@ console.log('\nT1  加權平均成本與已實現損益');
     t('2026-05-01', '買進', 'Z', 100, 30),
     t('2026-05-01', '賣出', 'Z', 100, 40)
   ]);
-  check('同日多筆依輸入順序沖銷（均價 20）', near(r3.realized[0].avgBefore, 20, 1e-9), r3.realized[0].avgBefore);
+  // 均價 20 → 沖銷 2,000、賣得 4,000
+  check('同日多筆依輸入順序沖銷（均價 20）', near(r3.positions['Z'].realized, 2000, 1e-9), r3.positions['Z'].realized);
 
   // 賣超只賣得掉手上有的
   const r4 = Position.replay([t('2026-01-01', '買進', 'W', 100, 10), t('2026-02-01', '賣出', 'W', 500, 20)]);
-  check('賣出股數超過持股時以持股為準', r4.realized[0].shares === 100 && r4.positions['W'].shares === 0, r4.realized[0].shares);
+  // 只沖得掉 100 股：100 × (20 − 10) = 1,000，不是 500 股的量
+  check('賣出股數超過持股時以持股為準', near(r4.positions['W'].realized, 1000, 1e-9) && r4.positions['W'].shares === 0,
+    r4.positions['W'].realized);
 }
 
 // ─── T2  XIRR ────────────────────────────────────────────────────
@@ -445,7 +445,7 @@ console.log('\nT3  建表');
 const target = SpreadsheetApp.openById(AssetSchema.SHEET_ID);
 target.sheets.push(new Sheet('工作表1'));          // 模擬新試算表的預設分頁
 let r3 = AssetSchema.build();
-check('建立 17 個分頁', r3.created.length === 17, r3.created.length);
+check('建立 15 個分頁', r3.created.length === 15, r3.created.length);
 check('預設的「工作表1」被移除', !target.getSheetByName('工作表1'));
 check('交易表標題正確', target.getSheetByName('交易').raw(1, 2) === '動作', target.getSheetByName('交易').raw(1, 2));
 // 公式只填到有資料的最後一列。空表就該是空的 —— 預灌公式會讓 getLastRow()
@@ -508,7 +508,6 @@ console.log('\nT5  重算持倉並與舊表對帳');
 const reb = Position.rebuild();
 check('重算成功', reb.ok === true, JSON.stringify(reb));
 check('持倉 11 檔（8 檔在持 + 3 檔已出清但領過息）', reb.positions === 11, reb.positions);
-check('已實現損益 0 筆（還沒賣過）', reb.realized === 0, reb.realized);
 {
   const pos = AssetSchema.readObjects(target.getSheetByName('持倉'));
   const legacyStocks = LEGACY['所有股票'].slice(2);
@@ -593,17 +592,14 @@ console.log('\nT6  記一筆賣出（模擬 Telegram 輸入）');
   const reb2 = Position.rebuild();
   const pos = AssetSchema.readObjects(target.getSheetByName('持倉'));
   const p56 = pos.find(x => x['代號'] === '0056');
-  const real = AssetSchema.readObjects(target.getSheetByName('已實現損益'));
 
   const AVG = H0.cost / H0.shares;            // 加權平均成本
   const OUT = AVG * SELL_QTY;                 // 沖銷成本
   const NET = SELL_QTY * SELL_PRICE - SELL_FEE;
 
   check('賣出後股數 = 期初 − 賣出', near(num(p56['股數']), H0.shares - SELL_QTY, 0), p56['股數']);
-  check('沖銷成本 = 均價 × 賣出股數', near(num(real[0]['沖銷成本']), OUT, 1), money(num(real[0]['沖銷成本'])));
-  check('賣出淨額 = 股數 × 單價 − 手續費', near(num(real[0]['賣出淨額']), NET, 0.01), money(num(real[0]['賣出淨額'])));
-  check('已實現損益 = 淨額 − 沖銷成本', near(num(real[0]['已實現損益']), NET - OUT, 1),
-    money(num(real[0]['已實現損益'])));
+  check('已實現損益 = 淨額 − 沖銷成本', near(num(p56['已實現損益']), NET - OUT, 1),
+    money(num(p56['已實現損益'])));
   check('剩餘成本 = 總成本 − 沖銷成本', near(num(p56['總成本']), H0.cost - OUT, 1), money(num(p56['總成本'])));
   check('平均成本不變（加權平均法）', near(num(p56['平均成本']), AVG, 1e-4), p56['平均成本']);
 
@@ -1089,47 +1085,6 @@ if (process.env.STATEMENT_CSV && fs.existsSync(process.env.STATEMENT_CSV)) {
   st.errors.forEach(e => console.log('  WARN ' + e));
 }
 
-// ─── T17  面板只畫還有部位的標的 ──────────────────────────────────
-// 面板是人看的，出清的標的擺在上面只會是一排 0；而且它必須是純公式，
-// 一旦有人把數字寫死，重算之後就會停在那個時間點。
-console.log('\nT17  面板只畫還有部位的標的');
-{
-  Position.rebuild();
-  const pnl = target.getSheetByName('面板');
-  const pos = AssetSchema.readObjects(target.getSheetByName('持倉'));
-  const heldCodes = pos.filter(x => num(x['股數']) > 0).map(x => String(x['代號'])).sort();
-  const soldCodes = pos.filter(x => num(x['股數']) <= 0).map(x => String(x['代號']));
-
-  // 找到明細表頭那一列
-  let top = 0;
-  for (let r = 1; r <= pnl.getLastRow(); r++) {
-    if (String(pnl.getRange(r, 1).getValue()) === '代號') { top = r; break; }
-  }
-  check('面板有持股明細表頭', top > 0, '第 ' + top + ' 列');
-
-  const shown = [];
-  for (let r = top + 1; r <= pnl.getLastRow(); r++) {
-    const v = String(pnl.getRange(r, 1).getValue());
-    if (!v || v === '合計') break;
-    shown.push(v);
-  }
-  check('面板列出的檔數 = 還有部位的檔數',
-    shown.length === heldCodes.length, shown.length + ' vs ' + heldCodes.length);
-  check('已出清的標的不出現在面板上',
-    soldCodes.length > 0 && !shown.some(c => soldCodes.indexOf(c) >= 0),
-    '已出清 ' + soldCodes.join(',') + ' / 面板 ' + shown.join(','));
-  check('面板的股數對得上持倉',
-    shown.every((c, i) => num(pnl.getRange(top + 1 + i, 5).getValue()) ===
-      num((pos.find(x => String(x['代號']) === c) || {})['股數'])));
-
-  // 每一格都必須是公式：寫死的數字撐不過下一次重算
-  const raws = shown.map((_, i) => String(pnl.raw(top + 1 + i, 7)));
-  check('當前價值那一欄是公式而不是寫死的數字',
-    raws.length > 0 && raws.every(x => x.charAt(0) === '='), raws[0]);
-
-  check('總資產那格也是公式', String(pnl.raw(5, 2)).charAt(0) === '=', String(pnl.raw(5, 2)));
-}
-
 // ─── T18  市價的 TWSE 備援 ────────────────────────────────────────
 // GOOGLEFINANCE 抓不到時退到 TWSE 的 STOCK_DAY_AVG。本機沒有網路也打不到 TWSE，
 // 所以這裡驗的是**公式長相**：代號必須是指向 $A 欄的參照，不能是寫死的某一檔 ——
@@ -1173,7 +1128,7 @@ console.log('\nT19  抓不到市價時要出聲，不要靜默少算');
   const saved = String(posSheet.raw(victim, 8));
   posSheet.getRange(victim, 8).setValue('');
 
-  const r = Position._writePanelAndAllocation(target, [], { warnings: [] });
+  const r = Position._writeMetricsAndAllocation(target, [], { warnings: [] });
   const panel = AssetSchema.readObjects(target.getSheetByName('指標'));
   const warn = panel.filter(x => /待修正/.test(String(x['指標'])));
 
@@ -1440,7 +1395,6 @@ console.log('\nT23  作廢記錯的交易');
   const tradeSheet = target.getSheetByName('交易');
   const cashSheet  = target.getSheetByName('現金');
   const posSheet   = target.getSheetByName('持倉');
-  const realSheet  = target.getSheetByName('已實現損益');
   const ACC  = '國泰證券戶';
   const code = H0.code;
 
@@ -1497,17 +1451,14 @@ console.log('\nT23  作廢記錯的交易');
   check('作廢股利後累計股利回到原本', near(num(posOf(code)['累計股利']), div0, 0.01), num(posOf(code)['累計股利']));
   check('股利統計（Snapshot）也不再算它', near(divTotal(), divSum0, 0.01), divTotal() + ' vs ' + divSum0);
 
-  // ── 賣出：已實現損益整列消失，不是多一筆反向的 ──
+  // ── 賣出：已實現損益退回原本，不是多一筆反向的 ──
   const real0 = num(posOf(code)['已實現損益']);
-  const realRows0 = AssetSchema.readObjects(realSheet).length;
   const sellRow = rowNumOf(AssetTools.recordTrade({
     action: '賣出', symbol: code, shares: 100, price: SELL_PRICE, fee: 20, tax: 5, account: ACC }));
-  check('賣出產生一列已實現損益',
-    AssetSchema.readObjects(realSheet).length === realRows0 + 1, AssetSchema.readObjects(realSheet).length);
+  check('賣出產生已實現損益',
+    !near(num(posOf(code)['已實現損益']), real0, 0.01), num(posOf(code)['已實現損益']));
   AssetTools.voidTrade({ row: sellRow, reason: '根本沒賣' });
   check('作廢賣出後已實現損益回到原本', near(num(posOf(code)['已實現損益']), real0, 0.01), num(posOf(code)['已實現損益']));
-  check('已實現損益表也退回原本的列數（不是多一筆反向的）',
-    AssetSchema.readObjects(realSheet).length === realRows0, AssetSchema.readObjects(realSheet).length);
 
   // ── 沒有的股票不給賣：擋在寫入之前，不是寫完再警告 ──
   // 持倉那邊會跳過賣不掉的部分，但那一列的現金流是自己的公式算的、看不到持倉 ——

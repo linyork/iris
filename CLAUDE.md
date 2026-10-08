@@ -173,7 +173,7 @@ answer is fixed skip the whole ReAct loop and one LLM call.
 |---|---|
 | `/dashboard` | On Telegram, sends a message with an inline `web_app` button that opens the Mini App; elsewhere returns `Config.DASHBOARD_URL` (Script Property — the browser dashboard is on the HEAD deployment's `/dev`, whose deployment id differs from the webhook's `/exec`, so it cannot be derived). The handler sends its own message and returns `''` — "handled, nothing left to push" — which is distinct from `null`. |
 | `/report` | Runs `buildDailyReport()` — the same generator the 09:00 trigger uses, minus the weekend guard, replying only to the caller |
-| `/refresh` | Runs `Position.rebuild()` on demand. 持倉 and 面板 prices are live formulas, but 指標 and 配置 hold values frozen at rebuild time — and the total-assets figure everything downstream reads comes from 指標. The 13:00 job does the same thing on a schedule; this is for when you don't want to wait. |
+| `/refresh` | Runs `Position.rebuild()` on demand. 持倉 prices are live formulas, but 指標 and 配置 hold values frozen at rebuild time — and the total-assets figure everything downstream reads comes from 指標. The 13:00 job does the same thing on a schedule; this is for when you don't want to wait. |
 
 The command list is shared between dispatch and `Telegram.setupCommands()` (`setMyCommands`) so the
 menu cannot drift from what is implemented. **After adding or renaming a command, run
@@ -391,7 +391,7 @@ and immune to that quota.
   fails again. Blank is worse: `$I` goes to 0 and takes 總資產, every percentage and that day's
   snapshot with it.
 - **A successful fallback still raises a warning**, pushed into `replayed.warnings` **before**
-  `_writePanelAndAllocation` — that is what puts it in 指標's `⚠️ 待修正` row and on the
+  `_writeMetricsAndAllocation` — that is what puts it in 指標's `⚠️ 待修正` row and on the
   dashboard banner. Push it afterwards and only the chat reply knows.
 - **If MIS has no price either, the cell stays blank.** Never invent one; the existing
   "抓不到市價" warning is the correct outcome.
@@ -414,7 +414,7 @@ and immune to that quota.
 現金與實體資產沒有 `目標配置%` 這一欄，也不可能有。所以那些目標加起來的 100% 講的是
 **股票這一塊**的 100%。因此 `持倉!偏離` = `佔股票%`（N 欄）− `目標配置%`，`配置` 的
 `區域` / `類型` 兩維也用股票市值當分母；只有 `大類`（股票／現金／實體）那三列在講
-總資產怎麼切，分母才是總資產。`Position._writePanelAndAllocation` 的 `pushGroup` 收
+總資產怎麼切，分母才是總資產。`Position._writeMetricsAndAllocation` 的 `pushGroup` 收
 `base` 參數就是為了這件事，不是漏改。
 
 拿總資產去減目標的話，每一組都會固定低配 `目標×(1−股票佔比)`，全部加起來剛好是
@@ -933,28 +933,23 @@ formatting layer drops it, and the model has no material left to be honest with.
 `Utilities.formatDate` — these dates are the spreadsheet's local days, and routing them through a
 timezone only adds a place for them to land one day off.
 
-### 面板 vs 指標
+### 指標 is the only number table — 面板 and 已實現損益 are gone
 
-Two tabs, one number set, on purpose:
+`指標` (指標 / 數值 / 說明, values frozen at rebuild time) is written by
+`Position._writeMetricsAndAllocation()` and read by `Snapshot._totals`, `DataSync`,
+`GoogleSheet.getDashboard` and the `持倉!R` VLOOKUP.
 
-| Tab | Written by | Shape | Read by |
-|---|---|---|---|
-| `指標` | `Position._writePanelAndAllocation()` | 指標 / 數值 / 說明, values frozen at rebuild time | `Snapshot._totals`, `DataSync`, `GoogleSheet.getDashboard`, `持倉!R` VLOOKUP |
-| `面板` | `Panel.render()` | free-form, **every cell a formula** | humans |
+Two calculated tabs were removed on 2026-10-08 as part of shrinking the spreadsheet:
 
-They were one tab and it did not work: 面板 had to keep a strict three-column contract
-(`writeBlock` → `assertHeader` refuses to write when column 1 isn't 指標) *and* be laid out
-for a person to read. Splitting them means the visual layout can move freely while every
-machine reader keeps a stable key-value table.
+- **`面板`** was a human-only, all-formula layout (`Panel.gs`, `renderPanel()`, the
+  `freeform` flag in `AssetSchema.TABS`). No code read it, and the browser dashboard and the
+  Mini App now show the same figures.
+- **`已實現損益`** held one row per sale (沖銷成本, 賣出淨額, 賣出前均價…). No code read it
+  either. The per-holding total stays in `持倉!已實現損益` and the portfolio total in 指標, so
+  `Position.replay` no longer builds the per-sale array — it returns `{positions, warnings}`.
 
-`面板` stores nothing — it's `=持倉!$I3`, `=SUM(現金!$H$2:$H)` and so on, so it tracks
-GOOGLEFINANCE live instead of freezing at the last rebuild. `Panel.render()` only decides
-*how many rows to draw*: it lists holdings with 股數 > 0 and mirrors them row-for-row from
-`持倉`. That is why `Position.rebuild()` calls it last — sell out a position and the layout
-has to shrink. `renderPanel()` in `DevTools.gs` redraws it without recomputing anything.
-
-⚠️ `面板` is `freeform: true` in `AssetSchema.TABS`: no header contract, and `build()` skips
-the freeze/bold it applies to every other tab (row 1 there is data, not a header).
+If a per-sale breakdown is ever needed again, derive it from `交易` on demand rather than
+bringing back a tab that `rebuild()` rewrites every time.
 
 ⚠️ A new 指標 row has **three** readers to update, not one: `Snapshot._metrics` (which maps
 sheet keys to JSON keys by hand) and the 投資績效 block in **both** `DashboardPage.html` and
@@ -1053,7 +1048,7 @@ their own modules**; the table only registers names.
 
 ⚠️ `atHour(9)` fires somewhere between 9:00 and 10:00, so **never use trigger order to
 guarantee freshness**. `setData()` and `buildDailyReport()` each call `Position.rebuild()`
-themselves, because 指標 and 配置 hold values computed at rebuild time — 持倉 and 面板 prices
+themselves, because 指標 and 配置 hold values computed at rebuild time — 持倉 prices
 are live formulas, but the total assets figure Snapshot reads is only as fresh as the last rebuild.
 `/refresh` does the same on demand.
 

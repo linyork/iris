@@ -108,7 +108,7 @@ function setupAssetSheet() {
   return r;
 }
 
-/** 從「交易」重算持倉、已實現損益、現金、配置、面板 */
+/** 從「交易」重算持倉、現金、配置、指標 */
 function rebuildPositions() {
   var r = Position.rebuild();
   console.log(JSON.stringify(r, null, 2));
@@ -194,13 +194,6 @@ function runEval() {
   var r = Eval.runBatch(3);
   console.log(JSON.stringify(r, null, 2));
   console.log('未跑完的話再執行一次；結果與未通過的性質寫在 eval_set 分頁。');
-  return r;
-}
-
-/** 只重畫「面板」的版面（不重算持倉）。改了 Panel.render() 之後用這支看結果。 */
-function renderPanel() {
-  var r = Panel.render();
-  console.log(JSON.stringify(r, null, 2));
   return r;
 }
 
