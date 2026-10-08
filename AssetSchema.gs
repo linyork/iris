@@ -94,7 +94,9 @@ var AssetSchema = (() => {
       name: '現金',
       generated: true,
       note: '⚠️ 由 Position.rebuild() 覆寫。餘額 = 帳戶期初 + 交易現金流。',
-      headers: ['帳戶', '類型', '幣別', '期初', '交易淨流', '餘額', '匯率', '台幣值']
+      // 2026-10-08 拿掉「類型」：沒人讀（要帳戶類型的地方讀的是「帳戶」表）。
+      // 這張表是依欄名寫的（writeBlockByName），表上多一欄或少一欄都不會寫錯位置。
+      headers: ['帳戶', '幣別', '期初', '交易淨流', '餘額', '匯率', '台幣值']
     },
     {
       name: '配置',
@@ -294,6 +296,42 @@ var AssetSchema = (() => {
       '實際是「' + (chk.found || '(空白)') + '」。寫入是位置對應的，欄位錯位會靜默寫錯，' +
       '請先執行 setupAssetSheet() 修正標題列。'
     );
+  };
+
+  /**
+   * 欄名 → 欄位字母，讀的是**試算表上實際的標題列**。給跨表公式用（例如「指標」加總
+   * 現金的台幣值）：主人在表上刪掉或挪動別的欄，引用會跟著走，而不是靜默讀到隔壁欄。
+   * 找不到那一欄就丟例外 —— 寫出一個指錯欄的公式比停下來糟。
+   */
+  s.liveCol = (sheet, name) => {
+    var idx = s.headerMap(sheet)[name];
+    if (idx === undefined) throw new Error('「' + sheet.getName() + '」找不到「' + name + '」欄');
+    return s.colLetter(idx + 1);
+  };
+
+  /**
+   * 依**欄名**覆寫一張 generated 分頁的資料區，不靠欄位位置。
+   *
+   * rowsFn(L) 會拿到「欄名 → 實際欄位字母」的函式，回傳以欄名為鍵的物件陣列；公式裡的
+   * 欄位字母也用 L() 組，所以整列都跟著試算表實際的欄序走。
+   * 標題列只要求 TABS 定義的欄位**都在**，不管順序、也容許多出來的欄（寫空白）——
+   * 主人在表上刪掉一欄沒人讀的欄，不必等程式先改。
+   */
+  s.writeBlockByName = (sheet, rowsFn) => {
+    var map = s.headerMap(sheet);
+    var missing = (s.expected(sheet.getName()) || []).filter(h => map[h] === undefined);
+    if (missing.length) {
+      throw new Error('「' + sheet.getName() + '」缺少欄位：' + missing.join('、') +
+        '，請先執行 setupAssetSheet()');
+    }
+    var header = map.__header;
+    var width = header.length;
+    var objs = rowsFn((name) => s.colLetter(map[name] + 1));
+    var lastRow = sheet.getLastRow();
+    if (lastRow >= 2) sheet.getRange(2, 1, lastRow - 1, Math.max(sheet.getLastColumn(), width)).clearContent();
+    if (!objs.length) return;
+    var rows = objs.map(o => header.map(h => (h && o[h] !== undefined) ? o[h] : ''));
+    sheet.getRange(2, 1, rows.length, width).setValues(rows);
   };
 
   /**

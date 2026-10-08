@@ -369,25 +369,27 @@ var Position = (() => {
     });
 
     // ── 現金 ──────────────────────────────────────────────────
-    var cashRows = accounts
-      .filter(a => _str(a['帳戶']) && _str(a['狀態']) !== '停用')
-      .map((a, n) => {
-        var r   = n + 2;
-        var cur = _str(a['幣別']) || 'TWD';
-        return [
-          _str(a['帳戶']), _str(a['類型']), cur,
-          _num(a['期初餘額']),
-          '=SUMIF(交易!$L:$L,$A' + r + ',交易!$J:$J)',
-          '=$D' + r + '+$E' + r,
-          cur === 'TWD' ? 1 : '=IFERROR(GOOGLEFINANCE("CURRENCY:' + cur + 'TWD"),1)',
-          '=$F' + r + '*$G' + r
-        ];
-      });
+    // 依欄名寫（writeBlockByName）：公式裡的欄位字母也由實際標題列決定，
+    // 主人在表上刪掉沒人讀的欄時，不必等程式先改也不會寫錯位置。
+    var activeAccounts = accounts.filter(a => _str(a['帳戶']) && _str(a['狀態']) !== '停用');
+    var cashRows = (L) => activeAccounts.map((a, n) => {
+      var r   = n + 2;
+      var cur = _str(a['幣別']) || 'TWD';
+      return {
+        '帳戶':     _str(a['帳戶']),
+        '幣別':     cur,
+        '期初':     _num(a['期初餘額']),
+        '交易淨流': '=SUMIF(交易!$L:$L,$' + L('帳戶') + r + ',交易!$J:$J)',
+        '餘額':     '=$' + L('期初') + r + '+$' + L('交易淨流') + r,
+        '匯率':     cur === 'TWD' ? 1 : '=IFERROR(GOOGLEFINANCE("CURRENCY:' + cur + 'TWD"),1)',
+        '台幣值':   '=$' + L('餘額') + r + '*$' + L('匯率') + r
+      };
+    });
 
     if (options.dryRun) {
       return {
         ok: true, dryRun: true,
-        positions: posRows.length, cash: cashRows.length,
+        positions: posRows.length, cash: activeAccounts.length,
         warnings: replayed.warnings,
         detail: codes.map(c => ({
           code: c,
@@ -402,7 +404,7 @@ var Position = (() => {
     }
 
     AssetSchema.writeBlock(ss.getSheetByName('持倉'), posRows, AssetSchema.expected('持倉').length);
-    AssetSchema.writeBlock(ss.getSheetByName('現金'), cashRows, 8);
+    AssetSchema.writeBlockByName(ss.getSheetByName('現金'), cashRows);
 
     SpreadsheetApp.flush();   // 指標要讀上面幾張表算完的值
 
@@ -429,7 +431,7 @@ var Position = (() => {
     var result = {
       ok: true,
       positions: posRows.length,
-      cashAccounts: cashRows.length,
+      cashAccounts: activeAccounts.length,
       trades: trades.length,
       totalAssets: summary.totalAssets,
       xirr: summary.xirr
@@ -588,12 +590,20 @@ var Position = (() => {
     //
     // 寫成公式之後，報價回來的下一秒它自己就對了，不需要任何人跑 rebuild。
     // 其餘各列仍是死值：它們牽涉加權平均成本這類路徑相依的計算，公式表達不出來。
+    // 加總的欄位字母讀各表**實際的標題列**（AssetSchema.liveCol），不寫死 —— 主人在表上
+    // 刪掉別的欄時（2026-10-08 持倉 7 欄、現金的類型），寫死的字母會靜默加總到隔壁欄。
+    var colSum = (tab, name) => {
+      var c = AssetSchema.liveCol(ss.getSheetByName(tab), name);
+      return 'SUM(' + tab + '!$' + c + '$2:$' + c + ')';
+    };
+    var sumStock = colSum('持倉', '市值'), sumCash = colSum('現金', '台幣值');
+    var sumPhys  = colSum('實體資產', '市值');
     var metricRows = warnRows.concat([
-      ['總資產',       '=SUM(持倉!$I$2:$I)+SUM(現金!$H$2:$H)+SUM(實體資產!$I$2:$I)',
+      ['總資產',       '=' + sumStock + '+' + sumCash + '+' + sumPhys,
                        '股票市值 + 現金 + 實體資產'],
-      ['股票市值',     '=SUM(持倉!$I$2:$I)',      '持倉表市值合計'],
-      ['現金',         '=SUM(現金!$H$2:$H)',      '各帳戶餘額換算台幣'],
-      ['實體資產',     '=SUM(實體資產!$I$2:$I)',  '黃金等'],
+      ['股票市值',     '=' + sumStock,      '持倉表市值合計'],
+      ['現金',         '=' + sumCash,       '各帳戶餘額換算台幣'],
+      ['實體資產',     '=' + sumPhys,       '黃金等'],
       ['—— 投資績效 ——', '', ''],
       ['股票投入成本', _round(stockCost),     '目前仍持有部位的成本'],
       ['未實現損益',   _round(stockValue - stockCost), '市值 − 投入成本'],

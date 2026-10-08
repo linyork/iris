@@ -2588,6 +2588,43 @@ console.log('\nT48  名稱對代號');
   check('遷移摘要有處理持倉與交易', retiredInst.持倉 > 0 && retiredInst.交易 > 0, JSON.stringify(retiredInst));
 }
 
+// ─── T49  現金依欄名寫入：表上多一欄、少一欄都不寫錯位置 ─────────────
+// 2026-10-08 拿掉「類型」。程式先上線、主人之後才手動刪欄，中間那段時間表上還有
+// 類型。依欄名寫入讓兩種樣子都對：台幣值落在它實際的欄，指標的加總也跟著指過去。
+console.log('\nT49  現金依欄名寫入');
+{
+  const cash = target.getSheetByName('現金');
+  const metric = target.getSheetByName('指標');
+  const NEW = AssetSchema.expected('現金');
+  const OLD = ['帳戶', '類型', '幣別', '期初', '交易淨流', '餘額', '匯率', '台幣值'];
+  const cashSumFormula = () => {
+    const rows = AssetSchema.readObjects(metric);
+    const i = rows.findIndex(x => String(x['指標']) === '現金');
+    return String(metric.raw(i + 2, 2));
+  };
+  const total = () => num((AssetSchema.readObjects(metric).find(x => String(x['指標']) === '總資產') || {})['數值']);
+
+  Position.rebuild();
+  const base = total();
+  const baseCash = AssetSchema.readObjects(cash).map(x => String(x['帳戶']) + '=' + num(x['台幣值'])).join(',');
+
+  // 舊樣子：B 欄還是「類型」
+  cash.getRange(1, 1, 1, OLD.length).setValues([OLD]);
+  const r1 = Position.rebuild();
+  check('表上還有「類型」欄時重算照樣成功', r1.ok === true, JSON.stringify(r1).slice(0, 120));
+  check('台幣值寫在它實際的 H 欄', AssetSchema.readObjects(cash).map(x => String(x['帳戶']) + '=' + num(x['台幣值'])).join(',') === baseCash);
+  check('指標的現金加總指向 H 欄', /現金!\$H\$2:\$H/.test(cashSumFormula()), cashSumFormula());
+  check('總資產不變', near(total(), base, 1), total() + ' vs ' + base);
+  check('多出來的「類型」欄寫空白', AssetSchema.readObjects(cash).every(x => x['類型'] === ''));
+
+  // 主人刪掉那一欄之後：回到 7 欄
+  cash.getRange(1, 1, 1, OLD.length).setValues([NEW.concat([''])]);
+  const r2 = Position.rebuild();
+  check('刪掉「類型」之後重算照樣成功', r2.ok === true);
+  check('指標的現金加總改指 G 欄', /現金!\$G\$2:\$G/.test(cashSumFormula()), cashSumFormula());
+  check('總資產仍然不變', near(total(), base, 1), total() + ' vs ' + base);
+}
+
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);

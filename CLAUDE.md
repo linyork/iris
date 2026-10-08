@@ -428,7 +428,7 @@ and immune to that quota.
 
 ### 現金餘額只有兩個入口
 
-`現金` is generated — `Position.rebuild()` overwrites all eight columns, and `餘額` is
+`現金` is generated — `Position.rebuild()` overwrites every column, and `餘額` is
 `帳戶!期初餘額` + `SUMIF(交易!帳戶, 交易!現金流)`. So a balance can only be moved by
 editing `帳戶!期初餘額` (which rewrites the starting point, contradicts `期初日期`, and
 leaves no trace) or by adding a row to `交易`. Hand-editing the `現金` cell survives until
@@ -852,12 +852,16 @@ timezone only adds a place for them to land one day off.
 `Position._writeMetricsAndAllocation()` and read by `Snapshot._totals`, `DataSync`,
 and `GoogleSheet.getDashboard`.
 
-⚠️ **`持倉` columns are referenced by letter from other tabs** — 指標's `=SUM(持倉!$I$2:$I)` (市值),
-and within 持倉 the 市值 formula. On 2026-10-08 the owner deleted seven unread columns
-(未實現損益／報酬率／淨成本／淨報酬率／佔股票%／佔總資產%／偏離) by hand, which moved 區域／類型／
-目標配置% from O/P/Q to J/K/L; 市值 stayed at I. Change the layout in `AssetSchema.TABS` and
-`Position.rebuild` together, then run the suite — `T47` derives every letter from the header and
-fails if a reference points at the wrong column.
+⚠️ **Cross-tab sums find their column by header name, not by letter.** 指標's 總資產 / 股票市值 /
+現金 / 實體資產 are `SUM(tab!$X$2:$X)` where X comes from `AssetSchema.liveCol(sheet, name)` —
+the **live** header row. On 2026-10-08 the owner deleted unread columns by hand twice (seven in
+持倉, 類型 in 現金); a hard-coded letter would have kept summing whatever slid into its place.
+
+`現金` is written with `AssetSchema.writeBlockByName`: values and in-row formula letters are
+placed by column name, and the header only has to *contain* every `TABS` column — an extra or
+reordered column doesn't break it. That is what let the code ship before the owner deleted 類型
+(`T49` rebuilds with and without it). `持倉` is still positional (`writeBlock`), so a layout change
+there means editing `AssetSchema.TABS` and `Position.rebuild` together; `T47` checks the letters.
 
 Two calculated tabs were removed on 2026-10-08 as part of shrinking the spreadsheet:
 
