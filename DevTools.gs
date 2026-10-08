@@ -318,10 +318,17 @@ function testNimSingleModel(modelId) {
  * ⚠️ 只放關卡一已確認打得到的模型：fetchAll 等整批，一顆卡住就吃滿 ~300s。
  * 結果同時寫進 consolelog（tag NimTest），可用診斷入口讀。
  */
-function testNimWriteIntent() {
+function testNimWriteIntent(opts) {
+  // 從編輯器直接跑時沒有參數；testNimFinalRound() 會帶 {models, withHistory} 進來
+  opts = (opts && typeof opts === 'object' && opts.models) ? opts : {};
+  var withHistory = opts.withHistory !== false;
   // 2026-10-08 testNimCandidateModels()：10 顆進 7 顆。404（帳號打不到）的是
   // llama-3.1-nemotron-ultra-253b-v1／mistral-large／palmyra-fin-70b-32k。
-  var MODELS = [
+  // 第一輪結果：gemma-4-31b-it／nemotron-3-super／nemotron-3-ultra 6/6；gpt-oss-20b 4/6
+  // （台幣戶校正叫成 listAccounts／updateAccount）；glm-5.3 3/6（一次編「已記錄第 13 列」，
+  // 兩次 429）；kimi-k3 與 nemotron-3.5-lightning 0/6（前者全部編造已完成，後者把英文
+  // 推理當正文吐出來）。
+  var MODELS = opts.models || [
     'moonshotai/kimi-k3',                      // 現役主模型，預期會重現問題
     'openai/gpt-oss-20b',                      // 現役備援
     'z-ai/glm-5.3',
@@ -362,7 +369,7 @@ function testNimWriteIntent() {
     var contents = [
       { role: 'user',  parts: [{ text: system }] },
       { role: 'model', parts: [{ text: Prompt.ACKNOWLEDGEMENT }] }
-    ].concat(POISON, [{ role: 'user', parts: [{ text: msg }] }]);
+    ].concat(withHistory ? POISON : [], [{ role: 'user', parts: [{ text: msg }] }]);
     var payload = {
       model: model, messages: AIAdapter.toOpenAIMessages(contents),
       max_tokens: 1024, tools: tools
@@ -386,7 +393,8 @@ function testNimWriteIntent() {
   var resps;
   try { resps = UrlFetchApp.fetchAll(jobs.map(j => buildRequest(j.model, j.c.msg))); }
   catch (ex) { console.log('⚠️ 整批丟例外：' + ex); Logger.error('NimTest', '寫入意圖整批例外', String(ex)); return; }
-  console.log('=== 關卡五：寫入意圖（' + jobs.length + ' 個請求，耗時 ' + Math.round((Date.now() - t0) / 1000) + 's）===\n');
+  var tagH = withHistory ? '（含歷史）' : '（無歷史）';
+  console.log('=== 關卡五：寫入意圖' + tagH + '（' + jobs.length + ' 個請求，耗時 ' + Math.round((Date.now() - t0) / 1000) + 's）===\n');
 
   var score = {};
   jobs.forEach((j, i) => {
@@ -417,14 +425,30 @@ function testNimWriteIntent() {
     if (verdict === '✅') score[j.model].pass++;
     var line = verdict + '  ' + j.model + '  ' + j.c.label;
     console.log(line + '\n      ' + detail);
-    Logger.info('NimTest', '寫入意圖 ' + line, detail);
+    Logger.info('NimTest', '寫入意圖' + tagH + ' ' + line, detail);
   });
 
   console.log('\n=== 小計 ===');
   Object.keys(score).forEach(m => {
     var s = m + '  ' + score[m].pass + '/' + score[m].n;
     console.log(s);
-    Logger.info('NimTest', '寫入意圖小計 ' + s);
+    Logger.info('NimTest', '寫入意圖小計' + tagH + ' ' + s);
+  });
+}
+
+/**
+ * 決選一鍵跑：忠實轉述 + 「拿掉歷史」的寫入意圖。
+ *
+ * 後者是在驗一個假設：kimi-k3 不叫工具，是不是因為歷史裡那句「已記錄第 12 列」——
+ * 拿掉歷史它就會叫的話，問題有一半在 ChatBot 怎麼存歷史，換模型之外也得修那裡。
+ * 兩批各自 fetchAll，加起來仍在 6 分鐘內。
+ */
+function testNimFinalRound() {
+  testNimFaithfulness();
+  testNimWriteIntent({
+    models: ['moonshotai/kimi-k3', 'google/gemma-4-31b-it',
+             'nvidia/nemotron-3-super-120b-a12b', 'nvidia/nemotron-3-ultra-550b-a55b'],
+    withHistory: false
   });
 }
 
@@ -677,15 +701,20 @@ function testNimFaithfulness() {
   // 環境問題。`kimi-k3` 用 testNimThinkingOff() 驗過的 chat_template_kwargs.thinking
   // （推理長度 1204→0，乾淨關掉）；`glm-5.3` 的 enable_thinking=false 只是「降低」
   // 不是「歸零」（849→355），但仍在 512 token 預算內出得了正文，一併帶進來看實際內容。
+  //
+  // 2026-10-08：testNimWriteIntent() 只有三顆 6/6 —— gemma-4-31b-it、nemotron-3-super、
+  // nemotron-3-ultra（kimi-k3 0/6，全部沒叫工具直接編「已校正」）。這輪決選只放它們，
+  // gpt-oss-20b 一樣當對照組。⚠️ nemotron-3-super 在 2026-08-09 曾把整段英文推理當正文
+  // 吐出來，而 /no_think 對 Nemotron 3 無效，所以這裡不送任何思考開關，看它原生的樣子。
+  // 每顆跑兩次：上一次的失敗不見得每次都發生。
   var CASES = [
-    { label: 'kimi-k3（頭號人選，thinking=false 乾淨關掉）',
-      model: 'moonshotai/kimi-k3', mode: 'deepseek' },
-    { label: 'glm-5.3（enable_thinking=false，僅降低未歸零）',
-      model: 'z-ai/glm-5.3', mode: 'glm-off' },
-    { label: 'gpt-oss-20b（對照組，現役備援）',
-      model: 'openai/gpt-oss-20b', mode: 'gptoss-top' },
-    { label: 'gemma-4-31b-it（非思考模型）',
-      model: 'google/gemma-4-31b-it', mode: 'plain' }
+    { label: 'gpt-oss-20b（對照組，現役備援）',     model: 'openai/gpt-oss-20b',                 mode: 'gptoss-top' },
+    { label: 'gemma-4-31b-it #1',                  model: 'google/gemma-4-31b-it',              mode: 'plain' },
+    { label: 'gemma-4-31b-it #2',                  model: 'google/gemma-4-31b-it',              mode: 'plain' },
+    { label: 'nemotron-3-super-120b #1',           model: 'nvidia/nemotron-3-super-120b-a12b',  mode: 'plain' },
+    { label: 'nemotron-3-super-120b #2',           model: 'nvidia/nemotron-3-super-120b-a12b',  mode: 'plain' },
+    { label: 'nemotron-3-ultra-550b #1',           model: 'nvidia/nemotron-3-ultra-550b-a55b',  mode: 'plain' },
+    { label: 'nemotron-3-ultra-550b #2',           model: 'nvidia/nemotron-3-ultra-550b-a55b',  mode: 'plain' }
   ];
 
   var buildRequest = (c) => {
@@ -724,8 +753,10 @@ function testNimFaithfulness() {
     var resp = responses[i];
     console.log('──────── ' + c.label);
     if (!resp || resp.getResponseCode() !== 200) {
-      console.log('  ❌ ' + (resp ? 'HTTP ' + resp.getResponseCode() + ' ' +
-                  resp.getContentText('UTF-8').slice(0, 120) : '無回應'));
+      var why = resp ? 'HTTP ' + resp.getResponseCode() + ' ' +
+                resp.getContentText('UTF-8').slice(0, 120) : '無回應';
+      console.log('  ❌ ' + why);
+      Logger.info('NimTest', '忠實轉述 ' + c.label + '  ❌', why);
       return;
     }
     try {
@@ -733,9 +764,12 @@ function testNimFaithfulness() {
       var choice = json.choices[0];
       var msg    = choice.message || {};
       var rc     = msg.reasoning_content ? String(msg.reasoning_content).length : 0;
-      console.log('  tokens=' + (json.usage ? json.usage.completion_tokens : '?') +
-                  '  reasoning長度=' + rc + '  finish=' + choice.finish_reason);
-      console.log('  ' + (msg.content ? String(msg.content) : '❌ null（正文空）'));
+      var head = 'tokens=' + (json.usage ? json.usage.completion_tokens : '?') +
+                 '  reasoning長度=' + rc + '  finish=' + choice.finish_reason;
+      var body = msg.content ? String(msg.content) : '❌ null（正文空）';
+      console.log('  ' + head);
+      console.log('  ' + body);
+      Logger.info('NimTest', '忠實轉述 ' + c.label + '  ' + head, body.slice(0, 400));
     } catch (ex) {
       console.log('  ❌ 解析失敗: ' + ex);
     }
