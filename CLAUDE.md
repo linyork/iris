@@ -605,7 +605,7 @@ is where the value lives.
 `T37` tests them directly: Markdown, yes/no-first, as-of present, no write claim on a read-only
 question, length, and whether every figure in the reply can be found in that turn's context.
 (`citesStanding` — "did it cite the owner's standing rules" — was removed on 2026-10-08 along with
-the rules themselves. An existing `eval_set` row still naming it reports `citesStanding(未知性質)`.)
+the rules themselves.)
 `Eval.judge` runs a named set and reports which ones failed.
 
 **`Eval.runBatch(limit)` is the half that costs money and time.** Default 3 questions per run,

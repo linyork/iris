@@ -11,8 +11,6 @@
 - [ ] **再跑一輪完整的 `eval_set`（4 次 `runEval()`），確認下列失敗不是變異**
       2026-08-11 的基準線是 5 PASS / 5 FAIL，其中三個判定為真：
       Q04／Q10 的 `hasAsOf` —— `getHoldings` 開頭已經有【資料時點】，模型沒有轉述。
-      ⚠️ 表上 Q03／Q05 的期望性質還寫著已移除的 `citesStanding`，會判成「未知性質」——
-      先在 `eval_set` 把那兩格的 `citesStanding,` 刪掉。
       **兩輪都失敗的才動 `Prompt.gs`**，只有一輪的當雜訊。
 
 - [ ] **累積數天後跑 `rollupMetrics()`**
