@@ -430,8 +430,7 @@ and immune to that quota.
 
 `現金` is generated — `Position.rebuild()` overwrites every column, and `餘額` is
 `帳戶!期初餘額` + `SUMIF(交易!帳戶, 交易!現金流)`. So a balance can only be moved by
-editing `帳戶!期初餘額` (which rewrites the starting point, contradicts `期初日期`, and
-leaves no trace) or by adding a row to `交易`. Hand-editing the `現金` cell survives until
+editing `帳戶!期初餘額` (which rewrites the starting point and leaves no trace) or by adding a row to `交易`. Hand-editing the `現金` cell survives until
 the next rebuild — minutes, since every recordTrade / `setData` / daily report / `/refresh`
 rebuilds.
 

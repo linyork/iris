@@ -94,10 +94,7 @@ var Tools = (() => {
           name:        { type: 'string', description: '帳戶名稱，之後記交易、查餘額都用這個名字比對' },
           type:        { type: 'string', description: '帳戶類型：證券 / 現金 / 外幣（可選，沒給就照名稱與幣別推）' },
           currency:    { type: 'string', description: '三碼幣別，例如 TWD / USD / JPY（可選，預設 TWD）' },
-          institution: { type: 'string', description: '機構名稱，例如 國泰世華、台新銀行（可選）' },
-          balance:     { type: 'number', description: '期初餘額，即「期初日期」那天帳戶裡的錢（可選，預設 0）' },
-          date:        { type: 'string', description: '期初日期，格式 yyyy-MM-dd（可選，預設今天）' },
-          note:        { type: 'string', description: '備註（可選）' }
+          balance:     { type: 'number', description: '期初餘額，即現在帳戶裡的錢（可選，預設 0）' }
         },
         required: ['name']
       }
@@ -154,14 +151,14 @@ var Tools = (() => {
     },
     {
       name: 'listAccounts',
-      description: '列出所有帳戶（含已停用），帶類型、幣別、機構與**原幣餘額**。' +
+      description: '列出所有帳戶（含已停用），帶類型、幣別與**原幣餘額**。' +
         '用於回答「我有哪些帳戶」「那個美金戶現在有多少美金」，以及記交易或校正餘額前確認帳戶名稱。' +
         '⚠️ getDashboard 的現金只有換算後的台幣值；要原幣就用這個。',
       parameters: { type: 'object', properties: {}, required: [] }
     },
     {
       name: 'updateAccount',
-      description: '修改帳戶主檔：改名、改類型／機構／幣別、停用或重新啟用。' +
+      description: '修改帳戶主檔：改名、改類型／幣別、停用或重新啟用。' +
         '當主人說「那個帳戶改叫 XXX」「郵局那個戶頭我關了」時使用。' +
         '⚠️ 這不是改餘額 —— 餘額是交易推導出來的，要改請用 setCashBalance 或 recordTrade。' +
         '⚠️ 帳戶不能刪除，只能停用；而且停用前餘額必須是 0，否則那筆錢會從總資產上消失。',
@@ -172,9 +169,7 @@ var Tools = (() => {
           newName:     { type: 'string', description: '改成這個名字（可選）。「交易」裡的每一列會一起改寫' },
           type:        { type: 'string', description: '帳戶類型：證券 / 現金 / 外幣（可選）' },
           currency:    { type: 'string', description: '三碼幣別（可選）。已經有交易的帳戶不給改，會被擋下' },
-          institution: { type: 'string', description: '機構名稱（可選）' },
-          status:      { type: 'string', description: '啟用 / 停用（可選）' },
-          note:        { type: 'string', description: '備註（可選）' }
+          status:      { type: 'string', description: '啟用 / 停用（可選）' }
         },
         required: ['name']
       }

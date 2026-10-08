@@ -297,24 +297,20 @@ var AssetTools = (() => {
   /**
    * 開一個新帳戶（往「帳戶」主檔加一列）。唯一會寫「帳戶」主檔的新增路徑。
    *
-   * ⚠️ 期初餘額＝「期初日期那天的餘額」，建完不應再動。
+   * ⚠️ 期初餘額＝建立當下帳戶裡的錢，建完不應再動。
    *    之後的水位由交易推導，要修正用 setCashBalance。
    *
    * @param {object} a
    * @param {string} a.name          帳戶名稱，之後記交易、查餘額都用這個名字
    * @param {string} [a.type]        證券 / 現金 / 外幣，沒給就照名稱與幣別推
    * @param {string} [a.currency]    三碼幣別，預設 TWD
-   * @param {string} [a.institution] 機構名稱
    * @param {number} [a.balance]     期初餘額，預設 0
-   * @param {string} [a.date]        期初日期，預設今天
-   * @param {string} [a.note]        備註
    * @returns {string} 給 LLM 轉述用的結果文字
    */
   t.addAccount = (a) => {
     a = a || {};
     try {
       var ss = AssetSchema.open();
-      var tz = ss.getSpreadsheetTimeZone();
       var sheet = ss.getSheetByName('帳戶');
       if (!sheet) return '找不到「帳戶」分頁，請先執行 setupAssetSheet()。';
 
@@ -344,9 +340,6 @@ var AssetTools = (() => {
       var inferred = !type;
       if (!type) type = /證券|券商/.test(name) ? '證券' : (currency === 'TWD' ? '現金' : '外幣');
 
-      var dateStr = _normalizeDate(a.date, tz);
-      if (!dateStr) return '看不懂的日期：' + _str(a.date) + '（請用 yyyy-MM-dd）';
-
       var balance = _num(a.balance);
 
       // 欄位以標題文字對位，不寫死欄號（「帳戶」是人工維護的表）
@@ -356,11 +349,8 @@ var AssetTools = (() => {
       put('帳戶', name);
       put('類型', type);
       put('幣別', currency);
-      put('機構', _str(a.institution));
       put('期初餘額', balance);
-      put('期初日期', dateStr);
       put('狀態', '啟用');
-      put('備註', _str(a.note) || '由 Iris 於 ' + dateStr + ' 建立');
       sheet.getRange(sheet.getLastRow() + 1, 1, 1, row.length).setValues([row]);
       Utils.noteLedgerWrite('帳戶 新增 ' + name);
 
@@ -368,7 +358,7 @@ var AssetTools = (() => {
 
       var lines = [];
       lines.push('已建立帳戶：' + name + '（' + type + '／' + currency + '）' +
-        '，期初餘額 ' + _amt(balance) + '，期初日期 ' + dateStr);
+        '，期初餘額 ' + _amt(balance));
       if (inferred) {
         lines.push('▸ 類型是照名稱與幣別推的，不對的話直接在「帳戶」分頁改');
       }
@@ -386,12 +376,12 @@ var AssetTools = (() => {
         lines.push('⚠️ 帳戶已建立，但重算失敗：' +
           (rebuilt && rebuilt.reason ? rebuilt.reason : '未知原因') + '。數字暫時不準。');
       }
-      lines.push('▸ 期初餘額指的是 ' + dateStr + ' 那天的餘額，之後的水位一律由交易推導 ——' +
+      lines.push('▸ 期初餘額是建立當下帳戶裡的錢，之後的水位一律由交易推導 ——' +
         '要修正請用 setCashBalance，不要回頭改期初');
 
       Logger.info('AssetTools.addAccount', '建立帳戶', {
         name: name, type: type, currency: currency,
-        balance: balance, date: dateStr, rebuilt: rebuilt && rebuilt.ok
+        balance: balance, rebuilt: rebuilt && rebuilt.ok
       });
       return lines.join('\n');
 
@@ -750,7 +740,6 @@ var AssetTools = (() => {
         var row  = cash[name];
         var bits = [(off ? '⛔ [停用] ' : '▸ ') + name,
                     (_str(x['類型']) || '未分類') + '／' + cur];
-        if (_str(x['機構'])) bits.push(_str(x['機構']));
         if (off) {
           bits.push('停用中，不計入總資產');
         } else if (row) {
@@ -772,7 +761,7 @@ var AssetTools = (() => {
   };
 
   /**
-   * 修改「帳戶」主檔：改名、改機構／類型、停用或重新啟用。
+   * 修改「帳戶」主檔：改名、改類型、停用或重新啟用。
    *
    * ⚠️ **改名是跨兩張表的事。** `現金!交易淨流` 是 `SUMIF(交易!$L:$L, 帳戶名)`，
    *    只改主檔那一格、不改「交易」裡的每一列，那個帳戶的餘額會靜靜地掉回期初值，
@@ -786,9 +775,7 @@ var AssetTools = (() => {
    * @param {string} [a.newName]   改成這個名字（會一併改寫「交易」的每一列）
    * @param {string} [a.type]      證券 / 現金 / 外幣
    * @param {string} [a.currency]  三碼幣別（已經有交易的帳戶不給改，見下）
-   * @param {string} [a.institution] 機構
    * @param {string} [a.status]    啟用 / 停用
-   * @param {string} [a.note]      備註
    */
   t.updateAccount = (a) => {
     a = a || {};
@@ -850,9 +837,6 @@ var AssetTools = (() => {
         }
       }
 
-      if (_str(a.institution)) updates['機構'] = _str(a.institution);
-      if (_str(a.note))        updates['備註'] = _str(a.note);
-
       // ── 狀態 ──
       var status = _str(a.status);
       if (status) {
@@ -878,7 +862,7 @@ var AssetTools = (() => {
       }
 
       if (!Object.keys(updates).length) {
-        return '要改什麼？可以改的有：名稱（newName）、類型、幣別、機構、狀態、備註。' +
+        return '要改什麼？可以改的有：名稱（newName）、類型、幣別、狀態。' +
                '（餘額不在這裡改 —— 那是交易推導出來的，用 setCashBalance 或 recordTrade）';
       }
 

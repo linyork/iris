@@ -229,11 +229,8 @@ var AssetMigrate = (() => {
     counts['標的'] = instRows.length;
 
     // ── 帳戶 ──
-    var acctRows = legacy.accounts.map(a => [
-      a.name, a.type, a.currency, '', a.balance, epochStr, '啟用',
-      '期初餘額由舊表面板遷移'
-    ]);
-    _replaceByKey(ss.getSheetByName('帳戶'), acctRows, 8, 0);
+    var acctRows = legacy.accounts.map(a => [a.name, a.type, a.currency, a.balance, '啟用']);
+    _replaceByKey(ss.getSheetByName('帳戶'), acctRows, 5, 0);
     counts['帳戶'] = acctRows.length;
 
     // ── 實體資產（黃金）──

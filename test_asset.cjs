@@ -1319,12 +1319,11 @@ console.log('\nT22  開新帳戶');
   check('被擋下的都沒有寫進帳戶表', countAccounts() === n0, countAccounts() + ' vs ' + n0);
 
   // 台幣戶
-  const r1 = AssetTools.addAccount({ name: '台新銀行', balance: 2131, institution: '台新銀行' });
+  const r1 = AssetTools.addAccount({ name: '台新銀行', balance: 2131 });
   check('建立成功並回報類型與幣別', /已建立帳戶/.test(r1) && /現金／TWD/.test(r1), r1.split('\n')[0]);
   check('帳戶表多一列', countAccounts() === n0 + 1, countAccounts() + ' vs ' + (n0 + 1));
   const newAcct = AssetSchema.readObjects(acctSheet).find(x => x['帳戶'] === '台新銀行') || {};
   check('狀態預設啟用', String(newAcct['狀態']) === '啟用', newAcct['狀態']);
-  check('期初日期有填', /^\d{4}-\d{2}-\d{2}$/.test(String(newAcct['期初日期'])), newAcct['期初日期']);
   check('重算後「現金」跟著多一列', !!cashRowOf('台新銀行'), '');
   check('新帳戶餘額 = 期初餘額', near(num(cashRowOf('台新銀行')['餘額']), 2131, 0.01),
     cashRowOf('台新銀行')['餘額']);
