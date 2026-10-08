@@ -228,9 +228,6 @@ var GoogleSheet = (() => {
     return out.filter((v, i, a) => a.indexOf(v) === i);
   };
 
-  /** `[決策]` / `[目標]` / `[偏好]` 是主人立的規矩，不是一般知識 */
-  var STANDING_RE = /^\s*\[(決策|目標|偏好)\]/;
-
   /** 逐筆算分：標籤命中比內文命中重要得多（標籤是人為下的主題） */
   var _scored = (query) => {
     var sheet = getSheet().getSheetByName('knowledge');
@@ -251,7 +248,6 @@ var GoogleSheet = (() => {
       });
       return {
         text: '[' + row[0] + ']: ' + row[1],
-        standing: STANDING_RE.test(String(row[0] || '')),
         score: score
       };
     });
@@ -278,12 +274,11 @@ var GoogleSheet = (() => {
   };
 
   /**
-   * 注入 prompt 用的知識：[決策]／[目標]／[偏好] 一律帶上，其餘才靠關鍵字撈。
+   * 注入 prompt 用的知識：只帶關鍵字命中的前 3 筆。
    *
-   * ⚠️ 分兩層是必要的。人設要求「主人設過的 [目標] 要主動比對」，
-   *    而那條規則只有在目標真的出現在 prompt 裡才成立。純靠關鍵字的話，
-   *    問「現金太多了嗎」而目標寫成「年底前現金比例降到 20%」就撈不到，
-   *    規則等於失效且沒有人會發現。這類規矩數量少，每次都帶得起。
+   * 與 searchKnowledge 分開，是因為查無資料時這裡要回空字串（整段略過），
+   * 工具則要回一句人話。主人立的 [決策]／[目標]／[偏好] 不再無條件帶上 ——
+   * Iris 已不做依長期規劃回應的顧問（2026-10-08）。
    *
    * @param {string} message 這一輪使用者說的話
    * @returns {string} 空字串代表沒有東西可帶
@@ -293,15 +288,11 @@ var GoogleSheet = (() => {
       var rows = _scored(message);
       if (!rows || rows.length === 0) return '';
 
-      var standing = rows.filter(r => r.standing).slice(0, 10);
-      var picked   = standing.slice();
-
-      rows.filter(r => !r.standing && r.score > 0)
+      return rows.filter(r => r.score > 0)
         .sort((a, b) => b.score - a.score)
         .slice(0, 3)
-        .forEach(r => picked.push(r));
-
-      return picked.map(r => r.text).join('\n');
+        .map(r => r.text)
+        .join('\n');
     } catch (ex) {
       Logger.warning('GoogleSheet.knowledgeForPrompt', '組知識區塊失敗（已略過）',
         ex && ex.message ? ex.message : String(ex));

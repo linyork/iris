@@ -6,7 +6,7 @@
  *
  * ⚠️ 兩類頂層函式不可搬進來，它們以名稱綁定，改名或搬走會靜默失效：
  *   Trigger 進入點   setData / dailyReport / weeklyReport / monthlyReport /
- *                    marketAlert / dailyCleanUp / advisorCheckEvening
+ *                    marketAlert / dailyCleanUp
  *   Web 進入點       doPost / doGet / dashboardData / miniAppData / miniAppAsk
  *
  * 這裡每支函式只做「呼叫模組 + 印結果」，邏輯留在各自的模組。
@@ -130,41 +130,6 @@ function checkDashboardAuth() {
   console.log('activeUser（存取者）  : ' + (active    || '（空字串）'));
   console.log('effectiveUser（執行者）: ' + (effective || '（空字串）'));
   console.log('isAuthorized          : ' + Dashboard.isAuthorized());
-}
-
-/**
- * AdvisorCheck 的手動測試入口：忽略週末跳過與短路檢查，跑完整流程但**不推播**。
- * 要真的推播請執行 advisorCheckEvening()。
- */
-function testAdvisorCheck() {
-  try {
-    Logger.info('testAdvisorCheck', '─── 手動測試開始 ───');
-
-    var snapshot = Snapshot.collectAll();
-    console.log('【Snapshot】');
-    console.log(JSON.stringify(snapshot, null, 2));
-
-    var quiet = Snapshot.isQuiet(snapshot);
-    console.log('\n【短路檢查】isQuiet = ' + quiet);
-
-    var decisions = AdvisorCheck._loadDecisions();
-    console.log('\n【決策清單】共 ' + decisions.length + ' 條');
-    decisions.forEach((d, i) => console.log((i + 1) + '. [' + d.tags + '] ' + d.content));
-
-    var llmResult = AdvisorCheck._askLLM(snapshot, decisions, 'manual-test');
-    console.log('\n【LLM 判斷】');
-    console.log(JSON.stringify(llmResult, null, 2));
-
-    if (llmResult && llmResult.shouldAlert) {
-      console.log('\n→ 如果是正式執行，會推送下列訊息：\n' + llmResult.message);
-      console.log('\n（測試模式不實際推送）');
-    }
-
-    Logger.info('testAdvisorCheck', '─── 手動測試結束 ───');
-  } catch (ex) {
-    Logger.error('testAdvisorCheck', '測試失敗', ex);
-    console.log('❌ 失敗：' + ex.message);
-  }
 }
 
 /**

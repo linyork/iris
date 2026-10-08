@@ -56,8 +56,7 @@ Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），
 - [ ] **原因寫進說明欄**，不要讓前端猜（XIRR 有三種算不出來的原因，寫死任一種都會騙人）
 
 ### 如果 `Snapshot.gs` 有變動
-- [ ] **⚠️ `collectAll()` 的回傳會整份序列化進 LLM prompt**。新增的欄位若是長序列（逐日資料、完整明細），
-      必須做成獨立函式給呼叫端自己拿，不要併進 `collectAll()`——參考 `totalSeries()` / `dividendSeries()`
+- [ ] **⚠️ 長序列（逐日資料、完整明細）不要塞進 LLM prompt**，做成獨立函式給呼叫端自己拿——參考 `totalSeries()` / `dividendSeries()`
 - [ ] `Dashboard.getPayload()` 有沒有需要跟著補
 
 ### 如果 `Main.gs` 的觸發器相關有改動

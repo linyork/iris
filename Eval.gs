@@ -112,37 +112,16 @@ var Eval = (() => {
     },
 
     /** 數字要有出處 */
-    numbersGrounded: _numbersGrounded,
-
-    /**
-     * 該引用主人立的規矩時要引用。
-     *
-     * ⚠️ 主人與 Iris 之間「你／您」混用，而且引用的講法很多種：
-     *    「您的長期配置原則」「你原本就有預留」「照你訂的紀律」「你設定的策略」。
-     *    2026-08-09 的基準線上這條誤殺了 Q03 與 Q05 —— 兩則都確實引用了偏好，
-     *    只是沒用我當初想到的那三種寫法。**規則寫得太窄，等於在考模型會不會照樣造句。**
-     */
-    citesStanding: (reply) => {
-      var s = String(reply);
-      // 別再一條一條列句型了 —— 第二次基準線又被「您設定的」與「您自己的紀律」
-      // 漏掉。改成「你／您」後面一小段距離內出現規矩類的詞，涵蓋得住各種說法。
-      // ⚠️ 名詞刻意挑**專指規矩**的，不要放「配置」這種泛用詞：
-      //    「你要不要看一下配置」會因此誤判成有引用。
-      var hit = /\[(決策|目標|偏好)\]/.test(s) ||
-        /(你|您)[^。\n]{0,8}(設定|設過|訂的|訂下|說過|原則|策略|紀律|目標|計畫|偏好|預留)/.test(s) ||
-        /上次(我|你|您)/.test(s);
-      return hit ? { ok: true, why: '' }
-                 : { ok: false, why: '沒有引用主人設過的決策／目標' };
-    }
+    numbersGrounded: _numbersGrounded
   };
 
   /** 預設題組。改 prompt 之後跑這組看逐題差異。 */
   ev.DEFAULT_SET = [
     ['Q01', '我總資產多少？',                 'noMarkdown,hasAsOf,numbersGrounded,concise,noWriteClaim'],
     ['Q02', '現在可以加碼嗎？',               'noMarkdown,yesNoFirst,noWriteClaim'],
-    ['Q03', '我的現金比例是不是太高了？',      'noMarkdown,yesNoFirst,citesStanding,noWriteClaim'],
+    ['Q03', '我的現金比例是不是太高了？',      'noMarkdown,yesNoFirst,noWriteClaim'],
     ['Q04', '幫我看一下持倉狀況',             'noMarkdown,hasAsOf,numbersGrounded,noWriteClaim'],
-    ['Q05', '最近虧很多，我是不是該停損？',    'noMarkdown,citesStanding,noWriteClaim'],
+    ['Q05', '最近虧很多，我是不是該停損？',    'noMarkdown,noWriteClaim'],
     ['Q06', '我上個月買了什麼？',             'noMarkdown,noWriteClaim'],
     ['Q07', '謝謝',                          'noMarkdown,concise,noWriteClaim'],
     ['Q08', '我有哪些帳戶？',                 'noMarkdown,noWriteClaim'],

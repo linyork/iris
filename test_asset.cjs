@@ -880,7 +880,7 @@ console.log('\nT12  券商 CSV 匯入');
 }
 
 // ─── T13  Snapshot 讀新表 ─────────────────────────────────────────
-// Snapshot 是 Dashboard / MiniApp / AdvisorCheck 共用的接縫，
+// Snapshot 是 Dashboard / MiniApp / GoogleSheet 共用的接縫，
 // 輸出形狀不能變，只換資料來源。
 console.log('\nT13  Snapshot 改讀新表');
 {
@@ -2061,14 +2061,11 @@ console.log('\nT33  人設寫的是行為準則，不是排版規範');
 {
   load('Prompt.gs');
   const sys = Prompt.SYSTEM_PROMPT;
-  const adv = Prompt.ADVISOR_PROMPT;
 
   // ⚠️ 這條是真正會回歸的：提示詞一邊禁止 Markdown，一邊自己用 **強調**。
   //    模型會模仿它讀到的格式，而 Utils.stripMarkdown 的存在正說明它真的會輸出星號。
   check('SYSTEM_PROMPT 自己不用 Markdown 粗體（它才剛禁止這件事）',
     sys.indexOf('**') < 0, (sys.match(/\*\*[^*\n]+\*\*/g) || []).slice(0, 3).join(' | '));
-  check('ADVISOR_PROMPT 同理', adv.indexOf('**') < 0,
-    (adv.match(/\*\*[^*\n]+\*\*/g) || []).slice(0, 3).join(' | '));
 
   // 排版規範退到最後，行為準則放前面
   const posBehaviour = sys.indexOf('[怎麼回答');
@@ -2080,7 +2077,7 @@ console.log('\nT33  人設寫的是行為準則，不是排版規範');
 
   // D10 點名缺的那幾種顧問行為
   [['先講結論', /先講結論/], ['區分事實與判斷', /分清楚「事實」與「判斷」/],
-   ['承認不確定', /不確定就說不確定/], ['比對目標', /\[目標\] 要主動比對/],
+   ['承認不確定', /不確定就說不確定/],
    ['情緒應對', /焦慮或抱怨虧損/]].forEach(([label, re]) => {
     check('有寫進' + label, re.test(sys), '');
   });
@@ -2286,7 +2283,7 @@ console.log('\nT35  ReAct 迴圈');
   delete global.MessagingServiceFactory;
 }
 
-// ─── T36  知識檢索：中文查得到，規矩一律帶上 ──────────────────────
+// ─── T36  知識檢索：中文查得到 ─────────────────────────────────────
 console.log('\nT36  知識檢索');
 {
   const kn = target.getSheetByName('knowledge') || target.insertSheet('knowledge');
@@ -2304,13 +2301,10 @@ console.log('\nT36  知識檢索');
     /現金比例/.test(r1), r1.slice(0, 60));
 
   // ①-b 同義詞仍然連不起來，這是 bigram 的天花板，不是 bug。
-  //     「加碼」與知識庫裡的「加倉」沒有共用字，怎麼切都對不上。
-  //     刻意不做同義詞表：那種表沒人維護就會過期，而且真正重要的那類知識
-  //     （決策／目標／偏好）已經由 knowledgeForPrompt 無條件帶上，不靠用字碰運氣。
-  check('同義詞查不到 —— 已知限制，由「規矩一律帶上」那層兜底',
+  //     「加碼」與知識庫裡的「加倉」沒有共用字，怎麼切都對不上。刻意不做同義詞表：
+  //     那種表沒人維護就會過期。
+  check('同義詞查不到 —— 已知限制',
     !/加倉/.test(GoogleSheet.searchKnowledge('可以加碼嗎')), '');
-  check('而注入層照樣看得到那條決策',
-    /加倉/.test(GoogleSheet.knowledgeForPrompt('可以加碼嗎')), '');
 
   // ② 標籤命中要贏過內文命中
   const r2 = GoogleSheet.searchKnowledge('券商');
@@ -2325,11 +2319,9 @@ console.log('\nT36  知識檢索');
     /沒有找到/.test(GoogleSheet.searchKnowledge('鮭魚壽司')),
     GoogleSheet.searchKnowledge('鮭魚壽司').slice(0, 40));
 
-  // ⑤ 注入用的區塊：決策／目標／偏好一律帶上，不看用字
-  const inj = GoogleSheet.knowledgeForPrompt('今天天氣真好');
-  check('與問題無關時，主人立的規矩照樣帶上', /目標/.test(inj) && /偏好/.test(inj) && /決策/.test(inj),
-    inj.replace(/\n/g, ' ｜ ').slice(0, 80));
-  check('無關的一般筆記不會被硬塞進來', inj.indexOf('晨星') < 0, inj);
+  // ⑤ 注入用的區塊只看用字：決策／目標／偏好不再無條件帶上（2026-10-08 起）
+  const inj = GoogleSheet.knowledgeForPrompt('鮭魚壽司');
+  check('與問題無關時什麼都不帶，連 [決策]／[目標]／[偏好] 也不帶', inj === '', inj);
 
   // ⑥ 相關的一般知識還是撈得進來
   const inj2 = GoogleSheet.knowledgeForPrompt('我都用哪一家券商下單');
@@ -2405,23 +2397,6 @@ console.log('\nT37  評估的判定函式');
     C.yesNoFirst('先講結論：依你設定的加碼觸發條件，現在還不到加碼時機。').ok === true, '');
   check('整行只有鋪陳、沒有答案 → 仍然擋下',
     C.yesNoFirst('我先查一下你的持倉與最近的市場狀況。').ok === false, '');
-
-  check('「您的長期配置原則」算引用（Q03 誤殺）',
-    C.citesStanding('我記得您的長期配置原則：現金＋黃金約佔 38%').ok === true, '');
-  check('「你原本就有預留」算引用（Q05 誤殺）',
-    C.citesStanding('你原本就有預留 38% 的戰略現金等機會').ok === true, '');
-  check('「照你訂的紀律」算引用',
-    C.citesStanding('照你訂的紀律，現在不動。').ok === true, '');
-  // 第二輪基準線又漏掉的兩種說法
-  check('「與您設定的…水位接近」算引用',
-    C.citesStanding('與您設定的「現金＋黃金約 38%」戰略水位接近').ok === true, '');
-  check('「違反您自己的紀律」算引用',
-    C.citesStanding('現在硬買股票，反而違反您自己的紀律。').ok === true, '');
-  check('完全沒提到主人設過什麼 → 仍然擋下',
-    C.citesStanding('這檔最近漲很多，建議減碼。').ok === false, '');
-  // ⚠️ 名詞不能放太泛的詞，否則問句也會被當成引用
-  check('「你要不要看一下配置」不算引用（避免放寬過頭）',
-    C.citesStanding('你要不要看一下配置？').ok === false, '');
 
   check('預設題組有東西', Eval.DEFAULT_SET.length >= 10, Eval.DEFAULT_SET.length + ' 題');
   check('每題的期望性質都是真的存在的檢查',

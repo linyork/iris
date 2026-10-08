@@ -2,7 +2,7 @@
 
 > ⚠️ **專案性質聲明 — 請先讀**
 >
-> 本專案目前的實作（ReAct 迴圈、工具分派、AI Provider 切換、記憶系統、主動感知層等）**全部以原生 JavaScript 手刻在 Google Apps Script 上**，目的只是為了**快速驗證概念與演示**（GAS 部署成本為 0、內建排程、Sheet 直接當資料庫，最適合 PoC）。
+> 本專案目前的實作（ReAct 迴圈、工具分派、AI Provider 切換、記憶系統等）**全部以原生 JavaScript 手刻在 Google Apps Script 上**，目的只是為了**快速驗證概念與演示**（GAS 部署成本為 0、內建排程、Sheet 直接當資料庫，最適合 PoC）。
 >
 > 整套架構在設計上對應的就是 **LangChain / LangGraph** 的標準元件：
 >
@@ -13,7 +13,6 @@
 > | `AIServiceFactory` + `AIAdapter` | `BaseChatModel` 抽象 + provider 子類 |
 > | `GoogleSheet` 的 chat 讀寫 + STM 注入 | `Memory` / `Checkpointer` |
 > | `searchKnowledge` 關鍵字查 Sheet | `VectorStore` retriever |
-> | `AdvisorCheck` 排程感知層 | LangGraph 子圖 + Conditional Edge |
 >
 > 由於每個模組職責切得很乾淨（Provider、Tools、Memory、Retrieval、Graph orchestration 各自獨立），要搬到 **LangChain / LangGraph (Python or TS)** 基本上就是把現有元件一對一換成框架對應的抽象，再接上正式的向量資料庫與可觀測性（LangSmith）即可，不需要重新設計。
 
@@ -37,7 +36,7 @@ Iris 是一個建構在 **Google Apps Script (GAS)** 上的私人資產管理助
 - [網頁儀表板](#網頁儀表板)
 - [Telegram Mini App](#telegram-mini-app)
 - [排程任務](#排程任務)
-- [記憶與決策系統](#記憶與決策系統)
+- [記憶系統](#記憶系統)
 - [環境設定](#環境設定)
 - [部署與開發流程](#部署與開發流程)
 - [首次安裝](#首次安裝)
@@ -49,9 +48,8 @@ Iris 是一個建構在 **Google Apps Script (GAS)** 上的私人資產管理助
 Iris 是「給單一管理員使用」的專屬資產助理，特色：
 
 - **單人服務**：以 `ADMIN_STRING` 比對 userId，非授權使用者靜默忽略（不回覆、不寫歷史、不耗 LLM 配額）。Telegram ID 以 `TELEGRAM:` 前綴與 LINE ID 區分。
-- **零外部資料庫**：全部狀態（持倉、現金、配置、對話歷史、記憶、知識、通知史、快照）都在同一份 Google Sheet。
+- **零外部資料庫**：全部狀態（持倉、現金、配置、對話歷史、記憶、知識、快照）都在同一份 Google Sheet。
 - **AI Provider 熱切換**：在 Sheet `env!B3` 寫 `GEMINI` 或 `NVIDIA` 即可即時切換後端，無需重新部署。
-- **主動感知 (Proactive Advisor)**：除了被動回覆，Iris 會在排程時點讀快照 + 管理員設定的決策，由 LLM 判斷是否值得主動 push 通知。
 
 ---
 
@@ -134,7 +132,7 @@ Telegram Bot API ───┤        │
 | `Line.gs` | LINE 事件正規化、reply / push 訊息封裝 |
 | `Telegram.gs` | Telegram update 正規化、訊息推送、webhook 與指令選單註冊 |
 | `ChatBot.gs` | ReAct 對話迴圈：注入記憶／知識／`Facts`／先前建議，執行工具，攔截「說已記錄卻沒寫」，剝除 Markdown |
-| `Prompt.gs` | `SYSTEM_PROMPT`（對話人設）、`ADVISOR_PROMPT`（感知層 prompt）、`systemContext()`（四個 LLM 迴圈共用的開頭與日期規則） |
+| `Prompt.gs` | `SYSTEM_PROMPT`（對話人設）、`systemContext()`（四個 LLM 迴圈共用的開頭與日期規則） |
 | `Facts.gs` | 程式算好的關鍵數字，注入每一則對話 prompt 要求原樣引用。**刻意只收不用打外部 API 的數字**（讀 指標／現金／每日快照），逐檔持倉留給 `getHoldings` —— 這個區塊每則訊息都要組一次 |
 | `Tools.gs` | 工具定義與分派 |
 | `AIServiceFactory.gs` | 依 `env!B3` 路由 Gemini / NVIDIA，含備援模型 fallback |
@@ -145,12 +143,11 @@ Telegram Bot API ───┤        │
 | `AssetSchema.gs` | 分頁與欄位定義、建表、交易表公式、`readTrades` / `appendTrade` 等共用存取 |
 | `Position.gs` | **計算核心**：重放交易算持倉、現金、配置、指標（加權平均法）|
 | `AssetMigrate.gs` | 舊表 → 新表的遷移程式。production 不再使用，現為 `test_asset.cjs` 的 fixture |
-| `Snapshot.gs` | **唯一的結構化讀取層**：總資產、持倉、現金、配置、股利、實體資產。四個消費端共用（儀表板、Mini App、`GoogleSheet` 的格式化層、`AdvisorCheck`）|
+| `Snapshot.gs` | **唯一的結構化讀取層**：總資產、持倉、現金、配置、股利、實體資產。三個消費端共用（儀表板、Mini App、`GoogleSheet` 的格式化層）|
 | `Dashboard.gs` | 網頁儀表板的 payload 組裝、快取與存取控制 |
 | `DashboardPage.html` | 儀表板前端單頁 |
 | `MiniApp.gs` | Telegram Mini App 的 `initData` 驗簽與後端進入點 |
 | `MiniAppPage.html` | Mini App 前端（手機優先，可點持倉問 Iris） |
-| `AdvisorCheck.gs` | 主動感知層：呼叫 LLM 判斷是否 push 通知 |
 | `DailyReport.gs` | 三份報告共用的 `_generateReport()` 骨架，加上每日 09:00 早報、週六週報、每月 1 日月報 |
 | `MarketAlert.gs` | 10:00 / 14:00 盤中異動警報（單檔 ETF 日跌幅 > `ALERT_ETF_DROP`） |
 | `DataSync.gs` | 每日 18:00 寫入 `每日快照`（長表，同日冪等，見「每日快照」） |
@@ -450,9 +447,7 @@ Telegram 的指令選單只是 UI 提示——點下去送出的仍是普通文�
 
 資料**重用 `Snapshot.gs` 既有的結構化讀取器**（`_holdings` / `_cash` / `_totals` / `_dividends`），
 儀表板補的是 `totalSeries()`（走勢）與 `_metrics()`（讀「指標」那張 key-value 表）。
-⚠️ **序列讀取器刻意不併進 `collectAll()`**——那份 payload 會整份序列化進 LLM prompt，
-灌一年份的逐日資料只是燒 context。`_metrics` 小歸小也一樣不併進去：動 `collectAll` 的形狀
-就得同時看 `AdvisorCheck` 與三份報告。
+⚠️ **序列讀取器不要塞進任何 LLM prompt**——灌一年份的逐日資料只是燒 context。
 
 `dividendSeries()` 已經沒有頁面在用——網頁版的兩張股利圖換成績效條裡的「累計股利 + 今年 YoY」，
 那兩個數字 `_dividends` 本來就有。函式保留（`test_asset.cjs` 有蓋到），哪天想把圖加回去可以直接接。
@@ -598,51 +593,19 @@ expected_hash     = hex(HMAC_SHA256(訊息 = data_check_string, 金鑰 = secret_
 | 每月 1 日 10:00 | `monthlyReport` | 月度總結 |
 | 每日 13:00 | `rebuildAssets` | 收盤後重算持倉／指標／配置 |
 | 每日 18:00 | `setData` | 寫入當日快照至新表的 `每日快照`（長表，同日覆寫） |
-| 每日 19:00 | `advisorCheckEvening` | 主動顧問感知（讀快照 + 決策，LLM 判斷是否推播） |
 
 ⚠️ 這張表是 `Cron.SCHEDULE` 的副本，會漂移。以實際註冊的為準時跑 `listTriggers()`，它會拿 `Cron.SCHEDULE` 與 GAS 上真正的 trigger 逐項比對。
 
-週末跳過的是 `dailyReport`／`weeklyReport`／`marketAlert`／`advisorCheckEvening`；`setData` 仍會寫入並把當天標成「休市」。
+週末跳過的是 `dailyReport`／`weeklyReport`／`marketAlert`；`setData` 仍會寫入並把當天標成「休市」。
 
 ---
 
-## 記憶與決策系統
+## 記憶系統
 
 ### 兩層記憶
 
 - **短期記憶 (STM)**：有時效（最長 7 天），每次對話與快照都會注入，過期自動清除。適合「目前關注標的」「臨時計畫」等。
-- **長期知識 (Knowledge)**：永久保存。注入分兩層 —— `[決策]`／`[目標]`／`[偏好]` 這類「主人立的規矩」**每次都帶上**，其餘才靠關鍵字撈。中文以 bigram 切詞（舊版整句當一個詞，對中文幾乎等於沒作用），標籤命中加權高於內文。
-
-### 結構化決策 tag
-
-`SYSTEM_PROMPT` 要求 Iris 在使用者說出特定類型內容時，**先確認再以 tag 格式存入 knowledge**：
-
-| 類型 | tag 格式 | 範例 |
-|---|---|---|
-| 決策（觸發 → 行動） | `[決策] 標的-動作` | `[決策] 00631L-加倉條件` |
-| 目標（數值 + 期限） | `[目標] 主題-期限` | `[目標] 現金比例-2026年底` |
-| 偏好（永久原則） | `[偏好] 主題` | `[偏好] 投資工具限制` |
-| 計畫（短中期） | `[計畫] 主題-月份` | `[計畫] 加碼台股-2026年6月` |
-
-這些 tag 會被 `AdvisorCheck` 全量讀出來餵給 LLM，作為「是否該主動通知」的最高優先級判斷依據。
-
-### 主動感知流程
-
-```
-Snapshot.collectAll()         // 蒐集：總資產變動、持倉變動、現金、配置
-       │
-       ▼
-Snapshot.isQuiet()?           // 短路：明顯平靜直接 return，省 token
-       │ no
-       ▼
-ac._loadDecisions()           // 全量讀 knowledge 中的 [決策][目標][偏好][計畫]
-       │
-       ▼
-LLM (ADVISOR_PROMPT)          // 回傳 { shouldAlert, decisionRef, message, reason }
-       │
-       ▼
-shouldAlert? → pushToMasters（不記錄、不去重）
-```
+- **長期知識 (Knowledge)**：永久保存。每則對話依關鍵字撈最相關的 3 筆注入。中文以 bigram 切詞（舊版整句當一個詞，對中文幾乎等於沒作用），標籤命中加權高於內文。
 
 ---
 

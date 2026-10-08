@@ -24,9 +24,8 @@ var ChatBot = (() => {
 
       // 讀取短期記憶與知識（搜尋與當前訊息相關的知識）
       var stm = GoogleSheet.getValidShortTermMemories();
-      // 注入用的知識走 knowledgeForPrompt，不是 searchKnowledge：主人立的
-      // 決策／目標／偏好一律帶上，不能靠用字碰運氣（見那裡的註解）。
-      // searchKnowledge 仍然是模型主動查詢時用的工具。
+      // 注入用的知識走 knowledgeForPrompt：查無資料回空字串，整段略過。
+      // searchKnowledge 是模型主動查詢時用的工具。
       var relevantKnowledge = GoogleSheet.knowledgeForPrompt(message);
 
       // 事實區塊：程式算好的關鍵數字，直接進 prompt。模型因此不必為了「我總資產多少」
@@ -286,7 +285,7 @@ var ChatBot = (() => {
       }
       // Markdown 在這裡剝掉，不留到平台層 —— 否則 chat 歷史、評估與其他消費端
       // 拿到的版本會跟主人看到的不一樣。順帶修好 LINE（Line.pushMsg 從不剝）。
-      // ⚠️ Telegram.pushMsg 的那一道不可移除：早報、盤中警報、AdvisorCheck
+      // ⚠️ Telegram.pushMsg 的那一道不可移除：早報、盤中警報
       //    的推播不經過這裡。重複剝一次無害。
       finalResponse = Utils.formatForLine(Utils.stripMarkdown(cleanedResponse || finalResponse));
 

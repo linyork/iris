@@ -5,10 +5,9 @@
  * 讀「資產管理」表的當下狀態、算好關鍵指標，產出結構化 JSON。
  * 不做判斷、不做通知、不做排版。
  *
- * ⚠️ 四個消費端吃同一份輸出，改欄位形狀要四個一起看：
+ * ⚠️ 幾個消費端吃同一份輸出，改欄位形狀要一起看：
  *   Dashboard.getPayload → DashboardPage.html / MiniAppPage.html
  *   GoogleSheet.getHoldings / getDashboard / getHistory（格式化給 LLM）
- *   AdvisorCheck（collectAll，整包序列化進 prompt）
  */
 var Snapshot = (() => {
   var snap = {};
@@ -361,9 +360,6 @@ var Snapshot = (() => {
    *
    * 分隔列（`—— 投資績效 ——` 這種）與空字串都會被濾掉：XIRR 算不出來時寫的是空字串，
    * 直接 _num 會變成 0，看起來像「年化報酬率 0%」而不是「還算不出來」。
-   *
-   * 刻意不併進 `collectAll()`：那份會整包序列化進 LLM prompt，形狀一改就得同時看
-   * AdvisorCheck 與三份報告，不是這裡該順手做的事。
    */
   snap._metrics = (ss) => {
     var sheet = ss.getSheetByName('指標');
@@ -449,10 +445,9 @@ var Snapshot = (() => {
   };
 
 
-  // ─── Dashboard 專用（不進 collectAll）────────────────────────
+  // ─── Dashboard 專用 ───────────────────────────────────────────
   //
-  // 以下兩個函式只給網頁儀表板畫圖用，刻意不併入 collectAll()：
-  // collectAll 的結果會整份序列化進 LLM prompt，灌一年份的逐日序列
+  // 以下兩個函式只給網頁儀表板畫圖用。一年份的逐日序列不要塞進任何 LLM prompt，
   // 只會吃掉 context 又對判斷沒幫助。
 
   /**
@@ -524,67 +519,6 @@ var Snapshot = (() => {
       Logger.warning('Snapshot.dividendSeries', '讀取股利序列失敗', e.message);
       return empty;
     }
-  };
-
-  // ─── 對外主入口 ────────────────────────────────────────────
-
-  /**
-   * 收集完整快照
-   * @param {object} [options]
-   * @param {boolean} [options.includeAllocation] 是否納入配置（成本較高，預設 true）
-   * @returns {object} 結構化財務快照
-   */
-  snap.collectAll = (options) => {
-    options = options || {};
-    var ss = snap._open();
-    var now = new Date();
-
-    var result = {
-      timestamp: Utilities.formatDate(now, 'GMT+8', 'yyyy-MM-dd HH:mm:ss'),
-      totals:    snap._totals(ss),
-      holdings:  snap._holdings(ss),
-      cash:      snap._cash(ss),
-      dividends: snap._dividends(ss),
-      gold:      snap._gold(ss)
-    };
-
-    if (options.includeAllocation !== false) {
-      result.allocation = snap._allocation(ss);
-    }
-
-    return result;
-  };
-
-  /**
-   * 短路檢查：若整體看似平靜，回 true 表示可跳過 LLM 呼叫
-   * 三個條件全符合才算平靜：
-   *   1. 總資產日變動 < 0.5%
-   *   2. 無單檔當日漲跌 >= 3%
-   *   3. 無持倉佔比異常（>50% 或 <2% 但市值 > 0）
-   *
-   * ⚠️ 條件 2 在**唯一的呼叫端（19:00 的 advisorCheckEvening）幾乎永遠成立**，
-   *    因為那時候收盤了，MIS 給不出當日成交價，`dayChangePct` 全是 null。
-   *    以前它們是 0，看起來像「每檔都平盤」，一樣過不了門檻 —— 差別只在現在是
-   *    誠實的「不知道」。要讓這條真的有作用，得改的是**排程時間或資料來源**
-   *    （例如改讀當日快照的漲跌），不是把 null 當成 0。
-   */
-  snap.isQuiet = (data) => {
-    if (!data) return false;
-
-    var dayChange = data.totals && data.totals.dayChangePct;
-    if (dayChange !== null && dayChange !== undefined && Math.abs(dayChange) >= 0.005) return false;
-
-    var hasHoldingMove = (data.holdings || []).some(h =>
-      h.dayChangePct !== null && Math.abs(h.dayChangePct) >= 0.03
-    );
-    if (hasHoldingMove) return false;
-
-    var hasExtremeRatio = (data.holdings || []).some(h =>
-      h.ratioOfPortfolio > 0.5 || (h.ratioOfPortfolio > 0 && h.ratioOfPortfolio < 0.02)
-    );
-    if (hasExtremeRatio) return false;
-
-    return true;
   };
 
   return snap;

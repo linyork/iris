@@ -39,9 +39,6 @@ var Cron = (() => {
     { fn: 'setData',             type: 'daily',    hour: 18,
       what: '把當日狀態寫進「每日快照」。進入點會自己先 rebuild 一次' },
 
-    { fn: 'advisorCheckEvening', type: 'daily',    hour: 19,
-      what: '主動顧問感知：讀快照 + 決策清單，由 LLM 判斷要不要推播' },
-
     { fn: 'weeklyReport',        type: 'weekday',  hour: 9, day: 'SATURDAY',
       what: '週度績效回顧' },
 

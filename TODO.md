@@ -10,8 +10,9 @@
 
 - [ ] **再跑一輪完整的 `eval_set`（4 次 `runEval()`），確認下列失敗不是變異**
       2026-08-11 的基準線是 5 PASS / 5 FAIL，其中三個判定為真：
-      Q04／Q10 的 `hasAsOf` —— `getHoldings` 開頭已經有【資料時點】，模型沒有轉述；
-      Q05 的 `citesStanding` —— 這一輪沒引用主人設過的規矩（前一輪有）。
+      Q04／Q10 的 `hasAsOf` —— `getHoldings` 開頭已經有【資料時點】，模型沒有轉述。
+      ⚠️ 表上 Q03／Q05 的期望性質還寫著已移除的 `citesStanding`，會判成「未知性質」——
+      先在 `eval_set` 把那兩格的 `citesStanding,` 刪掉。
       **兩輪都失敗的才動 `Prompt.gs`**，只有一輪的當雜訊。
 
 - [ ] **累積數天後跑 `rollupMetrics()`**
@@ -19,10 +20,6 @@
       `timeouts`），以及 `備援接手` 是否每天非零（非零＝主模型已下架，不是忙碌）。
 
 ## 已知缺陷
-
-- [ ] **`Snapshot.isQuiet` 的「單檔漲跌 ≥3%」在唯一呼叫端失效**
-      `advisorCheckEvening` 在 19:00 執行，收盤後沒有當日漲跌資料，`dayChangePct` 全是 null。
-      要修得改排程時間或改資料來源（例如讀當日快照的漲跌），不是把 null 當 0。
 
 - [ ] **`voidTrade` 作廢轉帳的單一腳沒有防護**
       轉出／轉入是兩列、彼此沒有欄位綁定，作廢其中一列不會被任何檢查擋下，

@@ -38,7 +38,7 @@ only a test fixture (see [Legacy sheet](#legacy-sheet)). Its id stays hardcoded 
 Two ways in, both landing on the same property:
 
 - **Asset layer** — `AssetSchema.open()` / `Snapshot._open()`. Guarded, and the one to use for new code.
-- **System layer** — `GoogleSheet`, `AdvisorCheck._loadDecisions`, `dailyCleanUp`, and
+- **System layer** — `GoogleSheet`, `dailyCleanUp`, and
   `Config`'s own `env!B2`/`B3` reads call `SpreadsheetApp.openById(Config.SHEET_ID)` directly. No
   guard, but each already wraps its own try/catch and degrades to an empty result.
 
@@ -78,7 +78,7 @@ belongs.
 renaming or relocating them fails silently:
 
 - Trigger handlers — `setData`, `dailyReport`, `weeklyReport`, `monthlyReport`, `marketAlert`,
-  `dailyCleanUp`, `advisorCheckEvening`
+  `dailyCleanUp`
 - Web / `google.script.run` entry points — `doPost`, `doGet`, `dashboardData`, `miniAppData`,
   `miniAppAsk`
 
@@ -104,7 +104,7 @@ Switch provider by setting `env!B3` in the Google Sheet to `GEMINI` or `NVIDIA`.
 | Tier | Used by | `enableThinking` |
 |---|---|---|
 | `FAST` | `ChatBot` ReAct loop — user is waiting | `false` |
-| `SMART` | daily/weekly/monthly reports, `AdvisorCheck` — scheduled background | `true` |
+| `SMART` | daily/weekly/monthly reports — scheduled background | `true` |
 | `LITE` | (no caller yet) | `false` |
 
 Control goes out as `chat_template_kwargs: {thinking}` from the `moonshotai/kimi` branch in `NvidiaService.gs` — same shape as the retired `deepseek-ai/deepseek-v4` branch, verified 2026-09-24 (`thinking: false` takes reasoning length to zero cleanly). Reasoning text comes back in `reasoning_content` (separated by `AIAdapter.fromOpenAIResponse`) and consumes the `max_tokens` budget, which is why `SMART` gets a much larger budget than `FAST`.
@@ -192,11 +192,10 @@ Read-only asset dashboard on the **same** script project, served by `doGet()` in
 | `DashboardPage.html` | Single page — Chart.js 4 via CDN, RWD, light/dark, red-up/green-down (TW convention) |
 
 Data is **reused from `Snapshot.gs`**, not re-read: `_holdings` / `_cash` / `_totals` / `_dividends`
-already return structured JSON for `AdvisorCheck`. The dashboard added `Snapshot.totalSeries()`
-(charts) and `Snapshot._metrics()` (the 指標 key-value table). ⚠️ **Keep the series readers out of
-`Snapshot.collectAll()`** — that payload is serialized into the LLM prompt, and a year of daily points
-would just burn context. `_metrics` is small enough not to be a context problem, but it stays out too:
-changing `collectAll`'s shape means re-reading `AdvisorCheck` and all three reports at the same time.
+return structured JSON. The dashboard added `Snapshot.totalSeries()` (charts) and
+`Snapshot._metrics()` (the 指標 key-value table). ⚠️ **Never put the series readers into an LLM
+prompt** — a year of daily points just burns context. (`collectAll()`, the bundle that used to be
+serialized into `AdvisorCheck`'s prompt, went with it on 2026-10-08.)
 
 `Snapshot.dividendSeries()` is no longer wired to any page — the browser dashboard's two dividend
 charts were replaced by 累計股利 + 今年 YoY in the performance row, which `_dividends` already
@@ -604,8 +603,10 @@ is where the value lives.
 
 **`Eval.CHECKS` are pure functions** — `(reply, ctx) => {ok, why}`. No LLM, no sheet reads, so
 `T37` tests them directly: Markdown, yes/no-first, as-of present, no write claim on a read-only
-question, length, whether every figure in the reply can be found in that turn's context, and
-whether standing rules get cited. `Eval.judge` runs a named set and reports which ones failed.
+question, length, and whether every figure in the reply can be found in that turn's context.
+(`citesStanding` — "did it cite the owner's standing rules" — was removed on 2026-10-08 along with
+the rules themselves. An existing `eval_set` row still naming it reports `citesStanding(未知性質)`.)
+`Eval.judge` runs a named set and reports which ones failed.
 
 **`Eval.runBatch(limit)` is the half that costs money and time.** Default 3 questions per run,
 oldest-first, writing results back after each. GAS gives 6 minutes and one question can run a
@@ -649,7 +650,7 @@ form, and anything under 10,000 is skipped — years, percentages, share counts 
 live there and are nearly always transcription rather than invention. What it is really hunting is
 a fabricated figure at money scale.
 
-### 知識檢索：中文切得開，規矩不靠碰運氣
+### 知識檢索：中文切得開
 
 `searchKnowledge` used to tokenise with `query.split(/\s+/)`. Chinese has no spaces, so
 「我現在可以加碼嗎」 was **one token** and only matched if those exact seven characters appeared
@@ -660,20 +661,18 @@ failed by returning 「沒有找到」, which is indistinguishable from an empty
 scoring weights a tag hit at 3 against a body hit at 1 — tags are the topic someone chose by hand.
 Bigrams do over-match; sorting and a top-5 cap absorb that.撈多一點再排序 beats 撈不到.
 
-**Injection and the tool are now different functions, on purpose.** `ChatBot` calls
-`knowledgeForPrompt`, which always includes every `[決策]` / `[目標]` / `[偏好]` entry (capped at
-10) and then adds up to 3 keyword matches. `searchKnowledge` stays purely query-driven for the
-model to call.
+`ChatBot` injects `knowledgeForPrompt` — the top 3 keyword matches, or `''` so the block is
+skipped. `searchKnowledge` is the same scoring for the model to call, returning a sentence when
+nothing matches.
 
-The reason is that the persona instructs Iris to compare against 「主人設過的 [目標]」 — and that
-rule can only hold if the 目標 is actually in the prompt. Leave it to keyword luck and asking
-「現金太多了嗎」 against a goal worded 「年底前現金比例降到 20%」 silently disables the rule.
-Standing rules are few; carrying all of them every turn is the cheap half of the trade.
+`knowledgeForPrompt` used to inject every `[決策]` / `[目標]` / `[偏好]` entry unconditionally, so
+the persona's 「compare against the owner's [目標]」 rule could not be defeated by wording. Both the
+rule and the always-inject layer were removed on 2026-10-08: Iris no longer answers from the owner's
+long-term plans.
 
 ⚠️ **Synonyms remain out of reach and that is accepted.** 「加碼」 and a stored 「加倉」 share no
 characters, so no amount of segmenting connects them. A synonym table was considered and rejected:
-it goes stale unnoticed. The case that matters — standing rules — is covered by always injecting
-them, which does not depend on wording at all. `T36` pins both the limitation and the fallback.
+it goes stale unnoticed. `T36` pins the limitation.
 
 ### 每日指標：consolelog 在被丟掉之前先算一次
 
@@ -716,9 +715,8 @@ This exists partly to make the `TOOL_MAX_ITERATIONS` 3 → 5 change checkable: `
 advisor. The formatting rules are still there, but they now sit at the **end**, and the top of
 the prompt is `[怎麼回答]`: lead with the conclusion, answer yes/no questions with yes or no
 first, separate 事實 (quote it) from 判斷 (say what it rests on), say so when uncertain and name
-the as-of, compare against any `[目標]` the owner set, and — when the owner is anxious about a
-loss — acknowledge it once and then return to the numbers and *their own stated principles*,
-without generic reassurance or an excuse to recommend action.
+the as-of, and — when the owner is anxious about a loss — acknowledge it once and then return to
+the numbers, without generic reassurance or an excuse to recommend action.
 
 Those rules are the owner's own stated preferences (see the top of this file) applied to Iris.
 That is deliberate: the same person is on both ends.
@@ -739,19 +737,24 @@ while the chat history, the eval, and any future consumer saw the asterisks — 
 same reply. Stripping here makes all of them agree, and fixes LINE as a side effect
 (`Line.pushMsg` never stripped at all).
 
-Keep the strip in `Telegram.pushMsg`: reports, market alerts and `AdvisorCheck` pushes do not go
+Keep the strip in `Telegram.pushMsg`: reports and market alerts do not go
 through `ChatBot`. The cost, stated plainly: the eval can no longer see whether the model obeys
 the no-Markdown rule. That signal was traded for one consistent version of the text.
 
-### 不記自己講過什麼：alert_log 與 advice_log 已移除
+### 主動顧問已移除：不記建議、不依長期規劃回應
 
-2026-10-08 拿掉。`alert_log` 存 `AdvisorCheck` 推過的通知給下一次去重，`advice_log`
-（`AdviceLog.gs` + `logAdvice` 工具）存 Iris 給過的建議並注入每則對話。兩個月各只有
-同樣 2 筆、`logAdvice` 從沒被呼叫過 —— 那條回饋閉環沒轉起來，而主人把 Iris 的範圍收窄成
-「讀表報告 + 記帳」，不再做依長期規劃回應的顧問。
+2026-10-08，主人把 Iris 的範圍收窄成「讀表報告（含早報／週報／月報）＋ 記帳」，
+以下一起拿掉：
 
-代價要知道：`AdvisorCheck` 現在**沒有去重**，同一個異常（例如某檔報價歸零）連續幾天都在，
-就會連續幾天推。
+- **`AdvisorCheck`**（19:00 `advisorCheckEvening`）：把快照 + knowledge 裡的 [決策]／[目標]／
+  [偏好] 餵給 LLM，判斷要不要主動推播。連同 `Prompt.ADVISOR_PROMPT`、`Snapshot.collectAll`
+  與 `Snapshot.isQuiet`（兩者唯一的呼叫端就是它）。
+- **`alert_log` / `advice_log`**（`AlertLog.gs` / `AdviceLog.gs` + `logAdvice` 工具）：推播
+  去重，以及把 Iris 給過的建議注入每則對話。兩個月各只有同樣 2 筆、`logAdvice` 從沒被呼叫過。
+- **決策注入**：`knowledgeForPrompt` 不再無條件帶 [決策]／[目標]／[偏好]，人設拿掉「主動比對
+  [目標]」，提示詞拿掉 [決策偵測]（叫模型把規劃存成結構化 tag 給 AdvisorCheck 讀）。
+
+knowledge 表本身與記憶工具還在 —— 那是另一件事。
 
 ### 工具回傳要分得出成功與失敗
 
@@ -880,12 +883,6 @@ The general rule this is an instance of: **a model cannot be honest about someth
 distinguish.** Prompt instructions don't fix that — the fix is to not hand it a number to be
 wrong with. Compare [「已記錄」是自由文字](#已記錄是自由文字只有工具名字算數), which is the
 same lesson from the write side.
-
-⚠️ Known limitation, deliberately not papered over: `Snapshot.isQuiet`'s "any holding moved ≥3%"
-condition is inert at its only call site (`advisorCheckEvening`, 19:00), because there is no
-day-change data after the close. It was equally inert before — the zeros failed the same
-threshold — so this changed nothing except making the reason visible. Fixing it means changing
-the schedule or the data source, not treating `null` as `0`.
 
 ### 比較的基準要按日期找，而且要講出是哪一天
 
