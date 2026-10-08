@@ -319,9 +319,16 @@ function testNimSingleModel(modelId) {
  * 結果同時寫進 consolelog（tag NimTest），可用診斷入口讀。
  */
 function testNimWriteIntent() {
+  // 2026-10-08 testNimCandidateModels()：10 顆進 7 顆。404（帳號打不到）的是
+  // llama-3.1-nemotron-ultra-253b-v1／mistral-large／palmyra-fin-70b-32k。
   var MODELS = [
-    'moonshotai/kimi-k3',     // 現役主模型，預期會重現問題
-    'openai/gpt-oss-20b'      // 現役備援
+    'moonshotai/kimi-k3',                      // 現役主模型，預期會重現問題
+    'openai/gpt-oss-20b',                      // 現役備援
+    'z-ai/glm-5.3',
+    'google/gemma-4-31b-it',
+    'nvidia/nemotron-3-super-120b-a12b',
+    'nvidia/nemotron-3-ultra-550b-a55b',
+    'nvidia/nemotron-3.5-lightning-30b-a3b'
   ];
   var REPS = 2;
 
