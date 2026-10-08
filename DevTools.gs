@@ -157,17 +157,22 @@ function testNimCandidateModels() {
   // meta/llama-3.3-70b-instruct 這次一併確認也已從目錄消失，換成目錄現有的新面孔。
   // 已知會拖垮整批的不要放進來：單顆吃滿 NIM 的 ~300s 閘道逾時，而 fetchAll 等整批，
   // 要測請單獨跑。
+  //
+  // 2026-10-08：kimi-k3 在 10/5 連續不叫工具、照工具輸出的格式編「已校正」，另有兩次只吐
+  // `!!!!!!!!`。這輪是找它的替代。上一輪 404（帳號打不到）的 kimi-k2.6／nemotron-nano-3／
+  // mistral-large-2-instruct 與 504 拖垮整批的 deepseek-v4.1-flash 不再放進來；
+  // nemotron-3-super 上次是 503（過載），再給一次機會。其餘是目錄上的新面孔。
   var CANDIDATES = [
-    'deepseek-ai/deepseek-v4.1-flash',           // ★ 最可能的直接替代：同家族的下一版
     'openai/gpt-oss-20b',                        // 對照組（現役備援）
-    'moonshotai/kimi-k2.6',
-    'moonshotai/kimi-k3',
+    'moonshotai/kimi-k3',                        // 現役主模型（出問題的那顆）
     'z-ai/glm-5.3',
-    'z-ai/glm-5.3-flash',
+    'google/gemma-4-31b-it',
     'nvidia/nemotron-3-super-120b-a12b',
-    'nvidia/nemotron-nano-3-30b-a3b',
-    'mistralai/mistral-large-2-instruct',
-    'google/gemma-4-31b-it'
+    'nvidia/nemotron-3-ultra-550b-a55b',
+    'nvidia/nemotron-3.5-lightning-30b-a3b',
+    'nvidia/llama-3.1-nemotron-ultra-253b-v1',
+    'mistralai/mistral-large',
+    'writer/palmyra-fin-70b-32k'
   ];
 
   var url     = Config.NVIDIA_API_BASE + '/chat/completions';
@@ -229,6 +234,9 @@ function testNimCandidateModels() {
     if (!resp) { console.log('❌ ---  ' + model + '（無回應）'); return; }
     var code = resp.getResponseCode();
     console.log((code === 200 ? '✅' : '❌') + ' HTTP ' + code + '  ' + model);
+    // 也寫一份進 consolelog，讓診斷入口（what=log&tag=NimTest）讀得到，不必手動貼回來
+    Logger.info('NimTest', '可用性 ' + model + ' HTTP ' + code,
+      code === 200 ? '' : resp.getContentText('UTF-8').slice(0, 160));
     if (code !== 200) {
       console.log('      ' + resp.getContentText('UTF-8').slice(0, 160));
     } else {
@@ -237,6 +245,7 @@ function testNimCandidateModels() {
   });
 
   console.log('\n可用: ' + reachable.length + ' / ' + CANDIDATES.length + '（耗時 ' + elapsed() + '）');
+  Logger.info('NimTest', '可用性完成 ' + reachable.length + '/' + CANDIDATES.length, reachable.join(', '));
 
   if (reachable.length === 0) {
     console.log('\n⚠️ 全部不可用 —— 對照組 deepseek 也失敗的話，先查 NVIDIA_API_KEY 或稍後再試');
@@ -292,6 +301,124 @@ function testNimSingleModel(modelId) {
   var code = resp.getResponseCode();
   console.log((code === 200 ? '✅' : '❌') + ' HTTP ' + code + '（' + ms + 'ms）');
   console.log(resp.getContentText('UTF-8').slice(0, 400));
+}
+
+/**
+ * 關卡五：在**跟線上一樣的條件**下，該寫帳的時候會不會真的叫寫入工具。
+ *
+ * 2026-10-05 kimi-k3 的死法，前四關都測不出來：關卡二只給一個工具、一句乾淨的指令，
+ * 而線上是完整人設 + 全部工具 + 對話歷史。歷史裡的 assistant 回覆只存文字 ——
+ * 上一次真的記帳時工具回傳的「已記錄第 97 列：…」，在歷史裡看起來就是「Iris 直接回了
+ * 這句話」。模型照著那個樣子回，工具一個都不叫。
+ *
+ * 所以這裡刻意重現那三樣：真的 systemContext、真的全部工具定義、一段「看起來像沒叫工具
+ * 就回了已記錄」的歷史。每顆模型 × 每個案例跑 REPS 次，因為 10/5 的失敗不是每次都發生。
+ *
+ * ⚠️ 金額全是捏造的（這個檔會進 git）。帳戶名稱不算敏感資料。
+ * ⚠️ 只放關卡一已確認打得到的模型：fetchAll 等整批，一顆卡住就吃滿 ~300s。
+ * 結果同時寫進 consolelog（tag NimTest），可用診斷入口讀。
+ */
+function testNimWriteIntent() {
+  var MODELS = [
+    'moonshotai/kimi-k3',     // 現役主模型，預期會重現問題
+    'openai/gpt-oss-20b'      // 現役備援
+  ];
+  var REPS = 2;
+
+  var CASES = [
+    { label: '台幣戶校正', msg: '台新銀行 幫我調整成 12345',
+      expect: 'setCashBalance', ok: a => a.account === '台新銀行' && Number(a.balance) === 12345 && typeof a.balance === 'number' },
+    { label: '日幣戶校正（不可換算成台幣）', msg: '國泰外幣戶(日) 幫我調整成日幣 500',
+      expect: 'setCashBalance', ok: a => a.account === '國泰外幣戶(日)' && Number(a.balance) === 500 },
+    { label: '記股利', msg: '今天收到 0056 股利 1200 在國泰證券戶',
+      expect: 'recordDividend', ok: a => String(a.symbol) === '0056' && Number(a.amount) === 1200 }
+  ];
+
+  // 線上 ChatBot 送出去的形狀：人設當第一則 user、確認語當 model、歷史、這一句
+  var system = Prompt.systemContext({ scope: '回覆' }) +
+    '\n\n[工具使用準則]\n- 資訊足夠時立即回覆，勿重複呼叫相同工具';
+  var POISON = [
+    { role: 'user',  parts: [{ text: '幫我記錄 00878 股利 1000 在國泰證券戶' }] },
+    { role: 'model', parts: [{ text: '已記錄第 12 列：2026-09-11 股利 00878 $1,000 → 國泰證券戶\n▸ 00878：1,000 股，累計股利 1,000' }] }
+  ];
+  var tools = AIAdapter.convertToolsToOpenAI(Tools.getDefinitions());
+
+  var url     = Config.NVIDIA_API_BASE + '/chat/completions';
+  var headers = {
+    'Content-Type':  'application/json',
+    'Authorization': 'Bearer ' + Config.NVIDIA_API_KEY,
+    'Accept':        'application/json'
+  };
+
+  // 思考一律關，比照 FAST tier 與 NvidiaService 的分流
+  var buildRequest = (model, msg) => {
+    var contents = [
+      { role: 'user',  parts: [{ text: system }] },
+      { role: 'model', parts: [{ text: Prompt.ACKNOWLEDGEMENT }] }
+    ].concat(POISON, [{ role: 'user', parts: [{ text: msg }] }]);
+    var payload = {
+      model: model, messages: AIAdapter.toOpenAIMessages(contents),
+      max_tokens: 1024, tools: tools
+    };
+    if (model.indexOf('gemma') === -1) payload.tool_choice = 'auto';
+    if (model.indexOf('moonshotai/kimi') === 0 || model.indexOf('deepseek-ai/deepseek-v4') === 0) {
+      payload.chat_template_kwargs = { thinking: false };
+    } else if (model.indexOf('z-ai/glm') === 0) {
+      payload.chat_template_kwargs = { enable_thinking: false, clear_thinking: true };
+    } else if (model.indexOf('openai/gpt-oss') === 0) {
+      payload.reasoning_effort = 'low';
+    }
+    return { url: url, method: 'post', headers: headers,
+             payload: JSON.stringify(payload), muteHttpExceptions: true };
+  };
+
+  var jobs = [];
+  MODELS.forEach(m => CASES.forEach(c => { for (var r = 0; r < REPS; r++) jobs.push({ model: m, c: c }); }));
+
+  var t0 = Date.now();
+  var resps;
+  try { resps = UrlFetchApp.fetchAll(jobs.map(j => buildRequest(j.model, j.c.msg))); }
+  catch (ex) { console.log('⚠️ 整批丟例外：' + ex); Logger.error('NimTest', '寫入意圖整批例外', String(ex)); return; }
+  console.log('=== 關卡五：寫入意圖（' + jobs.length + ' 個請求，耗時 ' + Math.round((Date.now() - t0) / 1000) + 's）===\n');
+
+  var score = {};
+  jobs.forEach((j, i) => {
+    var resp = resps[i], verdict, detail = '';
+    var code = resp ? resp.getResponseCode() : 0;
+    if (code !== 200) {
+      verdict = '❌ HTTP ' + code;
+      detail  = resp ? resp.getContentText('UTF-8').slice(0, 120) : '';
+    } else {
+      var msg   = (JSON.parse(resp.getContentText('UTF-8')).choices || [{}])[0].message || {};
+      var calls = msg.tool_calls || [];
+      var hit   = calls.filter(tc => tc.function && tc.function.name === j.c.expect)[0];
+      if (!calls.length) {
+        verdict = '❌ 沒叫工具';
+        detail  = String(msg.content || '').replace(/\n/g, ' ').slice(0, 120);
+      } else if (!hit) {
+        verdict = '⚠️ 叫錯工具';
+        detail  = calls.map(tc => tc.function && tc.function.name).join(',');
+      } else {
+        var args = {};
+        try { args = JSON.parse(hit.function.arguments || '{}'); } catch (e) {}
+        verdict = j.c.ok(args) ? '✅' : '⚠️ 參數錯';
+        detail  = JSON.stringify(args);
+      }
+    }
+    score[j.model] = score[j.model] || { pass: 0, n: 0 };
+    score[j.model].n++;
+    if (verdict === '✅') score[j.model].pass++;
+    var line = verdict + '  ' + j.model + '  ' + j.c.label;
+    console.log(line + '\n      ' + detail);
+    Logger.info('NimTest', '寫入意圖 ' + line, detail);
+  });
+
+  console.log('\n=== 小計 ===');
+  Object.keys(score).forEach(m => {
+    var s = m + '  ' + score[m].pass + '/' + score[m].n;
+    console.log(s);
+    Logger.info('NimTest', '寫入意圖小計 ' + s);
+  });
 }
 
 /**
