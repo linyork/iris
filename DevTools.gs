@@ -132,31 +132,6 @@ function checkDashboardAuth() {
   console.log('isAuthorized          : ' + Dashboard.isAuthorized());
 }
 
-/**
- * 手動聚合最近 N 天的 consolelog 成每日指標。
- * 改完 ChatBot 的迴圈或模型設定之後用這支看實際影響：平均輪數、耗時分佈、
- * 逾時次數、備援接手、假宣稱攔截有沒有觸發。冪等，同一天重跑會覆蓋不會疊加。
- */
-function rollupMetrics() {
-  var rows = Metrics.rollupDaily(7);
-  console.log(JSON.stringify(rows, null, 2));
-  return rows;
-}
-
-/**
- * 跑一批評估題（預設 3 題）。改完 `Prompt.gs` 之後用這支看逐題差異。
- *
- * ⚠️ **重複執行直到整組都有新的「最後執行」時間。** 一題可能跑完整個 ReAct 迴圈，
- *    GAS 只有 6 分鐘，所以一次只跑幾題；沒跑過的優先，其次最舊的。
- *    第一次執行會自己建 `eval_set` 並寫入預設題組。
- */
-function runEval() {
-  var r = Eval.runBatch(3);
-  console.log(JSON.stringify(r, null, 2));
-  console.log('未跑完的話再執行一次；結果與未通過的性質寫在 eval_set 分頁。');
-  return r;
-}
-
 // ─── NIM 模型測試 ─────────────────────────────────────────────────
 
 /**

@@ -151,8 +151,6 @@ Telegram Bot API ───┤        │
 | `WebSearch.gs` | Google Custom Search 包裝 |
 | `Utils.gs` | 執行時間預算（`execElapsedMs`）、帳本寫入計數（`noteLedgerWrite`）、「說已完成」偵測（`claimsWriteDone`）、文字格式化與分段 |
 | `Logger.gs` | 寫入 `consolelog` 工作表 |
-| `Eval.gs` | 固定題組 + 可自動判定的性質。**判定是純函式（測得起來），執行才需要 LLM 且一次只跑幾題**，重複執行 `runEval()` 直到整組跑完 |
-| `Metrics.gs` | 把 `consolelog` 聚合成每日一列（輪數、耗時、逾時、備援接手、假宣稱攔截、錯誤數）。**在 `dailyCleanUp` 清 consolelog 之前跑**，否則等於丟掉再算 |
 | `AssetTools.gs` | 新表**輸入層**的用例層：`recordTrade` 驗證後 append 一列並重算；`voidTrade` 作廢記錯的列；`updateInstrument` / `updateAccount` 改主檔；`listTrades` / `listAccounts` / `listInstruments` 讀主檔（計算層的讀取在 `Snapshot`） |
 | `AssetImport.gs` | 券商 CSV 匯入（Telegram 傳檔進來）。認得兩種格式：**證券對帳單**（有「委託書號」，買賣都記，首選）與**已實現損益**（有「賣出日期」，只記賣出）。兩種格式互相去重 |
 | `DevTools.gs` | **所有在 GAS 編輯器手動執行的進入點**：建表、重算、dry run、診斷。編輯器的函式下拉選單不顯示檔案來源，所以集中在這裡；trigger 與 web 進入點因為綁定名稱，仍留在各自的檔案。遷移相關的進入點已移除 —— 遷移做完了，留在選單裡只會被誤觸 |
@@ -166,8 +164,6 @@ Telegram Bot API ───┤        │
 |---|---|
 | `consolelog` | 執行期記錄；超過 10 天自動清除 |
 | `chat` | 對話歷史（每 userId），超過 30 天自動清除 |
-| `eval_set` | 評估題組與每題的最新判定（PASS / FAIL 與未通過的性質）。**不存在時自己建立並寫入預設題組** |
-| `metrics` | 每日執行指標，由 `Metrics.rollupDaily()` 寫入（同日覆蓋）。**不存在時自己建立** |
 
 ### 資產分頁
 
@@ -573,7 +569,7 @@ expected_hash     = hex(HMAC_SHA256(訊息 = data_check_string, 金鑰 = secret_
 
 | 時間 | 函式 | 用途 |
 |---|---|---|
-| 每日 04:00 | `dailyCleanUp` | **先**把 consolelog 聚合進 `metrics`，再清 10 天前的 log、30 天前的 chat |
+| 每日 04:00 | `dailyCleanUp` | 清 10 天前的 log、30 天前的 chat |
 | 每日 09:00 | `dailyReport` | 個人化財經早報（週六改發週報） |
 | 每日 10:00 | `marketAlert` | 盤中異動警報（單檔跌幅 > 3% 推播） |
 | 每日 14:00 | `marketAlert` | 盤中異動警報（第二次） |
@@ -657,7 +653,6 @@ CLAUDE.md 是精簡地圖、README 是完整說明、SKILL 是流程與地雷。
 3. 在 GAS 執行 `setupAssetSheet()` —— 依 `AssetSchema.TABS` 建立／補齊所有分頁、
    標題列與公式。冪等，重跑不會疊加。
 4. 在 GAS 執行 `setup()`，確認系統分頁與環境變數齊備。
-   （`metrics` / `eval_set` 不必先建，第一次用到時會自己建。）
 5. 在 GAS 執行 `setupAllTriggers()`，依 `Cron.SCHEDULE` 建立全部排程。
 6. 設定訊息平台的 webhook，指向部署的 `/exec` 結尾網址：
    - **Telegram** — 在 GAS 執行 `setupTelegramWebhook()`

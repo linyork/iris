@@ -6,17 +6,6 @@
 
 ---
 
-## 待執行（需要在 GAS 編輯器或 Telegram 操作）
-
-- [ ] **再跑一輪完整的 `eval_set`（4 次 `runEval()`），確認下列失敗不是變異**
-      2026-08-11 的基準線是 5 PASS / 5 FAIL，其中三個判定為真：
-      Q04／Q10 的 `hasAsOf` —— `getHoldings` 開頭已經有【資料時點】，模型沒有轉述。
-      **兩輪都失敗的才動 `Prompt.gs`**，只有一輪的當雜訊。
-
-- [ ] **累積數天後跑 `rollupMetrics()`**
-      確認 `TOOL_MAX_ITERATIONS` 由 3 放寬到 5 的實際代價（看 `avgTurns` / `maxTurns` /
-      `timeouts`），以及 `備援接手` 是否每天非零（非零＝主模型已下架，不是忙碌）。
-
 ## 已知缺陷
 
 - [ ] **`voidTrade` 作廢轉帳的單一腳沒有防護**

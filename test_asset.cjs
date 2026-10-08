@@ -2092,62 +2092,6 @@ console.log('\nT33  人設寫的是行為準則，不是排版規範');
   check('沒傳就不留空段落', Prompt.systemContext({ scope: '回覆' }).indexOf('undefined') < 0, '');
 }
 
-// ─── T34  consolelog 聚合成每日指標 ───────────────────────────────
-//
-// 這些數字本來每 10 天就被 dailyCleanUp 清掉。聚合的重點不只是「有數字看」，
-// 而是改完迴圈或模型設定之後，有東西可以拿來驗證實際影響。
-console.log('\nT34  每日指標聚合');
-{
-  load('Metrics.gs');
-
-  // ⚠️ 要重用已有的分頁。mock 允許同名分頁共存（真的 Sheets 不行），
-  //    直接 insertSheet 會冒出第二張，而 getSheetByName 拿到的是第一張 ——
-  //    症狀是「測試寫了一堆資料，Metrics 卻說只有一列」。
-  const logSheet = target.getSheetByName('consolelog') || target.insertSheet('consolelog');
-  logSheet.clear();
-  logSheet.getRange(1, 1, 1, 5).setValues([['時間', '層級', 'tag', '訊息', '細節']]);
-
-  const today = Utilities.formatDate(new Date(), 'GMT+8', 'yyyy/MM/dd');
-  const put = (level, tag, msg, detail) =>
-    logSheet.appendRow([today + ' 10:00:00', level, tag, msg, detail || '']);
-
-  put('INFO', 'ChatBot.reply', 'ReAct 迴圈結束', JSON.stringify({ totalTurns: 2, elapsedMs: 12000, timedOut: false }));
-  put('INFO', 'ChatBot.reply', 'ReAct 迴圈結束', JSON.stringify({ totalTurns: 4, elapsedMs: 30000, timedOut: true }));
-  put('INFO', 'Tools.execute', '執行工具: getHoldings', '{}');
-  put('INFO', 'Tools.execute', '執行工具: getHoldings', '{}');
-  put('INFO', 'Tools.execute', '執行工具: searchWeb', '{}');
-  put('WARNING', 'AIServiceFactory.callAPI', '備援模型接手成功', '');
-  put('INFO', 'Utils.noteLedgerWrite', '帳本寫入 #1', '');
-  put('WARNING', 'ChatBot.reply', '宣稱已完成但沒有呼叫寫入工具，打回重做', '');
-  put('ERROR', 'StockPrice._fetch', '請求丟出例外', '');
-
-  const rows = Metrics.rollupDaily(1);
-  const r = rows[0];
-
-  check('算出對話數', r.replies === 2, JSON.stringify(r.replies));
-  check('平均輪數 = (2+4)/2', r.avgTurns === 3, JSON.stringify(r.avgTurns));
-  check('最多輪數取最大值', r.maxTurns === 4, JSON.stringify(r.maxTurns));
-  check('耗時換算成秒', r.avgSec === 21 && r.maxSec === 30, r.avgSec + ' / ' + r.maxSec);
-  check('逾時只算 timedOut=true 的', r.timeouts === 1, JSON.stringify(r.timeouts));
-  check('工具呼叫總數', r.toolCalls === 3, JSON.stringify(r.toolCalls));
-  check('最常用工具帶次數', r.topTool === 'getHoldings(2)', r.topTool);
-  check('備援接手次數', r.fallback === 1, JSON.stringify(r.fallback));
-  check('假宣稱攔截有被數到（最值得盯的一條）', r.falseClaim === 1, JSON.stringify(r.falseClaim));
-  check('帳本寫入次數', r.ledgerWrites === 1, JSON.stringify(r.ledgerWrites));
-  check('錯誤數只算 ERROR', r.errors === 1, JSON.stringify(r.errors));
-
-  // 同一天重跑要覆蓋，不能疊加 —— 排程補跑與手動執行都會發生
-  const metricSheet2 = target.getSheetByName('metrics');
-  const rowsAfterFirst = metricSheet2.getLastRow();
-  Metrics.rollupDaily(1);
-  check('同一天重跑覆蓋而不是疊加',
-    target.getSheetByName('metrics').getLastRow() === rowsAfterFirst,
-    rowsAfterFirst + ' → ' + target.getSheetByName('metrics').getLastRow());
-
-  target.sheets = target.sheets.filter(s =>
-    s.getName() !== 'consolelog' && s.getName() !== 'metrics');
-}
-
 // ─── T35  ChatBot 的 ReAct 迴圈 ──────────────────────────────────
 //
 // 這支到今天為止完全沒有測試替身，而假宣稱攔截、工具信封、輪數上限全都住在裡面。
@@ -2281,75 +2225,6 @@ console.log('\nT35  ReAct 迴圈');
 
   delete global.AIServiceFactory;
   delete global.MessagingServiceFactory;
-}
-
-// ─── T37  評估：判定是純函式，所以測得起來 ────────────────────────
-//
-// 評估的價值全在判定準不準。判定跟 LLM 無關（吃文字、回 {ok, why}），
-// 所以這裡測的是判定本身 —— 執行那半要打 LLM，留給 DevTools.runEval()。
-console.log('\nT37  評估的判定函式');
-{
-  load('Eval.gs');
-  const C = Eval.CHECKS;
-
-  check('抓得到 Markdown 粗體', C.noMarkdown('總資產 **142萬**').ok === false, '');
-  check('抓得到 Markdown 標題', C.noMarkdown('## 標題\n內容').ok === false, '');
-  check('乾淨的回覆會過', C.noMarkdown('▸ 總資產：142萬').ok === true, '');
-  check('不要把數學乘號誤判成粗體', C.noMarkdown('2 * 3 = 6').ok === true, '');
-
-  check('是非題沒先答是否 → 不過', C.yesNoFirst('讓我先查一下你的持倉。').ok === false, '');
-  check('先答了就過', C.yesNoFirst('可以。目前現金水位還夠。').ok === true, '');
-
-  check('沒講時點 → 不過', C.hasAsOf('總資產 142萬。').ok === false, '');
-  check('講了重算時點 → 過', C.hasAsOf('總資產 142萬（13:02 重算）。').ok === true, '');
-  check('講了非交易時段 → 過', C.hasAsOf('非交易時段，取不到當日成交價。').ok === true, '');
-
-  check('唯讀問題宣稱寫入 → 不過', C.noWriteClaim('好的，已校正。').ok === false, '');
-  check('正常回答 → 過', C.noWriteClaim('你有三個帳戶。').ok === true, '');
-
-  check('太長 → 不過', C.concise(new Array(20).fill('一行').join('\n')).ok === false, '');
-
-  // 數字出處：最有價值也最容易誤判的一條
-  const ctx = { context: '總資產：1,420,000\n未實現損益：85,000' };
-  check('數字有出處 → 過', C.numbersGrounded('總資產 1,420,000。', ctx).ok === true, '');
-  check('「142萬」是人設要求的寫法，也要算有出處',
-    C.numbersGrounded('總資產 142萬。', ctx).ok === true,
-    C.numbersGrounded('總資產 142萬。', ctx).why);
-  check('憑空生出來的金額 → 不過',
-    C.numbersGrounded('總資產 1,999,999。', ctx).ok === false, '');
-  check('小數字不檢查（年份、百分比、股數、列號）',
-    C.numbersGrounded('2026 年、佔比 12.5%、1000 股、第 42 列', ctx).ok === true,
-    C.numbersGrounded('2026 年、佔比 12.5%、1000 股、第 42 列', ctx).why);
-
-  // judge：多條性質一起看
-  const v1 = Eval.judge('好的，已校正。', 'noMarkdown,noWriteClaim', {});
-  check('judge 會列出未通過的性質',
-    v1.pass === false && v1.failed.join(',') === 'noWriteClaim', JSON.stringify(v1.failed));
-  const v2 = Eval.judge('▸ 你有三個帳戶。', 'noMarkdown,noWriteClaim', {});
-  check('全過就是 pass', v2.pass === true, JSON.stringify(v2.failed));
-  check('未知的性質名稱會被點名，不是靜靜跳過',
-    Eval.judge('隨便', 'noSuchCheck', {}).failed.join('').indexOf('未知性質') >= 0, '');
-
-  // ── 2026-08-09 第一次跑基準線時，這幾條把做對的回覆判成失敗。
-  //    判定誤殺比漏殺更糟：漏殺只是少發現一個問題，誤殺會讓人去「修」對的行為。
-  check('「先講結論：不算太高」算有先答（Q03 誤殺）',
-    C.yesNoFirst('先講結論：不算太高，但這正是您刻意保留的戰略現金。').ok === true, '');
-  check('「▸ 結論：不建議」也算', C.yesNoFirst('▸ 結論：不建議現在加碼。').ok === true, '');
-  check('真的在鋪陳還是要擋下',
-    C.yesNoFirst('根據你的既定策略與目前持倉，我直接給結論。').ok === false, '');
-  // 2026-08-11 基準線：答案在第一行但不在字首，也要算過 —— 人設要防的是
-  // 「把一個對寫成三段」，不是「答案沒放在第一個字」。
-  check('「以你的設定來說，不高。」算有答（答案在同一行）',
-    C.yesNoFirst('以你的設定來說，不高。').ok === true, '');
-  check('「先講結論：依你設定的觸發條件，現在還不到加碼時機。」算有答',
-    C.yesNoFirst('先講結論：依你設定的加碼觸發條件，現在還不到加碼時機。').ok === true, '');
-  check('整行只有鋪陳、沒有答案 → 仍然擋下',
-    C.yesNoFirst('我先查一下你的持倉與最近的市場狀況。').ok === false, '');
-
-  check('預設題組有東西', Eval.DEFAULT_SET.length >= 10, Eval.DEFAULT_SET.length + ' 題');
-  check('每題的期望性質都是真的存在的檢查',
-    Eval.DEFAULT_SET.every(q => q[2].split(',').every(n => !!Eval.CHECKS[n.trim()])),
-    Eval.DEFAULT_SET.filter(q => q[2].split(',').some(n => !Eval.CHECKS[n.trim()])).map(q => q[0]).join(','));
 }
 
 // ─── T38  指標的數值被誤判成日期時，不能偽裝成 0 ────────────────────

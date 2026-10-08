@@ -271,7 +271,7 @@ var ChatBot = (() => {
           cleanedResponse = Utils.extractText(retryResp) || '抱歉，我有點混亂，請再試一次。';
         }
       }
-      // Markdown 在這裡剝掉，不留到平台層 —— 否則 chat 歷史、評估與其他消費端
+      // Markdown 在這裡剝掉，不留到平台層 —— 否則 chat 歷史與其他消費端
       // 拿到的版本會跟主人看到的不一樣。順帶修好 LINE（Line.pushMsg 從不剝）。
       // ⚠️ Telegram.pushMsg 的那一道不可移除：早報、盤中警報
       //    的推播不經過這裡。重複剝一次無害。

@@ -344,8 +344,6 @@ System tabs (this file's other sections cover the asset tabs, which are defined 
 |-----|---------|
 | `consolelog` | Runtime logs written by `Logger.gs`, purged after 10 days |
 | `chat` | Conversation history per userId, purged after 30 days |
-| `metrics` | Daily rollup of `consolelog`, written by `Metrics`. Self-creating. |
-| `eval_set` | Evaluation questions and their latest verdict. Self-creating. |
 
 ### Legacy sheet
 
@@ -604,94 +602,6 @@ escape, which makes **update the only correction path** — and delete the dange
 `區域` / `類型` / `目標配置%` 全留空，而 `配置` 正是按 `區域` 與 `類型` 分組的。也就是說
 那個 C **保證**後面需要一次 `updateInstrument`；`listInstruments` 會直接點名缺哪一欄。
 
-### 評估：判定與執行是兩件事
-
-`Eval.gs` splits into a half that needs an LLM and a half that does not, and only the second half
-is where the value lives.
-
-**`Eval.CHECKS` are pure functions** — `(reply, ctx) => {ok, why}`. No LLM, no sheet reads, so
-`T37` tests them directly: Markdown, yes/no-first, as-of present, no write claim on a read-only
-question, length, and whether every figure in the reply can be found in that turn's context.
-(`citesStanding` — "did it cite the owner's standing rules" — was removed on 2026-10-08 along with
-the rules themselves.)
-`Eval.judge` runs a named set and reports which ones failed.
-
-**`Eval.runBatch(limit)` is the half that costs money and time.** Default 3 questions per run,
-oldest-first, writing results back after each. GAS gives 6 minutes and one question can run a
-whole ReAct loop, so it is designed to be run repeatedly until every row has a fresh timestamp
-rather than to finish in one go. It also stops early if `Utils.execTimeLeftMs()` drops under 90s —
-better to do two questions than to be killed mid-question having written nothing.
-
-Two things that would quietly ruin the results:
-
-- **Each question uses its own `userId`, and it carries a per-run stamp** (`EVAL:<id>:<ms>`).
-  Per-question alone is not enough, and the second baseline run proved it: `EVAL:Q04` re-read
-  its own answer from the previous run's chat history and quoted 300,000 shares without calling
-  `getHoldings` again. That is exactly the behaviour the system prompt forbids and the eval is
-  supposed to catch — and the eval had built the conditions for it.
-- **`platform` is not `TELEGRAM`.** It would otherwise fire the typing indicator at the owner;
-  an eval is background work and should not appear in his chat.
-
-⚠️ **Expectations are properties, not answers.** 「應該回答 142萬」 is stale tomorrow and grades
-the wrong thing. The set asks whether the reply *carries an as-of*, whether *every figure has a
-source*, whether a yes/no question *got a yes or no first*.
-
-⚠️ **The first baseline run graded the checkers, not the model.** 2026-08-09: 3 pass / 7 fail, and
-four of those failures were the checker's fault — `yesNoFirst` rejected 「先講結論：不算太高」
-(the answer is right there, behind a label), `citesStanding` missed 「您的長期配置原則」 and
-「你原本就有預留」 because it only knew three phrasings, and `numbersGrounded` flagged figures the
-model had correctly transcribed from tool output, because `_ask` built its context from `Facts` +
-knowledge and never captured what the tools returned.
-
-**A checker that fails correct behaviour is worse than one that misses bad behaviour.** A miss
-costs you one undetected problem; a false failure sends someone off to "fix" something that was
-already right. `T37` now pins each of those four cases.
-
-`_ask` wraps `Tools.execute` for the duration of a question to collect outputs into the context —
-in `Eval`, not in `ChatBot`, because the production path should not carry a parameter it only
-needs when being graded. The wrapper is restored in a `finally`; leaving it installed would put an
-extra layer on every later reply in that execution.
-
-⚠️ `numbersGrounded` is the valuable check and the one most likely to misfire, so its allowances
-are deliberate: 「142萬」 counts as grounded for 1,420,000 because the persona *requires* that
-form, and anything under 10,000 is skipped — years, percentages, share counts and row numbers all
-live there and are nearly always transcription rather than invention. What it is really hunting is
-a fabricated figure at money scale.
-
-### 每日指標：consolelog 在被丟掉之前先算一次
-
-`Metrics.rollupDaily(days)` folds `consolelog` into one row per day in a `metrics` tab: replies,
-average and max turns, average and max seconds, timeouts, tool calls, most-used tool, fallback
-takeovers, **false-claim interceptions**, ledger writes, errors. `DevTools.rollupMetrics()` runs
-it by hand over 7 days.
-
-⚠️ **It runs first in `dailyCleanUp`, before the `consolelog` purge.** Reversing that order means
-throwing the data away and then trying to count it. There is currently a lot of slack (10-day
-retention, 3-day rollup) but the ordering is the invariant, not the slack.
-
-Each run recomputes the last 3 days and **overwrites** rows for those dates, so a missed schedule
-backfills itself and a manual run never doubles a row.
-
-The purge itself goes through `Utils.purgeRowsBefore(sheet, dateCol, cutoff)`, which groups the
-expired rows into contiguous runs and calls `deleteRows(start, count)` once per run. `consolelog`
-and `chat` are written only by `appendRow`, so the expired rows are always one leading block —
-one API call, not one per row. That matters because the row count is driven by logging volume:
-the old per-row loop made cleanup cost grow with exactly the thing that fills the sheet.
-
-⚠️ **Delete back to front.** Removing a low row number shifts every later run up, so the ranges
-are consumed in reverse. ⚠️ **A row whose date cell won't parse is kept**, not deleted — this
-function's job is expiry, not tidying up rows it doesn't recognise. `T40` pins both, plus the
-call count.
-
-⚠️ **Do not re-parse the timestamp into a `Date`.** `GoogleSheet.setLog` already wrote it as a
-GMT+8 string; parsing it back with the execution's timezone and re-formatting to GMT+8 shifts the
-whole day when the two conversions don't cancel — and the symptom is "yesterday has no data",
-with no error. `_dayOf` takes the first ten characters instead. It still accepts a real `Date`,
-because Sheets sometimes coerces that column.
-
-This exists partly to make the `TOOL_MAX_ITERATIONS` 3 → 5 change checkable: `avgTurns` /
-`maxTurns` / `timeouts` are exactly the numbers that say whether it helped or cost anything.
-
 ### 人設寫的是行為，排版放最後
 
 `Prompt.SYSTEM_PROMPT` used to spend about 40% of its length on formatting — no Markdown, use
@@ -717,13 +627,13 @@ length, since it ships with every single message.
 ⚠️ **提示詞勸不動它，所以改用剭的。** Three baseline runs in a row had 3 of 10 replies
 carrying `**bold**` despite the ban, so `ChatBot.reply` now runs `Utils.stripMarkdown` before
 returning. Previously only `Telegram.pushMsg` stripped it, which meant the owner saw clean text
-while the chat history, the eval, and any future consumer saw the asterisks — two versions of the
+while the chat history and any future consumer saw the asterisks — two versions of the
 same reply. Stripping here makes all of them agree, and fixes LINE as a side effect
 (`Line.pushMsg` never stripped at all).
 
 Keep the strip in `Telegram.pushMsg`: reports and market alerts do not go
-through `ChatBot`. The cost, stated plainly: the eval can no longer see whether the model obeys
-the no-Markdown rule. That signal was traded for one consistent version of the text.
+through `ChatBot`. The cost, stated plainly: nothing downstream can see any more whether the
+model obeys the no-Markdown rule. That signal was traded for one consistent version of the text.
 
 ### 瘦身：主動顧問與記憶系統已移除
 
@@ -745,6 +655,10 @@ the no-Markdown rule. That signal was traded for one consistent version of the t
   與 30 天內的對話；說「記住 X」它不會記。
 - **`env` 分頁**：兩格設定（`AI_PROVIDER`、`DEBUG_MODE`）搬進 Script Properties，順帶省掉
   每次執行為了讀這兩格多開一次試算表。沒設時的預設等於搬家當天的線上值，所以不補設也不會變。
+- **`metrics` / `eval_set`**（`Metrics.gs` / `Eval.gs`、`rollupMetrics()` / `runEval()`）：每日把
+  consolelog 統計成一列，與一組靠 LLM 實跑的評估題。前者沒有任何讀者，後者 8/11 之後沒跑過、
+  半數題目在考已經不做的顧問行為。代價：超過 consolelog 10 天保留期的歷史統計（例如上個月
+  備援接手幾次）查不到了；10 天內的用診斷入口直接讀 log。
 
 ### 工具回傳要分得出成功與失敗
 
@@ -822,8 +736,10 @@ at the prompt.
 
 - **First check `consolelog` for `410` / `404` before touching `Prompt.gs`.** A model change
   explains a behaviour change far more often than a prompt change does.
-- **`Metrics.rollupDaily` counts `fallback` per day.** A non-zero number there every day means the
-  primary is gone, not merely busy. That column is the alarm this incident needed and did not have.
+- **Count fallback takeovers per day** — the diagnostics endpoint with
+  `what=log&tag=AIServiceFactory` shows every 「主模型失敗，改用備援模型重試」. Non-zero every day means
+  the primary is gone, not merely busy. (A daily `metrics` rollup used to keep this beyond the
+  10-day `consolelog` window; it was removed on 2026-10-08.)
 
 The replacement is the same model under a dated id, `-0731`. `NvidiaService` matches on the
 `deepseek-ai/deepseek-v4` prefix, so it needed no new branch — but that was verified, not assumed.
