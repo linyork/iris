@@ -2713,6 +2713,44 @@ console.log('\nT52  每日快照依欄名讀寫');
   EVAL.reset();
 }
 
+// ─── T53  黃金現價由 GAS 抓、算好寫進去 ─────────────────────────────
+// 2026-08-03 起黃金現價卡在遷移價兩個多月：GOOGLEFINANCE 給不出 XAUUSD，公式一直
+// 走退回值，而且看起來完全正常。現在每次重算由 GAS 抓金價與匯率、寫一個數字進去；
+// 抓不到就不動那一欄，並在指標的「⚠️ 待修正」講出來 —— 沿用舊價可以，悄悄沿用不行。
+console.log('\nT53  黃金現價');
+{
+  const phys = target.getSheetByName('實體資產');
+  const H = AssetSchema.expected('實體資產');
+  const priceAt = (i) => num(phys.getRange(i + 2, H.indexOf('現價') + 1).getValue());
+  const saved = global.StockPrice;
+  const warnings = () => AssetSchema.readObjects(target.getSheetByName('指標'))
+    .filter(x => /^⚠️ 待修正/.test(String(x['指標']))).map(x => String(x['說明'])).join('；');
+
+  global.StockPrice = Object.assign({}, saved || {}, { goldUsdPerOz: () => 3110.35, usdTwd: () => 30 });
+  Position.rebuild();
+  // 3110.35 美元／盎司 × 30 ÷ 31.1035 = 3000 台幣／公克
+  check('現價 = 美元金價 × 匯率 ÷ 31.1035', near(priceAt(0), 3000, 1e-6), priceAt(0));
+  check('每一列都更新', AssetSchema.readObjects(phys).every((_, i) => near(priceAt(i), 3000, 1e-6)));
+  check('寫的是數字不是公式（同一次重算不會讀到 Loading…）',
+    String(phys.raw(2, H.indexOf('現價') + 1)).charAt(0) !== '=', String(phys.raw(2, H.indexOf('現價') + 1)));
+  check('成功時沒有黃金的警告', !/黃金/.test(warnings()), warnings());
+
+  // 匯率抓不到：退回現金表美元帳戶的匯率
+  global.StockPrice = Object.assign({}, saved || {}, { goldUsdPerOz: () => 3110.35, usdTwd: () => null });
+  Position.rebuild();
+  check('匯率抓不到時用現金表美元帳戶的匯率', near(priceAt(0), 3110.35 * FX.USDTWD / 31.1035, 1e-3), priceAt(0));
+
+  // 金價抓不到：不動、而且要講
+  const before = priceAt(0);
+  global.StockPrice = Object.assign({}, saved || {}, { goldUsdPerOz: () => null, usdTwd: () => 30 });
+  Position.rebuild();
+  check('金價抓不到時現價不動', near(priceAt(0), before, 1e-9), priceAt(0));
+  check('而且在指標的待修正裡講出來', /黃金現價沒有更新/.test(warnings()), warnings());
+
+  global.StockPrice = saved;
+  Position.rebuild();
+}
+
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);

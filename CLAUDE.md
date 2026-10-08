@@ -865,7 +865,18 @@ reordered column doesn't break it. That is what let the code ship before the own
 指標's 「實體資產損益」 always equalled the whole market value — a figure that looked real and wasn't.
 The owner doesn't track P&L on it for now, so cost, P&L and the unread columns went together;
 `配置`'s 大類／實體 row writes its 成本 as blank, not 0 (`T50`). Everything reading this tab goes
-by column name, and rebuild never rewrites it, so columns can be deleted by hand in any order. `持倉` is still positional (`writeBlock`), so a layout change
+by column name, and rebuild never rewrites it, so columns can be deleted by hand in any order.
+
+⚠️ **Gold's 現價 is written by rebuild, as a number.** Its old formula,
+`IFERROR(GOOGLEFINANCE("CURRENCY:XAUUSD")×USDTWD÷31.1035, <migration price>)`, silently took the
+fallback from 2026-08-03 on — GOOGLEFINANCE gives no XAUUSD on this sheet — so about a million
+of total assets sat frozen for two months while looking perfectly normal. `Position._refreshGoldPrice`
+now fetches USD/oz server-side (`StockPrice.goldUsdPerOz`: gold-api.com, Yahoo `GC=F` as backup),
+USD/TWD from Yahoo `TWD=X` (falling back to the 現金 tab's USD rate), and writes TWD/gram into
+every row. A plain value, not a formula: a fresh GOOGLEFINANCE formula can still read
+「Loading…」 within the same rebuild, which would drop gold from 指標, 配置 and that day's
+snapshot. On failure it leaves the cells alone **and says so** in 指標's `⚠️ 待修正` (`T53`).
+Every row is treated as gold in grams; a different kind of physical asset needs its own branch. `持倉` is still positional (`writeBlock`), so a layout change
 there means editing `AssetSchema.TABS` and `Position.rebuild` together; `T47` checks the letters.
 
 **`交易`'s formulas find their columns by name too.** `TRADE_FORMULAS['現金流']` is a function of

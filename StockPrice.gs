@@ -140,6 +140,46 @@ var StockPrice = (() => {
   };
 
   /**
+   * 國際金價，美元／金衡盎司。抓不到回 null。
+   *
+   * 為什麼不用試算表的 GOOGLEFINANCE：`CURRENCY:XAUUSD` 在這份表上一直回錯誤，
+   * 黃金現價因此從 2026-08-03 起卡在遷移當下的退回值，兩個多月沒人發現
+   * （`CURRENCY:XAUTWD` 則根本不存在）。這裡改走伺服器端請求：
+   *   1 api.gold-api.com 的現貨價（免金鑰）
+   *   2 Yahoo 的 COMEX 期貨 GC=F（與現貨差距很小，只當備援）
+   * 台灣銀行的牌價頁有機器人驗證，GAS 打不進去，所以不用。
+   */
+  sp.goldUsdPerOz = () => {
+    return _json('https://api.gold-api.com/price/XAU', j => j.price) ||
+      _json('https://query1.finance.yahoo.com/v8/finance/chart/GC=F?range=1d&interval=1d',
+        j => j.chart.result[0].meta.regularMarketPrice);
+  };
+
+  /** 打一個 JSON 端點、挑出一個正數；任何失敗都回 null（記一筆 log） */
+  var _json = (url, pick) => {
+    try {
+      var resp = UrlFetchApp.fetch(url, {
+        muteHttpExceptions: true,
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+      });
+      if (resp.getResponseCode() !== 200) {
+        Logger.warning('StockPrice._json', 'HTTP ' + resp.getResponseCode(), url);
+        return null;
+      }
+      var v = Number(pick(JSON.parse(resp.getContentText())));
+      return v > 0 ? v : null;
+    } catch (ex) {
+      Logger.warning('StockPrice._json', '請求失敗', url + ' ' + (ex && ex.message));
+      return null;
+    }
+  };
+
+  /** 美元兌台幣（Yahoo TWD=X）。抓不到回 null，呼叫端自己退回。 */
+  sp.usdTwd = () =>
+    _json('https://query1.finance.yahoo.com/v8/finance/chart/TWD=X?range=1d&interval=1d',
+      j => j.chart.result[0].meta.regularMarketPrice);
+
+  /**
    * 證交所上市證券的「代號 ↔ 簡稱」對照（openapi 的 STOCK_DAY_ALL，約 1,400 檔）。
    *
    * 2026-10-08 起名稱一律用這份簡稱（「富邦台50」不是「富邦台灣50」）：券商對帳單用的

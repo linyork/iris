@@ -126,6 +126,56 @@ var Position = (() => {
     return out;
   };
 
+  /**
+   * 黃金現價（台幣／公克）寫進「實體資產」的現價欄，每次重算一次。
+   *
+   * 2026-08-03 起現價公式 `IFERROR(GOOGLEFINANCE("CURRENCY:XAUUSD")×…, 遷移價)` 一直走退回值
+   * —— GOOGLEFINANCE 在這份表上給不出 XAUUSD，實體資產的市值因此凍了兩個多月，而且
+   * 看起來完全正常。現在改成 GAS 自己算好一個數字寫進去：
+   *   美元金價  StockPrice.goldUsdPerOz（伺服器端請求，不靠 GOOGLEFINANCE）
+   *   美元匯率  StockPrice.usdTwd；抓不到就用「現金」表美元帳戶的匯率
+   *   台幣／公克 = 美元／盎司 × 匯率 ÷ 31.1035
+   *
+   * 寫**數字**不寫公式：每次重算都換一個新的 GOOGLEFINANCE 公式，那一格在同一次重算
+   * 裡可能還是「Loading…」，下游讀到的就是 0 —— 黃金會在指標、配置與當天快照裡消失。
+   * 一天重算好幾次（09:00、13:00、18:00 與每次記帳），死值的時效夠用。
+   *
+   * ⚠️ 「實體資產」每一列都當成黃金、數量以公克計。表上若出現別種實體資產，要先在這裡分流。
+   * ⚠️ 抓不到時**不動**那一欄，回傳 reason 讓呼叫端寫進「⚠️ 待修正」——
+   *    沿用舊價可以，悄悄沿用不行。
+   *
+   * @returns {{ok: boolean, perGram?: number, rows?: number, reason?: string}}
+   */
+  var GRAMS_PER_TROY_OZ = 31.1035;
+  p._refreshGoldPrice = (ss) => {
+    var sheet = ss.getSheetByName('實體資產');
+    if (!sheet || sheet.getLastRow() < 2) return { ok: true, rows: 0 };
+    if (typeof StockPrice === 'undefined' || !StockPrice.goldUsdPerOz) return { ok: true, rows: 0 };
+
+    var stale = '黃金現價沒有更新，沿用上一次的價格（實體資產市值可能是舊的）：';
+    var usd = StockPrice.goldUsdPerOz();
+    if (!(usd > 0)) return { ok: false, reason: stale + '抓不到國際金價' };
+
+    var fx = StockPrice.usdTwd ? StockPrice.usdTwd() : null;
+    if (!(fx > 0)) {
+      // 退回「現金」表美元帳戶的匯率（那一欄是 GOOGLEFINANCE，前面已 flush 過）
+      var usdRow = AssetSchema.readObjects(ss.getSheetByName('現金'))
+        .filter(x => _str(x['幣別']) === 'USD' && _num(x['匯率']) > 1)[0];
+      fx = usdRow ? _num(usdRow['匯率']) : null;
+    }
+    if (!(fx > 0)) return { ok: false, reason: stale + '抓不到美元匯率' };
+
+    var col = AssetSchema.headerMap(sheet)['現價'];
+    if (col === undefined) return { ok: false, reason: stale + '「實體資產」找不到「現價」欄' };
+
+    var perGram = _round(usd * fx / GRAMS_PER_TROY_OZ, 4);
+    var n = sheet.getLastRow() - 1;
+    sheet.getRange(2, col + 1, n, 1).setValues(new Array(n).fill(0).map(() => [perGram]));
+    SpreadsheetApp.flush();   // 市值公式要讀到新價，下面的指標才算得對
+    Logger.info('Position._refreshGoldPrice', '黃金現價已更新', { usdPerOz: usd, usdTwd: fx, perGram: perGram, rows: n });
+    return { ok: true, perGram: perGram, rows: n };
+  };
+
   // ─── 交易重放 ──────────────────────────────────────────────────
 
   /**
@@ -425,6 +475,11 @@ var Position = (() => {
         ' 的市價 GOOGLEFINANCE 抓不到，已改用 TWSE 即時 API 補上（寫進去的是死值，' +
         '不會自己更新；下次重算會再試一次公式）');
     }
+
+    // 黃金現價：每次重算抓一次國際金價寫進「實體資產」。抓不到就照實說，
+    // 不要再讓它像 2026-08 那樣卡在舊價兩個月沒人知道。
+    var gold = p._refreshGoldPrice(ss);
+    if (!gold.ok && gold.reason) replayed.warnings.push(gold.reason);
 
     var summary = p._writeMetricsAndAllocation(ss, trades, replayed);
 
