@@ -2189,6 +2189,15 @@ console.log('\nT35  ReAct 迴圈');
   check('屢勸不聽就加警語', /沒有真的寫進帳本/.test(out), out.slice(0, 60));
   check('原本的內容還留著（誤判時不會把話吃掉）', /已經校正好了/.test(out), out.slice(-40));
 
+  // ⑥-b 2026-10-05 線上原句：沒叫工具，照 setCashBalance 的格式編出「第 98 列」。
+  //      舊版因為整行含「第 N 列」而把它丟掉，防線完全沒看到，主人以為四個帳戶都校正好了。
+  const FAKE = '已校正（第 98 列）：國泰證券戶 餘額 2,326,139 TWD，補差額 -73,116 TWD（對帳後補差額）';
+  reset();
+  AI_QUEUE.push(say(FAKE), say(FAKE), say(FAKE));
+  out = ChatBot.reply(ev('國泰證券戶 幫我調整成2326139'));
+  check('編出「已校正（第 N 列）」也會被打回', AI_CALLS.length >= 2, AI_CALLS.length + ' 輪');
+  check('打回後還是沒寫就加警語', /沒有真的寫進帳本/.test(out), out.slice(0, 60));
+
   // ⑦ 工具失敗要讓模型知道是失敗，不是資料
   reset(); AI_QUEUE.push(call({ name: 'recordTrade', args: {} }), say('參數不齊，請補。'));
   out = ChatBot.reply(ev('記一筆'));
@@ -2551,6 +2560,25 @@ console.log('\nT45  AI_PROVIDER / DEBUG_MODE');
 
   global.Config = mockConfig;
   global.PropertiesService = realPS;
+}
+
+// ─── T46  「已寫入」宣稱的偵測 ─────────────────────────────────────
+// 「第 N 列」的豁免只給**行首**就是第 N 列的查詢轉述（listTrades 的格式）。
+// 2026-10-05 的假回覆把「第 98 列」夾在句中，舊版整行豁免，四次都沒擋到。
+console.log('\nT46  「已寫入」宣稱的偵測');
+{
+  const W = Utils.claimsWriteDone;
+  check('10/5 原句：句中的「第 98 列」不能讓整行豁免',
+    W('已校正（第 98 列）：國泰證券戶 餘額 2,326,139 TWD，補差額 -73,116 TWD（對帳後補差額）') === true);
+  check('「已記錄第 N 列」同理（recordTrade 的輸出格式，被編出來時要抓到）',
+    W('已記錄第 105 列：2026-10-05 調整 國泰證券戶 -20,068') === true);
+  check('listTrades 的轉述（行首就是第 N 列）仍然豁免',
+    W('第 97 列  2026-09-11 股利 00878 49,480（已作廢）') === false);
+  check('轉述時前面加了清單記號也豁免',
+    W('▸ 第 97 列 2026-09-11 股利（已作廢）') === false);
+  check('多行：豁免的那行之外有宣稱，照樣抓到',
+    W('第 97 列  股利（已作廢）\n好的，已幫你校正好了。') === true);
+  check('單純查詢回答不算宣稱', W('國泰證券戶目前餘額 2,346,207。') === false);
 }
 
 //   REALIZED_CSV=path/to.csv node test_asset.cjs

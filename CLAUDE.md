@@ -499,8 +499,14 @@ Three things that make this work rather than merely fire:
   the ledger untouched; the point is to get the tool called.
 - **It happens once per reply** (`claimCorrected`). A model that disagrees would otherwise burn
   all three turns arguing.
-- **`第 N 列` lines are stripped before matching.** `listTrades` prints 「…（已作廢）」 as data;
-  transcribing a query result is not claiming to have done something.
+- **Lines that _start_ with `第 N 列` are stripped before matching.** `listTrades` prints
+  「第 N 列 …（已作廢）」 as data; transcribing a query result is not claiming to have done something.
+  ⚠️ **Never widen this to "lines containing 第 N 列".** It used to be exactly that, and on
+  2026-10-05 the model made four balance corrections with `toolCallCount: 0`, each reply mimicking
+  `setCashBalance`'s output — 「已校正（第 98 列）：國泰證券戶 餘額 …」. The row number inside the
+  sentence exempted the whole line, the guard saw nothing, and the owner believed four accounts
+  were fixed. The most convincing fabrication is the one shaped like real tool output. `T46` and
+  T35 ⑥-b replay that sentence.
 
 The confirming question is itself the trigger — the gap between "I'll do it" and the next turn is
 where the action gets dropped. So `Prompt.gs` also says: parameters complete → call the tool, do

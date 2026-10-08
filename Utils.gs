@@ -109,8 +109,11 @@ var Utils = (() => {
   // 這句話是自由文字，沒有任何欄位擔保它為真，**唯一的證據是帳本有沒有真的被寫過**
   // （見上面的 noteLedgerWrite）。所以偵測放在這裡，判定與補救放在 `ChatBot.reply`。
   //
-  // ⚠️ 先把「第 N 列」開頭的列丟掉再比對：`listTrades` 的輸出本來就會印出
-  //    「…（已作廢）」，那是查詢結果的轉述，不是宣稱自己做了什麼。
+  // ⚠️ 只丟掉**以**「第 N 列」**開頭**的行再比對：`listTrades` 的輸出每行都是
+  //    「第 N 列  …（已作廢）」，那是查詢結果的轉述，不是宣稱自己做了什麼。
+  //    不可放寬成「含有第 N 列的行」—— 2026-10-05 模型連續四次 toolCallCount 0，
+  //    照 setCashBalance 的格式編出「已校正（第 98 列）：國泰證券戶 餘額…」，整行因為
+  //    含「第 98 列」被丟掉，防線完全沒看到。最像真的假回覆，正好長成工具輸出的樣子。
   // ⚠️ 「完成」後面接查詢類的詞不算 —— 「已完成查詢」是講查完了，不是講寫進去了，
   //    而 ChatBot 自己的收尾字串就長這樣。
   var DONE_CLAIM_RE = new RegExp([
@@ -122,7 +125,8 @@ var Utils = (() => {
 
   utils.claimsWriteDone = (str) => {
     if (typeof str !== 'string' || !str) return false;
-    var body = str.split('\n').filter(l => !/第\s*\d+\s*列/.test(l)).join('\n');
+    // 行首可以有清單記號（▸ ・ - •），模型轉述時常會加
+    var body = str.split('\n').filter(l => !/^\s*[▸・•\-]?\s*第\s*\d+\s*列/.test(l)).join('\n');
     return DONE_CLAIM_RE.test(body);
   };
 
