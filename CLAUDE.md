@@ -248,6 +248,22 @@ The `/exec` URL is the anonymous webhook deployment and deliberately returns `No
   and `google-site-verification`. Anything else (e.g. `theme-color`) throws. Meta tags written inside
   the HTML file are ignored entirely, so `addMetaTag` is the only route.
 
+### Diagnostics endpoint
+
+`GET /exec?view=diag&key=<DIAG_KEY>&what=...` → JSON, served by `Diag.gs`. It exists because the
+Drive connector returns a **cached, truncated** export: on 2026-10-08 it still listed tabs the owner
+had already deleted by hand, so nothing read through it could be trusted. This runs inside GAS and
+reads the spreadsheet directly.
+
+`what`: `summary` (default) / `sheets` / `triggers` / `log` (`n`, `level`, `tag`, `since`) /
+`chat` (`n`, `since`) / `sheet` (`name`, `n`).
+
+- **Read-only, permanently.** The key travels in the URL and lands in Google's access logs; it is
+  good enough to keep strangers out, not to guard writes.
+- **Unset or short key = closed**, and a wrong key gets the same `Not Found` as the dashboard.
+- **It never writes `consolelog`.** It is the tool for reading that log; logging each query would
+  push out exactly what you came to look at. `T44` pins all three.
+
 ### Telegram Mini App
 
 A third face: the dashboard rendered inside Telegram's webview, opened by an inline `web_app` button
@@ -1107,6 +1123,7 @@ All secrets are stored in GAS **Script Properties** (not in code):
 | `ADMIN_STRING` | Master user LINE userId |
 | `GEMINI_API_KEY` | Gemini API key (optional if using NVIDIA) |
 | `NVIDIA_API_KEY` | NVIDIA NIM API key (optional if using Gemini) |
+| `DIAG_KEY` | Key for the read-only diagnostics endpoint (optional — unset or under 16 chars disables it) |
 
 ## First-Time Setup
 

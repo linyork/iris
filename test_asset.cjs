@@ -2657,6 +2657,51 @@ console.log('\nT43  Markdown 剝除');
     s('**總資產**是 `100`') === '總資產是 100', s('**總資產**是 `100`'));
 }
 
+// ─── T44  唯讀診斷入口 ────────────────────────────────────────────
+// /exec 是匿名可達的，閘門只有 DIAG_KEY。這裡釘住：沒設或太短就整個關掉、
+// 金鑰差一個字也不給、而且讀取不會往 consolelog 寫東西（否則每查一次就擠掉要看的 log）。
+console.log('\nT44  唯讀診斷入口');
+{
+  load('Diag.gs');
+  const KEY = 'k'.repeat(24);
+
+  global.Config.DIAG_KEY = undefined;
+  check('沒設 DIAG_KEY → 入口關閉（不是不用密碼）', Diag.authorized('') === false && Diag.authorized('x') === false);
+  global.Config.DIAG_KEY = 'short';
+  check('金鑰短於 16 字 → 一樣關閉', Diag.authorized('short') === false);
+  global.Config.DIAG_KEY = KEY;
+  check('金鑰正確才放行', Diag.authorized(KEY) === true);
+  check('差一個字也不放行', Diag.authorized(KEY.slice(0, -1) + 'x') === false);
+  check('長度不同不放行', Diag.authorized(KEY + 'k') === false);
+
+  const log = target.getSheetByName('consolelog') || target.insertSheet('consolelog');
+  log.clear();
+  log.getRange(1, 1, 1, 5).setValues([['timestamp', 'level', 'tag', 'message', 'details']]);
+  log.appendRow(['2026/10/07 09:00:00', 'INFO',  'dailyReport', '開始', '']);
+  log.appendRow(['2026/10/08 09:00:00', 'ERROR', 'ChatBot.reply', '失敗', '']);
+  log.appendRow(['2026/10/08 10:00:00', 'INFO',  'ChatBot.reply', '完成', '']);
+  const rowsBefore = log.getLastRow();
+
+  const all = Diag.collect({ what: 'log', n: 2 });
+  check('log 取尾端 n 列，新的在後', all.log.rows.length === 2 && all.log.rows[1][3] === '完成',
+    JSON.stringify(all.log.rows));
+  check('log 帶標題列與總筆數', all.log.header[2] === 'tag' && all.log.total === 3, JSON.stringify(all.log.header));
+  check('level 篩選', Diag.collect({ what: 'log', level: 'error' }).log.rows.length === 1);
+  check('tag 篩選', Diag.collect({ what: 'log', tag: 'ChatBot' }).log.rows.length === 2);
+  check('since 篩選', Diag.collect({ what: 'log', since: '2026/10/08' }).log.rows.length === 2);
+  check('診斷本身不寫 consolelog', log.getLastRow() === rowsBefore, log.getLastRow() + ' vs ' + rowsBefore);
+
+  const sh = Diag.collect({ what: 'sheets' }).sheets;
+  check('sheets 列出分頁名稱與列數', sh.some(x => x.name === 'consolelog' && x.rows === 4), JSON.stringify(sh.slice(0, 3)));
+  check('sheet 讀任一分頁', Diag.collect({ what: 'sheet', name: 'consolelog', n: 1 }).sheet.rows.length === 1);
+  check('不存在的分頁回錯誤而不是丟例外', /找不到/.test(Diag.collect({ what: 'sheet', name: '沒有這張' }).sheet.error));
+  check('不認得的 what 講清楚可用的選項', /summary/.test(Diag.collect({ what: 'nope' }).error));
+  check('n 有上限', Diag.collect({ what: 'log', n: 99999 }).log.rows.length <= 500);
+
+  target.sheets = target.sheets.filter(x => x.getName() !== 'consolelog');
+  delete global.Config.DIAG_KEY;
+}
+
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
 if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   console.log('\n[真實檔案解析預覽] ' + process.env.REALIZED_CSV);

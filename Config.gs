@@ -14,7 +14,8 @@ var Config = (() => {
     NVIDIA_KEY:   'NVIDIA_API_KEY',
     SEARCH_KEY:   'GOOGLE_SEARCH_KEY',
     SEARCH_CX:    'GOOGLE_SEARCH_CX',
-    DASHBOARD_URL:'DASHBOARD_URL'
+    DASHBOARD_URL:'DASHBOARD_URL',
+    DIAG_KEY:     'DIAG_KEY'
   };
 
   var _debugModeCache    = null;
@@ -47,6 +48,9 @@ var Config = (() => {
     // 而它的 deployment ID 與 webhook 的 /exec 完全不同（不是換字尾就能推導），
     // ScriptApp.getService().getUrl() 從 doPost 執行時也只會拿到 /exec。
     get DASHBOARD_URL() { return scriptProperties.getProperty(ENV_KEYS.DASHBOARD_URL); },
+
+    // ─── 唯讀診斷入口的金鑰（見 Diag.gs）。沒設就是關閉 ─────────
+    get DIAG_KEY() { return scriptProperties.getProperty(ENV_KEYS.DIAG_KEY); },
 
     // ─── AI Provider 切換（env!B3：GEMINI 或 NVIDIA）────────
     get AI_PROVIDER() {

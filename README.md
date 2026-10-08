@@ -147,6 +147,7 @@ Telegram Bot API ───┤        │
 | `Dashboard.gs` | 網頁儀表板的 payload 組裝、快取與存取控制 |
 | `DashboardPage.html` | 儀表板前端單頁 |
 | `MiniApp.gs` | Telegram Mini App 的 `initData` 驗簽與後端進入點 |
+| `Diag.gs` | 唯讀診斷入口（`/exec?view=diag&key=…`）：即時回傳分頁清單、排程比對、consolelog、chat 或任一分頁尾端，JSON。不寫任何東西，連 log 都不寫 |
 | `MiniAppPage.html` | Mini App 前端（手機優先，可點持倉問 Iris） |
 | `DailyReport.gs` | 三份報告共用的 `_generateReport()` 骨架，加上每日 09:00 早報、週六週報、每月 1 日月報 |
 | `MarketAlert.gs` | 10:00 / 14:00 盤中異動警報（單檔 ETF 日跌幅 > `ALERT_ETF_DROP`） |
@@ -620,6 +621,7 @@ expected_hash     = hex(HMAC_SHA256(訊息 = data_check_string, 金鑰 = secret_
 | `LINE_API_KEY` | ⚙️ | LINE channel access token（用 LINE 時必填） |
 | `TELEGRAM_API_KEY` | ⚙️ | Telegram bot token，來自 @BotFather（用 Telegram 時必填） |
 | `DASHBOARD_URL` | ⚙️ | 儀表板 `/dev` 網址（`/dashboard` 指令回傳用） |
+| `DIAG_KEY` | ⚙️ | 唯讀診斷入口 `/exec?view=diag` 的金鑰；沒設或短於 16 字＝關閉 |
 | `GEMINI_API_KEY` | ⚙️ | Gemini API key（用 Gemini 時必填） |
 | `NVIDIA_API_KEY` | ⚙️ | NVIDIA NIM API key（用 NVIDIA 時必填） |
 | `GOOGLE_SEARCH_KEY` | ⚙️ | Google Custom Search API key（用 `searchWeb` 時必填） |

@@ -121,6 +121,10 @@ function doGet(e) {
       .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover');
   }
 
+  // 唯讀診斷：用 DIAG_KEY 把關，回 JSON（見 Diag.gs）。要排在儀表板的登入檢查之前 ——
+  // 它就是給沒有 Google 登入的呼叫端用的。
+  if (view === 'diag') return Diag.respond(e.parameter);
+
   if (!Dashboard.isAuthorized()) {
     Logger.info('doGet', '拒絕未授權的儀表板存取');
     return HtmlService.createHtmlOutput('<h1>Not Found</h1>')
