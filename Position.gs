@@ -116,7 +116,7 @@ var Position = (() => {
       want.forEach(w => {
         var q = byCode[w.code];
         if (q && q.current > 0) {
-          sheet.getRange(w.row, 8).setValue(q.current);
+          sheet.getRange(w.row, AssetSchema.expected('持倉').indexOf('市價') + 1).setValue(q.current);
           out.filled.push({ code: w.code, price: q.current });
         } else {
           out.stillMissing.push(w.code);
@@ -366,21 +366,10 @@ var Position = (() => {
         // 市價：出清的標的不抓價，省 GOOGLEFINANCE 配額也避免 #N/A
         st.shares > 0 ? _priceFormula(market, r) : '',
         '=IF(OR($C' + r + '=0,$H' + r + '=""),0,$C' + r + '*$H' + r + ')',
-        '=$I' + r + '-$D' + r,
-        '=IF($D' + r + '=0,0,$J' + r + '/$D' + r + ')',
-        '=$D' + r + '-$F' + r,
-        '=IF($L' + r + '=0,0,($I' + r + '-$L' + r + ')/$L' + r + ')',
-        '=IF(SUM($I$2:$I)=0,0,$I' + r + '/SUM($I$2:$I))',
         _str(ins['區域']),
         _str(ins['類型']),
-        '=IFERROR(VLOOKUP($A' + r + ',' + _targetRef + ',' + _targetIdx + ',FALSE),0)',
-        "=IFERROR($I" + r + "/VLOOKUP(\"總資產\",指標!$A:$B,2,FALSE),0)",
-        // ⚠️ 偏離減的是 $N（佔股票%），不是 $R（佔總資產%）。
-        //    目標填在「標的」，而「標的」裡全部都是股票 —— 現金與實體資產沒有
-        //    那一欄，也不可能有。所以那些目標加起來的 100% 指的是股票這一塊的
-        //    100%。減佔總資產% 的話，每一檔都固定低配 目標×(1−股票佔比)，
-        //    整排往同一邊偏，看起來還很合理，只是全部都是低配。
-        '=$N' + r + '-$Q' + r
+        // 偏離不在這張表算 —— 看「配置」（分母是股票市值，見 _writeMetricsAndAllocation）
+        '=IFERROR(VLOOKUP($A' + r + ',' + _targetRef + ',' + _targetIdx + ',FALSE),0)'
       ];
     });
 
@@ -417,7 +406,7 @@ var Position = (() => {
       };
     }
 
-    AssetSchema.writeBlock(ss.getSheetByName('持倉'), posRows, 19);
+    AssetSchema.writeBlock(ss.getSheetByName('持倉'), posRows, AssetSchema.expected('持倉').length);
     AssetSchema.writeBlock(ss.getSheetByName('現金'), cashRows, 8);
 
     SpreadsheetApp.flush();   // 指標要讀上面幾張表算完的值
@@ -590,7 +579,7 @@ var Position = (() => {
     var pct = (n, d) => (d ? n / d : 0);
 
     // 有被夾住的交易就頂在最上面。指標是 key-value、靠 VLOOKUP 取值，
-    // 插在最前面不會動到任何既有參照（持倉的「佔總資產%」就是這樣抓總資產的）。
+    // 插在最前面不會動到任何既有參照（例如以 VLOOKUP("總資產", 指標!A:B) 取值的公式）。
     var warnRows = (replayed.warnings || []).map((w, i) => [
       '⚠️ 待修正 ' + (i + 1), '', w
     ]);

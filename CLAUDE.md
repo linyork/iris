@@ -405,7 +405,7 @@ and immune to that quota.
 只有一個地方填：**`標的` 的 `目標配置%`**。寫得進去的只有兩條路 —— 人手改，或
 `AssetTools.updateInstrument()`；遷移與自動登記新標的一律留空。`持倉` 同名那一欄是
 `=IFERROR(VLOOKUP($A{r},標的!$A:$H,8,FALSE),0)` —— 指回去，不是重算當下抄過來的
-死值，所以改完目標不必等下一次 `Position.rebuild()`，`偏離` 當場就跟著動。
+死值。偏離只在 `配置` 算（重算時寫入），`持倉` 已不再有偏離欄（2026-10-08 拿掉）。
 
 那個欄索引是 `AssetSchema.headerMap(instSheet)` 讀**活的標題列**算出來的，不是寫死的
 數字，也不是 `TABS` —— 公式住在試算表裡，就得對得上試算表實際的欄序。寫死的話，在
@@ -415,8 +415,8 @@ and immune to that quota.
 
 ⚠️ **基準是股票市值，不是總資產。** 目標只填在 `標的`，而那張表裡全部都是股票 ——
 現金與實體資產沒有 `目標配置%` 這一欄，也不可能有。所以那些目標加起來的 100% 講的是
-**股票這一塊**的 100%。因此 `持倉!偏離` = `佔股票%`（N 欄）− `目標配置%`，`配置` 的
-`區域` / `類型` 兩維也用股票市值當分母；只有 `大類`（股票／現金／實體）那三列在講
+**股票這一塊**的 100%。因此 `配置` 的
+`區域` / `類型` 兩維用股票市值當分母；只有 `大類`（股票／現金／實體）那三列在講
 總資產怎麼切，分母才是總資產。`Position._writeMetricsAndAllocation` 的 `pushGroup` 收
 `base` 參數就是為了這件事，不是漏改。
 
@@ -424,10 +424,9 @@ and immune to that quota.
 −(現金＋實體佔比) —— 憑空長出來的低配。而這個錯誤**沒有難看的症狀**：每一組偏的方向
 都一樣，圖上只是整排藍的「都買太少」，沒有任何一根 bar 會站出來說分母錯了。2026-08-12
 發現它的方式不是哪個數字看起來不對，是主人講出「我填的加起來就是以股票為 100%」。
-`T5` 現在釘住三個維度各自的分母（各維實際% 相加 = 1），`T20`／`T35` 釘住 `持倉!偏離`
-減的是哪一欄。
+`T5` 現在釘住三個維度各自的分母（各維實際% 相加 = 1）。
 
-⚠️ **填比例不是百分比。** `佔股票%`、`佔總資產%`、`配置` 的 `實際%` 都是 0..1 的比例。
+⚠️ **填比例不是百分比。** `目標配置%` 與 `配置` 的 `實際%` 都是 0..1 的比例。
 填 12.5 而不是 0.125，偏離會差一百倍。`updateInstrument` 因此**擋下所有 > 1 的值而不是
 自己 ÷100** —— 12.5 到底是 12.5% 還是有人手滑多打一位，程式分不出來，猜錯不會報錯。
 
@@ -841,7 +840,14 @@ timezone only adds a place for them to land one day off.
 
 `指標` (指標 / 數值 / 說明, values frozen at rebuild time) is written by
 `Position._writeMetricsAndAllocation()` and read by `Snapshot._totals`, `DataSync`,
-`GoogleSheet.getDashboard` and the `持倉!R` VLOOKUP.
+and `GoogleSheet.getDashboard`.
+
+⚠️ **`持倉` columns are referenced by letter from other tabs** — 指標's `=SUM(持倉!$I$2:$I)` (市值),
+and within 持倉 the 市值 / 目標配置% formulas. On 2026-10-08 the owner deleted seven unread columns
+(未實現損益／報酬率／淨成本／淨報酬率／佔股票%／佔總資產%／偏離) by hand, which moved 區域／類型／
+目標配置% from O/P/Q to J/K/L; 市值 stayed at I. Change the layout in `AssetSchema.TABS` and
+`Position.rebuild` together, then run the suite — `T47` derives every letter from the header and
+fails if a reference points at the wrong column.
 
 Two calculated tabs were removed on 2026-10-08 as part of shrinking the spreadsheet:
 

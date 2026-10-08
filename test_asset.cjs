@@ -523,11 +523,7 @@ check('持倉 11 檔（8 檔在持 + 3 檔已出清但領過息）', reb.positio
   check('8 檔的股數／成本／累計股利都與舊表一致', allOk, detail.join(','));
 
   const p56 = pos.find(x => x['代號'] === H0.code) || {};
-  const netCost = H0.cost - H0.dividend;
   check('市值 = 股數 × 市價', near(num(p56['市值']), H0.shares * H0.price, 1), money(num(p56['市值'])));
-  check('淨成本 = 總成本 − 累計股利', near(num(p56['淨成本']), netCost, 1), money(num(p56['淨成本'])));
-  check('淨報酬率 = (市值 − 淨成本) / 淨成本',
-    near(num(p56['淨報酬率']), (H0.shares * H0.price - netCost) / netCost, 1e-3), num(p56['淨報酬率']));
 
   const stockValue = pos.reduce((s, x) => s + num(x['市值']), 0);
   check('股票市值合計 = 舊表面板 B3', near(stockValue, EXP.stockValue, 2), money(stockValue));
@@ -1174,8 +1170,6 @@ console.log('\nT20  目標配置% 跟著「標的」走');
   const posSheet  = target.getSheetByName('持倉');
   const instSheet = target.getSheetByName('標的');
   const TARGET_COL = AssetSchema.expected('持倉').indexOf('目標配置%') + 1;
-  const DEV_COL    = AssetSchema.expected('持倉').indexOf('偏離') + 1;
-  const SHARE_COL  = AssetSchema.expected('持倉').indexOf('佔股票%') + 1;
 
   const at   = AssetSchema.readObjects(posSheet).findIndex(x => num(x['股數']) > 0) + 2;
   const code = String(posSheet.getRange(at, 1).getValue());
@@ -1197,12 +1191,6 @@ console.log('\nT20  目標配置% 跟著「標的」走');
   const row = AssetSchema.readObjects(posSheet)[at - 2];
   check('改「標的」之後不必重算，持倉就跟著變',
     num(row['目標配置%']) === 0.125, row['目標配置%']);
-  // ⚠️ 減的是佔股票%，不是佔總資產%。目標填在「標的」，那張表裡全是股票，
-  //    所以目標的 100% 是股票這一塊的 100%；拿總資產去比，每一檔都固定低配。
-  check('偏離 = 佔股票% − 目標配置%（不是佔總資產%）',
-    Math.abs(num(posSheet.getRange(at, DEV_COL).getValue()) -
-             (num(posSheet.getRange(at, SHARE_COL).getValue()) - 0.125)) < 1e-9);
-
   // 空白仍然是 0，不是 #N/A —— 配置那邊用 target > 0 判斷「有沒有設目標」
   instSheet.getRange(instAt, instCol).setValue('');
   check('「標的」留空時讀到 0，不是錯誤值',
@@ -1550,8 +1538,6 @@ console.log('\nT24  主檔的修改');
   check('比例寫進「標的」', near(num(instOf(code)['目標配置%']), 0.15, 1e-9), instOf(code)['目標配置%']);
   check('「持倉」的目標配置% 跟著（指回去的公式，不是抄過來的死值）',
     near(num(posOf(code)['目標配置%']), 0.15, 1e-9), posOf(code)['目標配置%']);
-  check('偏離 = 佔股票% − 目標配置%',
-    near(num(posOf(code)['偏離']), num(posOf(code)['佔股票%']) - 0.15, 1e-6), posOf(code)['偏離']);
 
   check('未知代號被擋下並列出現有的',
     /沒有 XXXX/.test(AssetTools.updateInstrument({ symbol: 'XXXX', name: 'x' })), '');
@@ -2579,6 +2565,37 @@ console.log('\nT46  「已寫入」宣稱的偵測');
   check('多行：豁免的那行之外有宣稱，照樣抓到',
     W('第 97 列  股利（已作廢）\n好的，已幫你校正好了。') === true);
   check('單純查詢回答不算宣稱', W('國泰證券戶目前餘額 2,346,207。') === false);
+}
+
+// ─── T47  其他表引用「持倉」的欄位要跟著標題列走 ────────────────────
+// 2026-10-08 主人直接在試算表刪掉持倉 7 欄，O/P/Q 變成 J/K/L。寫死欄位字母的公式
+// 不會報錯，只會靜默讀到隔壁欄。這裡用標題名稱反查字母，確認引用點都對得上。
+console.log('\nT47  「持倉」欄位的跨表引用');
+{
+  Position.rebuild();
+  const H = AssetSchema.expected('持倉');
+  const L = (name) => AssetSchema.colLetter(H.indexOf(name) + 1);
+  const pos = target.getSheetByName('持倉');
+  const metric = target.getSheetByName('指標');
+
+  check('「持倉」實際標題列與 TABS 一致', AssetSchema.checkHeader(pos, H).ok === true);
+
+  const rows = AssetSchema.readObjects(metric);
+  const rawOf = (k) => {
+    const i = rows.findIndex(x => String(x['指標']) === k);
+    return i < 0 ? '' : String(metric.raw(i + 2, 2));
+  };
+  ['總資產', '股票市值'].forEach(k => {
+    check('指標「' + k + '」加總的是持倉的「市值」欄（' + L('市值') + '）',
+      rawOf(k).indexOf('持倉!$' + L('市值') + '$2:$' + L('市值')) >= 0, rawOf(k));
+  });
+
+  const at = AssetSchema.readObjects(pos).findIndex(x => num(x['股數']) > 0) + 2;
+  const mv = String(pos.raw(at, H.indexOf('市值') + 1));
+  check('市值公式用的是「股數」×「市價」欄',
+    mv.indexOf('$' + L('股數') + at) >= 0 && mv.indexOf('$' + L('市價') + at) >= 0, mv);
+  check('目標配置% 在 ' + L('目標配置%') + ' 欄，而且是指回「標的」的公式',
+    /VLOOKUP\(\$A\d+,標的!/.test(String(pos.raw(at, H.indexOf('目標配置%') + 1))));
 }
 
 //   REALIZED_CSV=path/to.csv node test_asset.cjs
