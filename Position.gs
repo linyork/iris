@@ -458,7 +458,6 @@ var Position = (() => {
     var stockCost     = positions.reduce((a, x) => a + (_num(x['股數']) > 0 ? _num(x['總成本']) : 0), 0);
     var cashValue     = sum(cash, '台幣值');
     var physicalValue = sum(physical, '市值');
-    var physicalCost  = sum(physical, '成本');
     var totalDividend = sum(positions, '累計股利');
     var totalRealized = sum(positions, '已實現損益');
     var totalAssets   = stockValue + cashValue + physicalValue;
@@ -621,9 +620,6 @@ var Position = (() => {
         yieldNote + ' ÷ 現在市值'],
       ['成本殖利率', stockCost > 0 ? _round(ttmDividend / stockCost, 6) : '',
         yieldNote + ' ÷ 投入成本'],
-      ['—— 實體資產 ——', '', ''],
-      ['實體資產成本', _round(physicalCost),  ''],
-      ['實體資產損益', _round(physicalValue - physicalCost), ''],
       ['—— 配置 ——', '', ''],
       ['股票佔比',     _round(pct(stockValue, totalAssets), 4), ''],
       ['現金佔比',     _round(pct(cashValue, totalAssets), 4), ''],
@@ -674,7 +670,7 @@ var Position = (() => {
     var pushGroup = (dim, label, cost, value, target, base) => {
       var actual = pct(value, base);
       allocRows.push([
-        dim, label, _round(cost), _round(value), _round(actual, 4),
+        dim, label, cost === null ? '' : _round(cost), _round(value), _round(actual, 4),
         target === null ? '' : _round(target, 4),
         target === null ? '' : _round(actual - target, 4),
         target === null ? '' : _round((actual - target) * base)
@@ -683,7 +679,8 @@ var Position = (() => {
 
     pushGroup('大類', '股票', stockCost, stockValue, null, totalAssets);
     pushGroup('大類', '現金', cashValue, cashValue, null, totalAssets);
-    pushGroup('大類', '實體', physicalCost, physicalValue, null, totalAssets);
+    // 實體資產不記成本（2026-10-08 起不追蹤它的損益），成本欄留空而不是寫 0
+    pushGroup('大類', '實體', null, physicalValue, null, totalAssets);
 
     [['區域', '區域'], ['類型', '類型']].forEach(([dim, key]) => {
       var groups = {};

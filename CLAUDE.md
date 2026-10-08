@@ -860,7 +860,13 @@ the **live** header row. On 2026-10-08 the owner deleted unread columns by hand 
 `現金` is written with `AssetSchema.writeBlockByName`: values and in-row formula letters are
 placed by column name, and the header only has to *contain* every `TABS` column — an extra or
 reordered column doesn't break it. That is what let the code ship before the owner deleted 類型
-(`T49` rebuilds with and without it). `持倉` is still positional (`writeBlock`), so a layout change
+(`T49` rebuilds with and without it).
+
+`實體資產` is cut to 名稱／數量／現價／市值 (2026-10-08). 單位成本 had never been filled in, so
+指標's 「實體資產損益」 always equalled the whole market value — a figure that looked real and wasn't.
+The owner doesn't track P&L on it for now, so cost, P&L and the unread columns went together;
+`配置`'s 大類／實體 row writes its 成本 as blank, not 0 (`T50`). Everything reading this tab goes
+by column name, and rebuild never rewrites it, so columns can be deleted by hand in any order. `持倉` is still positional (`writeBlock`), so a layout change
 there means editing `AssetSchema.TABS` and `Position.rebuild` together; `T47` checks the letters.
 
 Two calculated tabs were removed on 2026-10-08 as part of shrinking the spreadsheet:

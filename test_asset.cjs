@@ -918,9 +918,6 @@ console.log('\nT13  Snapshot 改讀新表');
   const d = Snapshot._dividends(ss);
   check('_dividends 讀得到交易表裡的股利', d && d.thisYear.count > 0, d && d.thisYear.count);
 
-  const g = Snapshot._gold(ss);
-  check('_gold 讀實體資產', g && g.totalWeight > 0 && g.pieces > 0, JSON.stringify(g));
-
   const series = Snapshot.totalSeries(365, ss);
   check('totalSeries 讀每日快照的合計列', series.length > 0 && series[0].date < series[series.length - 1].date,
     series.length);
@@ -2623,6 +2620,21 @@ console.log('\nT49  現金依欄名寫入');
   check('刪掉「類型」之後重算照樣成功', r2.ok === true);
   check('指標的現金加總改指 G 欄', /現金!\$G\$2:\$G/.test(cashSumFormula()), cashSumFormula());
   check('總資產仍然不變', near(total(), base, 1), total() + ' vs ' + base);
+}
+
+// ─── T50  實體資產不追蹤損益 ────────────────────────────────────────
+// 2026-10-08：單位成本從來沒填過，「實體資產損益」因此一直等於整個市值 —— 一個看起來
+// 像真的、其實是誤導的數字。主人暫時不需要這個損益，所以連欄位帶指標一起拿掉。
+console.log('\nT50  實體資產不追蹤損益');
+{
+  Position.rebuild();
+  const metric = AssetSchema.readObjects(target.getSheetByName('指標')).map(x => String(x['指標']));
+  check('指標不再有實體資產成本／損益',
+    metric.indexOf('實體資產成本') < 0 && metric.indexOf('實體資產損益') < 0, metric.join(','));
+  check('指標仍有實體資產市值與佔比', metric.indexOf('實體資產') >= 0 && metric.indexOf('實體佔比') >= 0);
+  const phys = AssetSchema.readObjects(target.getSheetByName('配置')).find(x => x['維度'] === '大類' && x['分組'] === '實體') || {};
+  check('配置的「大類／實體」成本是空白，不是 0', phys['成本'] === '', JSON.stringify(phys['成本']));
+  check('配置的「大類／實體」市值照算', num(phys['市值']) > 0, phys['市值']);
 }
 
 //   REALIZED_CSV=path/to.csv node test_asset.cjs

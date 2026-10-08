@@ -249,15 +249,12 @@ var AssetMigrate = (() => {
     var physRows = legacy.physical.map((x, n) => {
       var r = n + 2;
       return [
-        x.name, x.category, x.qty, '公克', '', '', 'GOOGLEFINANCE:XAUTWD',
+        x.name, x.qty,
         goldPriceFormula,
-        '=IF($C' + r + '="",0,$C' + r + '*N($H' + r + '))',
-        '=IF($E' + r + '="",0,$C' + r + '*$E' + r + ')',
-        '=$I' + r + '-$J' + r,
-        '⚠️ 單位成本未知，請補上買入均價才能算損益'
+        '=IF($B' + r + '="",0,$B' + r + '*N($C' + r + '))'
       ];
     });
-    AssetSchema.writeBlock(ss.getSheetByName('實體資產'), physRows, 12);
+    AssetSchema.writeBlock(ss.getSheetByName('實體資產'), physRows, 4);
     counts['實體資產'] = physRows.length;
 
     // ── 交易：期初建倉 + 歷史股利 ──

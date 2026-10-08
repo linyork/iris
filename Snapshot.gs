@@ -424,26 +424,6 @@ var Snapshot = (() => {
     }
   };
 
-  /**
-   * 實體資產（黃金）：總重量、件數、市值
-   */
-  snap._gold = (ss) => {
-    var sheet = ss.getSheetByName('實體資產');
-    if (!sheet) return null;
-    try {
-      var rows = AssetSchema.readObjects(sheet).filter(r => _str(r['類別']) === '黃金');
-      if (rows.length === 0) return null;
-      return {
-        totalWeight: _round(rows.reduce((s, r) => s + _num(r['數量']), 0), 2),
-        pieces: rows.length,
-        unit: _str(rows[0]['單位']) || '公克',
-        marketValue: _round(rows.reduce((s, r) => s + _num(r['市值']), 0))
-      };
-    } catch (e) {
-      return null;
-    }
-  };
-
 
   // ─── Dashboard 專用 ───────────────────────────────────────────
   //
