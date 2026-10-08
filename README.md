@@ -47,7 +47,7 @@ Iris 是「給單一管理員使用」的專屬資產助理，特色：
 
 - **單人服務**：以 `ADMIN_STRING` 比對 userId，非授權使用者靜默忽略（不回覆、不寫歷史、不耗 LLM 配額）。Telegram ID 以 `TELEGRAM:` 前綴與 LINE ID 區分。
 - **零外部資料庫**：全部狀態（持倉、現金、配置、對話歷史、快照）都在同一份 Google Sheet。
-- **AI Provider 熱切換**：在 Sheet `env!B3` 寫 `GEMINI` 或 `NVIDIA` 即可即時切換後端，無需重新部署。
+- **AI Provider 熱切換**：Script Property `AI_PROVIDER` 填 `GEMINI` 或 `NVIDIA` 即可切換後端（沒設＝NVIDIA），無需重新部署。
 
 ---
 
@@ -130,7 +130,7 @@ Telegram Bot API ───┤        │
 | `Prompt.gs` | `SYSTEM_PROMPT`（對話人設）、`systemContext()`（四個 LLM 迴圈共用的開頭與日期規則） |
 | `Facts.gs` | 程式算好的關鍵數字，注入每一則對話 prompt 要求原樣引用。**刻意只收不用打外部 API 的數字**（讀 指標／現金／每日快照），逐檔持倉留給 `getHoldings` —— 這個區塊每則訊息都要組一次 |
 | `Tools.gs` | 工具定義與分派 |
-| `AIServiceFactory.gs` | 依 `env!B3` 路由 Gemini / NVIDIA，含備援模型 fallback |
+| `AIServiceFactory.gs` | 依 `Config.AI_PROVIDER` 路由 Gemini / NVIDIA，含備援模型 fallback |
 | `GeminiService.gs` | Gemini API 呼叫（含 function calling） |
 | `NvidiaService.gs` | NVIDIA NIM OpenAI 相容 API 呼叫，含 3 次退避重試 |
 | `AIAdapter.gs` | Gemini ⇄ OpenAI 格式相互轉換、分離 `reasoning_content` |
@@ -156,7 +156,7 @@ Telegram Bot API ───┤        │
 | `AssetTools.gs` | 新表**輸入層**的用例層：`recordTrade` 驗證後 append 一列並重算；`voidTrade` 作廢記錯的列；`updateInstrument` / `updateAccount` 改主檔；`listTrades` / `listAccounts` / `listInstruments` 讀主檔（計算層的讀取在 `Snapshot`） |
 | `AssetImport.gs` | 券商 CSV 匯入（Telegram 傳檔進來）。認得兩種格式：**證券對帳單**（有「委託書號」，買賣都記，首選）與**已實現損益**（有「賣出日期」，只記賣出）。兩種格式互相去重 |
 | `DevTools.gs` | **所有在 GAS 編輯器手動執行的進入點**：建表、重算、dry run、診斷。編輯器的函式下拉選單不顯示檔案來源，所以集中在這裡；trigger 與 web 進入點因為綁定名稱，仍留在各自的檔案。遷移相關的進入點已移除 —— 遷移做完了，留在選單裡只會被誤觸 |
-| `Config.gs` | 集中讀取 Script Properties 與 `env!B2/B3`，含 cache |
+| `Config.gs` | 集中讀取 Script Properties 與系統常數 |
 
 ---
 
@@ -164,7 +164,6 @@ Telegram Bot API ───┤        │
 
 | 工作表 | 用途 |
 |---|---|
-| `env` | `B2`：DEBUG_MODE（true/false）<br>`B3`：AI_PROVIDER（`GEMINI` / `NVIDIA`） |
 | `consolelog` | 執行期記錄；超過 10 天自動清除 |
 | `chat` | 對話歷史（每 userId），超過 30 天自動清除 |
 | `eval_set` | 評估題組與每題的最新判定（PASS / FAIL 與未通過的性質）。**不存在時自己建立並寫入預設題組** |
@@ -601,15 +600,12 @@ expected_hash     = hex(HMAC_SHA256(訊息 = data_check_string, 金鑰 = secret_
 | `TELEGRAM_API_KEY` | ⚙️ | Telegram bot token，來自 @BotFather（用 Telegram 時必填） |
 | `DASHBOARD_URL` | ⚙️ | 儀表板 `/dev` 網址（`/dashboard` 指令回傳用） |
 | `DIAG_KEY` | ⚙️ | 唯讀診斷入口 `/exec?view=diag` 的金鑰；沒設或短於 16 字＝關閉 |
+| `AI_PROVIDER` | ⚙️ | `GEMINI` 或 `NVIDIA`；沒設＝NVIDIA。改完下一次執行就生效 |
+| `DEBUG_MODE` | ⚙️ | 填 `false` 就不把每次 LLM 請求／回應寫進 consolelog；沒設＝開 |
 | `GEMINI_API_KEY` | ⚙️ | Gemini API key（用 Gemini 時必填） |
 | `NVIDIA_API_KEY` | ⚙️ | NVIDIA NIM API key（用 NVIDIA 時必填） |
 | `GOOGLE_SEARCH_KEY` | ⚙️ | Google Custom Search API key（用 `searchWeb` 時必填） |
 | `GOOGLE_SEARCH_CX` | ⚙️ | Custom Search Engine ID |
-
-### Sheet 內可調參數
-
-- `env!B2`：DEBUG_MODE（true 時 Logger 寫更詳細）
-- `env!B3`：AI_PROVIDER（`GEMINI` 或 `NVIDIA`），切換後須執行 `Config.clearAllCaches()` 或等下次冷啟動
 
 ### Config.gs 內常數
 

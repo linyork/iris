@@ -26,8 +26,8 @@ There is a second, read-only face on the same script: a web dashboard served by 
 See [Web Dashboard](#web-dashboard).
 
 **Everything lives in one spreadsheet, named by one value.** The Script Property `SHEET_ID` is the
-single source — asset tabs (標的/交易/持倉/…) *and* system tabs (chat, consolelog,
-env). `AssetSchema.SHEET_ID` is a getter that returns `Config.SHEET_ID`, not a second constant, so
+single source — asset tabs (標的/交易/持倉/…) *and* system tabs (chat,
+consolelog). `AssetSchema.SHEET_ID` is a getter that returns `Config.SHEET_ID`, not a second constant, so
 repointing the property moves the whole bot. `AssetSchema.open()` throws a named error if the
 property is unset rather than letting `openById(null)` produce GAS's unreadable message.
 
@@ -38,8 +38,7 @@ only a test fixture (see [Legacy sheet](#legacy-sheet)). Its id stays hardcoded 
 Two ways in, both landing on the same property:
 
 - **Asset layer** — `AssetSchema.open()` / `Snapshot._open()`. Guarded, and the one to use for new code.
-- **System layer** — `GoogleSheet`, `dailyCleanUp`, and
-  `Config`'s own `env!B2`/`B3` reads call `SpreadsheetApp.openById(Config.SHEET_ID)` directly. No
+- **System layer** — `GoogleSheet` and `dailyCleanUp` call `SpreadsheetApp.openById(Config.SHEET_ID)` directly. No
   guard, but each already wraps its own try/catch and degrades to an empty result.
 
 ⚠️ Never write a spreadsheet id as a literal. That is precisely how the asset layer and the memory
@@ -87,7 +86,7 @@ renaming or relocating them fails silently:
 ### Request Flow
 1. `Main.gs` — `doPost()` receives the LINE **or** Telegram webhook, normalizes it into a single LINE-shaped event object, deduplicates via `CacheService` (6h TTL), silently drops non-master events, calls `ChatBot.reply()`
 2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 5 turns; the cap is not the time guard — each turn checks `Utils.execElapsedMs()` and stops opening new ones past 200s). Injects the `Facts` block into the system context. Caches **successful** tool results within a turn (a failure is not cached — an over-eager cache would pin one flaky TWSE call as this turn's verdict, when the model's retry might well have worked), strips Markdown before returning, and blocks a 「已記錄」 claim that the ledger does not corroborate.
-3. `AIServiceFactory.gs` — Routes to `GeminiService` or `NvidiaService` based on `env!B3`. NVIDIA path goes through `AIAdapter` (Gemini ↔ OpenAI format conversion) so the rest of the codebase always speaks Gemini format.
+3. `AIServiceFactory.gs` — Routes to `GeminiService` or `NvidiaService` based on `Config.AI_PROVIDER`. NVIDIA path goes through `AIAdapter` (Gemini ↔ OpenAI format conversion) so the rest of the codebase always speaks Gemini format.
 4. `Tools.gs` — Defines and executes **16** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. `execute()` returns an envelope, `{ok, status, text}` — `status` is `ok` / `invalid_args` / `error`, and `ChatBot` sends it to the model alongside the text so a failure cannot be read as data (see [工具回傳要分得出成功與失敗](#工具回傳要分得出成功與失敗)). Grouped by which layer they touch:
    - **Computed-layer reads** (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, answering "what do I have now".
    - **Input-layer reads** (`listTrades`, `listAccounts`, `listInstruments`) — the 交易/帳戶/標的 tabs themselves, answering "how did this get recorded, which row do I change". They live in `AssetTools.gs`, not `Snapshot`, because each one is the precondition for a write: `listTrades` hands out the row number `voidTrade` needs, `listAccounts` is the only surface exposing **原幣** balances (`Snapshot._cash` gives TWD-converted only), `listInstruments` names the instruments whose 區域/類型 are still blank.
@@ -97,7 +96,7 @@ renaming or relocating them fails silently:
 5. `GoogleSheet.gs` — System tabs (chat / log) plus the formatting layer for asset queries, which read through `Snapshot`. Single spreadsheet instance cached per execution.
 
 ### AI Provider Switching
-Switch provider by setting `env!B3` in the Google Sheet to `GEMINI` or `NVIDIA`. Model tiers (`LITE`/`FAST`/`SMART`) are defined in `Config.gs` for both providers. Current NVIDIA model: `moonshotai/kimi-k3` for all tiers (native function calling, clean thinking on/off via `chat_template_kwargs.thinking`, no official temperature/top_p guidance so those are left unset). ⚠️ `deepseek-ai/deepseek-v4-flash-0731` (the previous default) **disappeared from `/v1/models` on 2026-09-24 — delisted, not overloaded** — see [下架的症狀是「講話變笨」](#下架的症狀是講話變笨).
+Switch provider with the Script Property `AI_PROVIDER` (`GEMINI` / `NVIDIA`). ⚠️ **Unset means NVIDIA**, not Gemini — that is what was live on 2026-10-08 when the setting moved out of the old `env` tab, and defaulting to anything else would silently swap the model before the property was filled in (`T45`). Takes effect on the next execution, no redeploy. Model tiers (`LITE`/`FAST`/`SMART`) are defined in `Config.gs` for both providers. Current NVIDIA model: `moonshotai/kimi-k3` for all tiers (native function calling, clean thinking on/off via `chat_template_kwargs.thinking`, no official temperature/top_p guidance so those are left unset). ⚠️ `deepseek-ai/deepseek-v4-flash-0731` (the previous default) **disappeared from `/v1/models` on 2026-09-24 — delisted, not overloaded** — see [下架的症狀是「講話變笨」](#下架的症狀是講話變笨).
 
 **Thinking is controllable on this model, and the tiers use it as the fast/quality dial:**
 
@@ -343,7 +342,6 @@ System tabs (this file's other sections cover the asset tabs, which are defined 
 
 | Tab | Purpose |
 |-----|---------|
-| `env` | B2: DEBUG_MODE, B3: AI_PROVIDER |
 | `consolelog` | Runtime logs written by `Logger.gs`, purged after 10 days |
 | `chat` | Conversation history per userId, purged after 30 days |
 | `metrics` | Daily rollup of `consolelog`, written by `Metrics`. Self-creating. |
@@ -745,6 +743,8 @@ the no-Markdown rule. That signal was traded for one consistent version of the t
   每則對話與三份報告的知識注入、`dailyCleanUp` 的過期清理。拔之前看過即時資料：短期記憶是空的，
   knowledge 6 筆全是投資策略／偏好／[決策] —— 正是範圍外的東西。現在 Iris 只看得到試算表的數字
   與 30 天內的對話；說「記住 X」它不會記。
+- **`env` 分頁**：兩格設定（`AI_PROVIDER`、`DEBUG_MODE`）搬進 Script Properties，順帶省掉
+  每次執行為了讀這兩格多開一次試算表。沒設時的預設等於搬家當天的線上值，所以不補設也不會變。
 
 ### 工具回傳要分得出成功與失敗
 
@@ -1098,6 +1098,8 @@ All secrets are stored in GAS **Script Properties** (not in code):
 | `GEMINI_API_KEY` | Gemini API key (optional if using NVIDIA) |
 | `NVIDIA_API_KEY` | NVIDIA NIM API key (optional if using Gemini) |
 | `DIAG_KEY` | Key for the read-only diagnostics endpoint (optional — unset or under 16 chars disables it) |
+| `AI_PROVIDER` | `GEMINI` or `NVIDIA` (optional — unset means NVIDIA) |
+| `DEBUG_MODE` | `false` stops `Logger.ai` writing each LLM request/response to consolelog (optional — unset means on) |
 
 ## First-Time Setup
 

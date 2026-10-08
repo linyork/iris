@@ -27,7 +27,7 @@ function listTriggers() {
  * - 列印環境變數狀態
  */
 function setup() {
-  var requiredSheets = ['env', 'consolelog', 'chat'];
+  var requiredSheets = ['consolelog', 'chat'];
   var ss = SpreadsheetApp.openById(Config.SHEET_ID);
 
   requiredSheets.forEach(name => {
@@ -46,8 +46,8 @@ function setup() {
   console.log('ADMIN_STRING:        ' + (Config.ADMIN_STRING        ? '已設定' : '❌ 未設定'));
   console.log('GEMINI_API_KEY:      ' + (Config.GEMINI_API_KEY      ? '已設定' : '（選用）'));
   console.log('NVIDIA_API_KEY:      ' + (Config.NVIDIA_API_KEY      ? '已設定' : '（選用）'));
-  console.log('AI_PROVIDER:         ' + Config.AI_PROVIDER + '  ← env!B3 控制（GEMINI 或 NVIDIA）');
-  console.log('DEBUG_MODE:          ' + Config.DEBUG_MODE + '  ← env!B2 控制');
+  console.log('AI_PROVIDER:         ' + Config.AI_PROVIDER + '  ← Script Property AI_PROVIDER（GEMINI／NVIDIA，沒設＝NVIDIA）');
+  console.log('DEBUG_MODE:          ' + Config.DEBUG_MODE + '  ← Script Property DEBUG_MODE（只有 false 才關）');
 }
 
 /** 依 Cron.SCHEDULE 重建所有 Trigger。⚠️ 會先清掉所有既有的，含手動建的 */
@@ -697,14 +697,14 @@ function verifyFallbackChain() {
  * NVIDIA_MODELS 之後先跑這支，比等 ChatBot 真的接到訊息才發現分支寫錯划算。
  */
 function verifyPrimaryModel() {
-  console.log('主模型 = ' + Config.NVIDIA_DEFAULT_MODEL + '（env!B3 需為 NVIDIA 才會真的走這條路）\n');
+  console.log('主模型 = ' + Config.NVIDIA_DEFAULT_MODEL + '（AI_PROVIDER 需為 NVIDIA 才會真的走這條路）\n');
 
   console.log('【1】FAST tier（關思考，Gemini 格式進出）');
   var r1 = AIServiceFactory.callAPI(
     [{ role: 'user', parts: [{ text: '用一句話說明什麼是 ETF。' }] }],
     { model: 'FAST', caller: 'verifyPrimaryModel' });
   if (!r1) {
-    console.log('  ❌ 呼叫失敗（若 env!B3 不是 NVIDIA，這裡會走 Gemini，不代表新模型有問題）');
+    console.log('  ❌ 呼叫失敗（若 AI_PROVIDER 不是 NVIDIA，這裡會走 Gemini，不代表新模型有問題）');
   } else {
     var text1 = (r1.candidates[0].content.parts || []).filter(p => p.text).map(p => p.text).join('');
     console.log('  ✅ ' + text1.slice(0, 150));

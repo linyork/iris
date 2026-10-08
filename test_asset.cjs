@@ -445,7 +445,7 @@ console.log('\nT3  建表');
 const target = SpreadsheetApp.openById(AssetSchema.SHEET_ID);
 target.sheets.push(new Sheet('工作表1'));          // 模擬新試算表的預設分頁
 let r3 = AssetSchema.build();
-check('建立 12 個分頁', r3.created.length === 12, r3.created.length);
+check('建立 11 個分頁', r3.created.length === 11, r3.created.length);
 check('預設的「工作表1」被移除', !target.getSheetByName('工作表1'));
 check('交易表標題正確', target.getSheetByName('交易').raw(1, 2) === '動作', target.getSheetByName('交易').raw(1, 2));
 // 公式只填到有資料的最後一列。空表就該是空的 —— 預灌公式會讓 getLastRow()
@@ -2648,6 +2648,34 @@ console.log('\nT44  唯讀診斷入口');
 
   target.sheets = target.sheets.filter(x => x.getName() !== 'consolelog');
   delete global.Config.DIAG_KEY;
+}
+
+// ─── T45  AI_PROVIDER / DEBUG_MODE 從 Script Properties 讀 ───────────
+// 2026-10-08 從 env 分頁搬過來。要釘住的是「沒設」時的預設：當天線上跑的是 NVIDIA，
+// 預設成 GEMINI 的話，屬性還沒補設之前整個模型就被靜默換掉。
+console.log('\nT45  AI_PROVIDER / DEBUG_MODE');
+{
+  const mockConfig = global.Config;
+  const realPS = global.PropertiesService;
+  const props = {};
+  global.PropertiesService = { getScriptProperties: () => ({ getProperty: k => props[k] }) };
+  load('Config.gs');
+  const C = global.Config;
+
+  check('AI_PROVIDER 沒設 → NVIDIA', C.AI_PROVIDER === 'NVIDIA', C.AI_PROVIDER);
+  props.AI_PROVIDER = ' gemini ';
+  check('AI_PROVIDER 不分大小寫、容忍空白', C.AI_PROVIDER === 'GEMINI', C.AI_PROVIDER);
+  props.AI_PROVIDER = 'OPENAI';
+  check('不認得的值 → NVIDIA（不會掉到沒有金鑰的 provider）', C.AI_PROVIDER === 'NVIDIA', C.AI_PROVIDER);
+
+  check('DEBUG_MODE 沒設 → 開', C.DEBUG_MODE === true);
+  props.DEBUG_MODE = 'FALSE';
+  check('DEBUG_MODE 明寫 false 才關', C.DEBUG_MODE === false);
+  props.DEBUG_MODE = 'TRUE';
+  check('DEBUG_MODE 寫 true → 開', C.DEBUG_MODE === true);
+
+  global.Config = mockConfig;
+  global.PropertiesService = realPS;
 }
 
 //   REALIZED_CSV=path/to.csv node test_asset.cjs

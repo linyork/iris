@@ -3,7 +3,6 @@
  * @description Google Sheets 資料存取層
  *
  * 預期試算表結構：
- *   env              — B2: DEBUG_MODE (true/false)、B3: AI_PROVIDER
  *   consolelog       — [timestamp, level, tag, message, details]
  *   chat             — [userId, role, message, timestamp]
  *

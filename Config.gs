@@ -15,11 +15,10 @@ var Config = (() => {
     SEARCH_KEY:   'GOOGLE_SEARCH_KEY',
     SEARCH_CX:    'GOOGLE_SEARCH_CX',
     DASHBOARD_URL:'DASHBOARD_URL',
-    DIAG_KEY:     'DIAG_KEY'
+    DIAG_KEY:     'DIAG_KEY',
+    AI_PROVIDER:  'AI_PROVIDER',
+    DEBUG_MODE:   'DEBUG_MODE'
   };
-
-  var _debugModeCache    = null;
-  var _aiProviderCache   = null;
 
   return {
     // ─── LINE API ─────────────────────────────────────────────
@@ -37,7 +36,7 @@ var Config = (() => {
     // ─── Google Sheets ────────────────────────────────────────
     //
     // 整個專案**只有這一個**試算表 ID。資產分頁（標的／交易／持倉／…）與系統分頁
-    // （chat／consolelog／env）都在同一張表裡，
+    // （chat／consolelog）都在同一張表裡，
     // `AssetSchema.SHEET_ID` 也是指回這裡的 getter，不是另一個寫死的值。
     // 換試算表只要改這個屬性一個地方。
     get SHEET_ID()     { return scriptProperties.getProperty(ENV_KEYS.SHEET_ID); },
@@ -52,18 +51,13 @@ var Config = (() => {
     // ─── 唯讀診斷入口的金鑰（見 Diag.gs）。沒設就是關閉 ─────────
     get DIAG_KEY() { return scriptProperties.getProperty(ENV_KEYS.DIAG_KEY); },
 
-    // ─── AI Provider 切換（env!B3：GEMINI 或 NVIDIA）────────
+    // ─── AI Provider 切換（Script Property AI_PROVIDER：GEMINI 或 NVIDIA）──
+    // 以前讀 env!B3，每次執行都要多開一次試算表（2026-10-08 搬過來，env 分頁刪除）。
+    // ⚠️ 沒設時預設 NVIDIA，不是 GEMINI：搬過來那天線上跑的就是 NVIDIA，
+    //    預設成別的會在主人補設屬性之前靜默換掉整個模型。
     get AI_PROVIDER() {
-      if (_aiProviderCache !== null) return _aiProviderCache;
-      try {
-        var sheet = SpreadsheetApp.openById(scriptProperties.getProperty(ENV_KEYS.SHEET_ID))
-                                  .getSheetByName('env');
-        var val = String(sheet.getRange('B3').getValue()).toUpperCase();
-        _aiProviderCache = (val === 'NVIDIA') ? 'NVIDIA' : 'GEMINI';
-      } catch (e) {
-        _aiProviderCache = 'GEMINI';
-      }
-      return _aiProviderCache;
+      var v = String(scriptProperties.getProperty(ENV_KEYS.AI_PROVIDER) || '').trim().toUpperCase();
+      return v === 'GEMINI' ? 'GEMINI' : 'NVIDIA';
     },
 
     // ─── Gemini ───────────────────────────────────────────────
@@ -139,21 +133,12 @@ var Config = (() => {
     TOOL_MAX_ITERATIONS: 5,
     ALERT_ETF_DROP:      0.03,  // 單檔 ETF 日跌幅超過此值觸發警報
 
-    // ─── Debug 模式（env!B2）──────────────────────────────────
+    // ─── Debug 模式（Script Property DEBUG_MODE）─────────────────
+    // 只控制 Logger.ai —— 要不要把每次 LLM 呼叫的請求／回應寫進 consolelog。
+    // 沒設就是開，與以前讀 env!B2 失敗時的預設一樣；只有明寫 false 才關。
     get DEBUG_MODE() {
-      if (_debugModeCache !== null) return _debugModeCache;
-      try {
-        var sheet = SpreadsheetApp.openById(scriptProperties.getProperty(ENV_KEYS.SHEET_ID))
-                                  .getSheetByName('env');
-        _debugModeCache = sheet.getRange('B2').getValue() === true;
-      } catch (e) {
-        _debugModeCache = true;
-      }
-      return _debugModeCache;
+      var v = String(scriptProperties.getProperty(ENV_KEYS.DEBUG_MODE) || '').trim().toLowerCase();
+      return v !== 'false';
     }
-
-    // 這裡以前有一支 clearAllCaches()，沒有任何呼叫端，也不會有 ——
-    // 上面兩個快取是模組層級變數，而 GAS 每次執行都重載全部 .gs，
-    // 它們在每一次新執行的起點本來就是 null。清它沒有可用的場合。
   };
 })();

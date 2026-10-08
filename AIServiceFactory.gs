@@ -3,12 +3,12 @@
  * @description AI 服務統一入口
  *
  * 業務層固定使用 Gemini 格式（contents / options.model = 'LITE'|'FAST'|'SMART'）。
- * Factory 依 env!B3 的 AI_PROVIDER 路由至 GeminiService 或 NvidiaService；
+ * Factory 依 Config.AI_PROVIDER（Script Property）路由至 GeminiService 或 NvidiaService；
  * 走 NVIDIA 時前後各做一次 AIAdapter 格式轉換，呼叫端完全無感。
  *
- * env!B3 值：
- *   GEMINI → 使用 Gemini API（預設）
- *   NVIDIA → 使用 NVIDIA NIM API
+ * AI_PROVIDER 值：
+ *   NVIDIA → 使用 NVIDIA NIM API（預設，沒設也是這個）
+ *   GEMINI → 使用 Gemini API
  */
 var AIServiceFactory = (() => {
     var factory = {};
@@ -18,7 +18,7 @@ var AIServiceFactory = (() => {
         try {
             options = options || {};
 
-            var provider  = (Config.AI_PROVIDER || 'GEMINI').toUpperCase();
+            var provider  = Config.AI_PROVIDER;
             var modelKey  = options.model || 'FAST';
             var models    = provider === 'NVIDIA' ? Config.NVIDIA_MODELS : Config.GEMINI_MODELS;
             var modelConfig = models && models[modelKey];
