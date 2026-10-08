@@ -44,7 +44,7 @@ var Position = (() => {
 
   /**
    * 市價公式：`IFERROR(GOOGLEFINANCE, IFERROR(TWSE STOCK_DAY_AVG, ""))`。
-   * 只有 TPE 市場有第二層，該端點只認上市代號。
+   * 市場一律是 TPE —— 主人只投資台股上市（2026-10-08 起寫死，「標的」的市場欄退役）。
    *
    * ⚠️ 正規表示式開頭的 `.*` 用來抓最後一筆。STOCK_DAY_AVG 回整個月、由舊到新，
    *    少了它會抓到月初的收盤價。RE2 沒有反向比對，貪婪前綴是唯一辦法。
@@ -57,9 +57,8 @@ var Position = (() => {
    *    代價是公式長度翻倍；目前選擇可讀性。總資產變 #VALUE! 時再加回來。
    * ⚠️ 本機測試只驗公式長相，無法求值（IMPORTDATA 需連外網）。
    */
-  var _priceFormula = (market, r) => {
-    var gf = 'GOOGLEFINANCE("' + market + ':"&$A' + r + ',"price")';
-    if (market !== 'TPE') return '=IFERROR(' + gf + ',"")';
+  var _priceFormula = (r) => {
+    var gf = 'GOOGLEFINANCE("TPE:"&$A' + r + ',"price")';
     var url = '"https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_AVG?date="' +
               '&TEXT(TODAY(),"yyyyMMdd")&"&stockNo="&$A' + r;
     var twse =
@@ -78,11 +77,10 @@ var Position = (() => {
    * ⚠️ 寫入的是死值不是公式，不會自我更正。可接受是因為每次 rebuild() 都會先用
    *    writeBlock 把公式整片重寫，下次重算會再給 GOOGLEFINANCE 一次機會。
    *    留空白更糟：$I 會歸零，總資產、佔比、每日快照全部跟著錯。
-   * ⚠️ MIS 端點只認上市（tse_），非 TPE 標的不送出。
    *
    * @returns {{filled: Array<{code, price}>, stillMissing: Array<string>}}
    */
-  p._fillMissingPrices = (ss, instByCode) => {
+  p._fillMissingPrices = (ss) => {
     var out = { filled: [], stillMissing: [] };
     if (typeof StockPrice === 'undefined' || typeof UrlFetchApp === 'undefined') return out;
     try {
@@ -100,8 +98,6 @@ var Position = (() => {
         var price  = row[7];
         if (!code || shares <= 0) return;
         if (price !== '' && price !== null && _num(price) > 0) return;
-        var market = _str((instByCode[code] || {})['市場']) || 'TPE';
-        if (market !== 'TPE') { out.stillMissing.push(code); return; }
         want.push({ code: code, row: i + 2 });
       });
       if (!want.length) return out;
@@ -304,7 +300,7 @@ var Position = (() => {
     options = options || {};
     var ss = AssetSchema.open();
 
-    var need = ['交易', '標的', '帳戶', '實體資產', '持倉', '現金', '配置', '指標'];
+    var need = ['交易', '帳戶', '實體資產', '持倉', '現金', '配置', '指標'];
     var missing = need.filter(n => !ss.getSheetByName(n));
     if (missing.length) {
       var msg = '缺少分頁：' + missing.join('、') + '，請先執行 setupAssetSheet()';
@@ -312,64 +308,63 @@ var Position = (() => {
       return { ok: false, reason: msg };
     }
 
-    var instSheet   = ss.getSheetByName('標的');
     // 作廢的列不進重放，也不進 XIRR 與「交易筆數」—— readTrades 預設就濾掉了
     var trades      = AssetSchema.readTrades(ss);
-    var instruments = AssetSchema.readObjects(instSheet);
     var accounts    = AssetSchema.readObjects(ss.getSheetByName('帳戶'));
 
     var replayed = p.replay(trades);
 
     // ── 持倉 ──────────────────────────────────────────────────
-    // A~G 由程式算；H 之後放公式，讓市價/市值跟著 GOOGLEFINANCE 即時變動。
-    var instByCode = {};
-    instruments.forEach(i => { instByCode[_str(i['代號'])] = i; });
-
-    // 目標配置% 指回「標的」而不是抄成死值：那一欄是人手維護的，抄過來的話
-    // 改完目標要等下一次 rebuild，偏離才會跟著動。
+    // A~G 由程式算；H、I 是公式，讓市價/市值跟著 GOOGLEFINANCE 即時變動。
     //
-    // 欄索引讀**活的標題列**，不是 TABS —— 公式住在試算表裡，就得對得上試算表
-    // 實際的欄序。寫死一個數字的話，在它左邊插一欄就會靜默抓到隔壁欄（現在那裡
-    // 是「類型」，文字被讀成 0），每一檔的目標都變 0 而且不報錯。
-    // 真的找不到這一欄才退回 TABS 的位置：VLOOKUP 會抓到空白讀成 0，
-    // 比組出 $A:$ 這種爛範圍讓整欄噴錯好。
-    var _targetIdx = AssetSchema.headerMap(instSheet)['目標配置%'];
-    if (_targetIdx === undefined || _targetIdx < 0) {
-      _targetIdx = AssetSchema.expected('標的').indexOf('目標配置%');
-      Logger.error('Position.rebuild', '「標的」找不到 目標配置% 欄，退回 TABS 的位置');
-    }
-    _targetIdx += 1;                                   // VLOOKUP 的欄索引是 1-based
-    var _targetRef = '標的!$A:$' + AssetSchema.colLetter(_targetIdx);
+    // ⚠️ 名稱／區域／類型／目標配置% 是**主人手填的**（2026-10-08「標的」分頁退役後
+    //    就住在這裡）。這張表每次重算都整張重寫，所以先依代號把這四欄讀出來、原樣寫回 ——
+    //    漏了這一步，主人填的東西每記一筆帳就被洗掉一次，而且不會報錯。
+    var KEEP = ['名稱', '區域', '類型', '目標配置%'];
+    var kept = {};
+    AssetSchema.readObjects(ss.getSheetByName('持倉')).forEach(x => {
+      var c = _str(x['代號']);
+      if (!c) return;
+      kept[c] = {};
+      KEEP.forEach(k => { kept[c][k] = x[k] === undefined ? '' : x[k]; });
+    });
 
-    var codes = Object.keys(replayed.positions)
-      .filter(c => {
-        var st = replayed.positions[c];
-        return st.shares > 0 || st.realized !== 0 || st.dividend !== 0;
-      })
-      .sort();
+    // 新代號的名稱：交易表裡最近一筆有寫的，再沒有就問 AssetSchema.nameFor（證交所簡稱）
+    var tradeName = {};
+    trades.forEach(t => { var c = _str(t['代號']); if (c && _str(t['名稱'])) tradeName[c] = _str(t['名稱']); });
+
+    // 持倉裡原本就有的代號一律保留（主人可能先建好一列等著買），即使交易裡還沒有它
+    var codeSet = {};
+    Object.keys(replayed.positions).forEach(c => {
+      var st = replayed.positions[c];
+      if (st.shares > 0 || st.realized !== 0 || st.dividend !== 0) codeSet[c] = true;
+    });
+    Object.keys(kept).forEach(c => { codeSet[c] = true; });
+    var codes = Object.keys(codeSet).sort();
 
     var posRows = codes.map((code, n) => {
-      var st  = replayed.positions[code];
-      var ins = instByCode[code] || {};
+      var st  = replayed.positions[code] || { shares: 0, cost: 0, dividend: 0, realized: 0 };
+      var k   = kept[code] || {};
       var r   = n + 2;                                  // 實際列號
-      var market = _str(ins['市場']) || 'TPE';
       var avg = st.shares > 0 ? st.cost / st.shares : 0;
+      var name = _str(k['名稱']) || tradeName[code] || AssetSchema.nameFor(ss, code);
+      var target = _str(k['目標配置%']) === '' ? '' : _num(k['目標配置%']);
 
       return [
         code,
-        _str(ins['名稱']),
+        name,
         _round(st.shares, 4),
         _round(st.cost, 2),
         _round(avg, 4),
         _round(st.dividend, 2),
         _round(st.realized, 2),
         // 市價：出清的標的不抓價，省 GOOGLEFINANCE 配額也避免 #N/A
-        st.shares > 0 ? _priceFormula(market, r) : '',
+        st.shares > 0 ? _priceFormula(r) : '',
         '=IF(OR($C' + r + '=0,$H' + r + '=""),0,$C' + r + '*$H' + r + ')',
-        _str(ins['區域']),
-        _str(ins['類型']),
+        _str(k['區域']),
+        _str(k['類型']),
         // 偏離不在這張表算 —— 看「配置」（分母是股票市值，見 _writeMetricsAndAllocation）
-        '=IFERROR(VLOOKUP($A' + r + ',' + _targetRef + ',' + _targetIdx + ',FALSE),0)'
+        target
       ];
     });
 
@@ -413,7 +408,7 @@ var Position = (() => {
 
     // 公式兩層都沒抓到價的，這裡用 GAS 自己的請求補上；補完再 flush 一次，
     // 下面的指標才讀得到更新後的市值
-    var priceFix = p._fillMissingPrices(ss, instByCode);
+    var priceFix = p._fillMissingPrices(ss);
 
     // ⚠️ 這一句一定要在 _writeMetricsAndAllocation 之前 —— 「指標」最上面的
     // 「⚠️ 待修正」列就是從 replayed.warnings 生出來的，寫完之後才 push 就只剩

@@ -445,7 +445,7 @@ console.log('\nT3  建表');
 const target = SpreadsheetApp.openById(AssetSchema.SHEET_ID);
 target.sheets.push(new Sheet('工作表1'));          // 模擬新試算表的預設分頁
 let r3 = AssetSchema.build();
-check('建立 11 個分頁', r3.created.length === 11, r3.created.length);
+check('建立 10 個分頁', r3.created.length === 10, r3.created.length);
 check('預設的「工作表1」被移除', !target.getSheetByName('工作表1'));
 check('交易表標題正確', target.getSheetByName('交易').raw(1, 2) === '動作', target.getSheetByName('交易').raw(1, 2));
 // 公式只填到有資料的最後一列。空表就該是空的 —— 預灌公式會讓 getLastRow()
@@ -458,6 +458,9 @@ check('重複執行不會重建（冪等）', r3.created.length === 0 && target.
 // ─── T4  遷移 ────────────────────────────────────────────────────
 console.log('\nT4  從舊表遷移');
 const mig = AssetMigrate.run();
+// 「標的」退役遷移（2026-10-08）：跟線上一樣，先重算長出持倉，再把標的的分類搬進持倉
+Position.rebuild();
+const retiredInst = AssetSchema.retireInstrumentsTab(target);
 check('標的 11 檔（8 在持 + 3 已出清）', mig.counts['標的'] === 11, mig.counts['標的']);
 check('帳戶 7 個（黃金不算帳戶）', mig.counts['帳戶'] === 7, mig.counts['帳戶']);
 check('實體資產 8 筆黃金', mig.counts['實體資產'] === 8, mig.counts['實體資產']);
@@ -483,7 +486,7 @@ check('每日快照 = 950 天 × 18 列', mig.counts['每日快照'] === 950 * 1
   check('期初單價 = 總成本/股數', near(s56['單價'] * H0.shares, H0.cost, 1), s56['單價'] * H0.shares);
   check('期初列的現金流 = 0（不動帳戶餘額）', near(num(s56['現金流']), 0, 1e-9), s56['現金流']);
   check('遷移列的帳戶留空', String(s56['帳戶']) === '', JSON.stringify(s56['帳戶']));
-  check('名稱由標的表 VLOOKUP 帶出', s56['名稱'] === '元大高股息', s56['名稱']);
+  check('名稱由標的遷移帶出（凍結成文字）', s56['名稱'] === '元大高股息', s56['名稱']);
 }
 {
   const snap = target.getSheetByName('每日快照');
@@ -781,14 +784,19 @@ console.log('\nT11  recordTrade 的驗證與寫入');
   check('只有一個證券戶時自動帶入帳戶', /國泰證券戶/.test(r1), r1);
   check('回覆帶回重算後的持倉與帳戶餘額', /均價/.test(r1) && /餘額/.test(r1), r1);
 
-  // 新標的自動登記，且代號必須是文字
-  const instBefore = AssetSchema.readObjects(instSheet).length;
+  // 新代號只有買進能帶進來；重算後持倉自己長出那一列（「標的」分頁已退役），代號必須是文字
+  const posRows = () => AssetSchema.readObjects(target.getSheetByName('持倉'));
+  const posBefore = posRows().length;
   const r2 = AssetTools.recordTrade({ action: '買進', symbol: '00929', shares: 500, price: 20 });
-  const inst = AssetSchema.readObjects(instSheet);
-  check('新標的自動加進標的表', inst.length === instBefore + 1, inst.length + ' vs ' + (instBefore + 1));
-  check('新標的的代號保留前導零',
-    inst.some(x => x['代號'] === '00929'), JSON.stringify(inst.map(x => x['代號']).slice(-2)));
-  check('回覆有說明是自動建立的', /自動/.test(r2), r2);
+  const p929 = posRows().find(x => x['代號'] === '00929');
+  check('新標的重算後出現在持倉', posRows().length === posBefore + 1 && !!p929,
+    posRows().length + ' vs ' + (posBefore + 1));
+  check('新標的的代號保留前導零', !!p929, JSON.stringify(posRows().map(x => x['代號']).slice(-2)));
+  check('新標的的區域／類型／目標配置% 留空等主人填',
+    !!p929 && p929['區域'] === '' && p929['類型'] === '' && p929['目標配置%'] === '', JSON.stringify(p929));
+  check('回覆提醒去持倉補分類', /新標的/.test(r2) && /持倉/.test(r2), r2);
+  check('沒持有過的代號不能直接記股利',
+    /持倉裡沒有/.test(AssetTools.recordTrade({ action: '股利', symbol: '9999', amount: 1 })), '');
 
   // 股利只是動作欄不同的一列交易，走同一條路才會觸發重算
   const divBefore = num((AssetSchema.readObjects(target.getSheetByName('持倉'))
@@ -1070,9 +1078,6 @@ console.log('\nT16  證券對帳單匯入');
 //   STATEMENT_CSV=path/to.csv node test_asset.cjs
 if (process.env.STATEMENT_CSV && fs.existsSync(process.env.STATEMENT_CSV)) {
   console.log('\n[對帳單解析預覽] ' + process.env.STATEMENT_CSV);
-  const inst = target.getSheetByName('標的');
-  inst.getRange(inst.getLastRow() + 1, 1, 1, 10).setValues([['009826', '貝萊德世界股票',
-    'TPE', 'TWD', 'GOOGLEFINANCE', '全球', '指', '', '持有中', '預覽用']]);
   const st = AssetImport.parseStatement(fs.readFileSync(process.env.STATEMENT_CSV, 'utf8'));
   console.log('  解析 ' + st.rows.length + ' 列，錯誤 ' + st.errors.length + ' 項');
   st.rows.forEach(r => console.log('  ' + r.date + ' ' + r.action + ' ' + r.code + ' ' +
@@ -1162,78 +1167,56 @@ console.log('\nT19  抓不到市價時要出聲，不要靜默少算');
   check('總資產回到正常量級', num((after.find(x => x['指標'] === '總資產') || {})['數值']) > 0);
 }
 
-// ─── T20  目標配置% 指回「標的」而不是抄成死值 ────────────────────
-// 「標的」是人手維護的輸入表。抄成死值的話，改完目標要等下一次 rebuild
-// 偏離才會動；寫成 VLOOKUP 就是改完當下即時反映。
-console.log('\nT20  目標配置% 跟著「標的」走');
+// ─── T20  持倉的手填欄位重算後原樣保留 ─────────────────────────────
+// 2026-10-08「標的」退役：名稱／區域／類型／目標配置% 由主人直接在持倉填。
+// 持倉每次重算都整張重寫，沒有依代號帶回這四欄的話，主人填的東西記一筆帳就消失。
+console.log('\nT20  持倉的手填欄位重算後保留');
 {
-  const posSheet  = target.getSheetByName('持倉');
-  const instSheet = target.getSheetByName('標的');
-  const TARGET_COL = AssetSchema.expected('持倉').indexOf('目標配置%') + 1;
+  const posSheet = target.getSheetByName('持倉');
+  const H = AssetSchema.expected('持倉');
+  const col = (k) => H.indexOf(k) + 1;
+  const rowOf = (code) => AssetSchema.readObjects(posSheet).findIndex(x => String(x['代號']) === code) + 2;
+  const objOf = (code) => AssetSchema.readObjects(posSheet).find(x => String(x['代號']) === code) || {};
+  const code = String((AssetSchema.readObjects(posSheet).find(x => num(x['股數']) > 0) || {})['代號']);
+  const saved = {};
+  ['名稱', '區域', '類型', '目標配置%'].forEach(k => { saved[k] = objOf(code)[k]; });
 
-  const at   = AssetSchema.readObjects(posSheet).findIndex(x => num(x['股數']) > 0) + 2;
-  const code = String(posSheet.getRange(at, 1).getValue());
-  const f    = String(posSheet.raw(at, TARGET_COL));
+  const at = rowOf(code);
+  posSheet.getRange(at, col('名稱')).setValue('我自己取的名字');
+  posSheet.getRange(at, col('區域')).setValue('測區');
+  posSheet.getRange(at, col('類型')).setValue('測型');
+  posSheet.getRange(at, col('目標配置%')).setValue(0.125);
 
-  check('目標配置% 是公式，不是重算當下抄過來的死值', f.charAt(0) === '=', f);
-  check('公式指回「標的」表', /VLOOKUP\(\$A\d+,標的!/.test(f), f);
-
-  // 「標的」的那一列
-  const instAt = AssetSchema.readObjects(instSheet)
-    .findIndex(x => String(x['代號']) === code) + 2;
-  const instCol = AssetSchema.expected('標的').indexOf('目標配置%') + 1;
-  const savedTarget = instSheet.raw(instAt, instCol);
-
-  // 比例，不是 12.5 —— 佔股票% 與配置的實際% 都是 0..1 的比例
-  instSheet.getRange(instAt, instCol).setValue(0.125);
-
-  // ⚠️ 這裡刻意**不跑** rebuild
-  const row = AssetSchema.readObjects(posSheet)[at - 2];
-  check('改「標的」之後不必重算，持倉就跟著變',
-    num(row['目標配置%']) === 0.125, row['目標配置%']);
-  // 空白仍然是 0，不是 #N/A —— 配置那邊用 target > 0 判斷「有沒有設目標」
-  instSheet.getRange(instAt, instCol).setValue('');
-  check('「標的」留空時讀到 0，不是錯誤值',
-    num(AssetSchema.readObjects(posSheet)[at - 2]['目標配置%']) === 0,
-    AssetSchema.readObjects(posSheet)[at - 2]['目標配置%']);
-
-  // 重算之後配置表才會把它彙總進去（配置是死值，跟持倉不同）
-  instSheet.getRange(instAt, instCol).setValue(0.125);
   Position.rebuild();
+  const after = objOf(code);
+  check('名稱重算後保留', after['名稱'] === '我自己取的名字', after['名稱']);
+  check('區域／類型重算後保留', after['區域'] === '測區' && after['類型'] === '測型', after['區域'] + '/' + after['類型']);
+  check('目標配置% 重算後保留，而且是數字不是公式',
+    num(after['目標配置%']) === 0.125 && String(posSheet.raw(rowOf(code), col('目標配置%'))).charAt(0) !== '=',
+    String(posSheet.raw(rowOf(code), col('目標配置%'))));
+
+  // 配置照持倉填的分類與目標彙總
   const alloc = AssetSchema.readObjects(target.getSheetByName('配置'));
-  check('重算後配置表的分組目標% 含進這一檔',
-    alloc.some(x => Math.abs(num(x['目標%']) - 0.125) < 1e-9),
-    JSON.stringify(alloc.filter(x => x['目標%'] !== '').map(x => x['分組'] + '=' + x['目標%'])));
+  check('配置出現「測區」這一組，目標% 含進這一檔',
+    alloc.some(x => x['分組'] === '測區' && Math.abs(num(x['目標%']) - 0.125) < 1e-9),
+    JSON.stringify(alloc.filter(x => x['分組'] === '測區')));
 
-  instSheet.getRange(instAt, instCol).setValue(savedTarget === undefined ? '' : savedTarget);
+  // 空白要保持空白：配置用「有沒有目標」分辨「沒設」與「設成 0」
+  posSheet.getRange(rowOf(code), col('目標配置%')).setValue('');
   Position.rebuild();
+  check('目標配置% 留空，重算後仍是空白（不是 0）', objOf(code)['目標配置%'] === '', JSON.stringify(objOf(code)['目標配置%']));
 
-  // 欄索引讀活的標題列而不是寫死：把 目標配置% 整欄搬到最後面（模擬有人直接
-  // 在試算表上調欄序、卻沒動 TABS），公式要跟著搬，而不是繼續抓第 8 欄的「類型」
-  const width = AssetSchema.expected('標的').length;
-  const saved = instSheet.getRange(1, 1, instSheet.getLastRow(), width).getValues();
-  const moved = saved.map(r => {
-    const cp = r.slice();
-    cp.push(cp.splice(instCol - 1, 1)[0]);            // 那一欄挪到最右邊
-    return cp;
-  });
-  moved[0][moved[0].length - 1] = '目標配置%';
-  instSheet.getRange(1, 1, moved.length, width).setValues(moved);
-  instSheet.getRange(instAt, width).setValue(0.125);
+  // 改名只影響顯示：記帳照代號走
+  const r = AssetTools.recordTrade({ action: '股利', symbol: code, amount: 1, date: '2026-09-02' });
+  check('改過名稱之後照樣能用代號記帳', /已記錄第 \d+ 列/.test(r), r.split('\n')[0]);
+  const lastTrade = AssetSchema.readObjects(target.getSheetByName('交易')).slice(-1)[0];
+  check('交易表寫進去的名稱是持倉當下的名稱（文字，不是公式）', lastTrade['名稱'] === '我自己取的名字', lastTrade['名稱']);
+  AssetTools.voidTrade({ row: Number((r.match(/第 (\d+) 列/) || [])[1]), reason: '測試' });
 
+  // 還原
+  const at2 = rowOf(code);
+  Object.keys(saved).forEach(k => posSheet.getRange(at2, col(k)).setValue(saved[k] === undefined ? '' : saved[k]));
   Position.rebuild();
-  const movedF = String(posSheet.raw(at, TARGET_COL));
-  check('欄序改變後公式跟著指到新位置',
-    movedF.indexOf(',' + width + ',FALSE)') >= 0, movedF);
-  check('欄序改變後讀到的還是同一個目標值',
-    num(AssetSchema.readObjects(posSheet)[at - 2]['目標配置%']) === 0.125,
-    AssetSchema.readObjects(posSheet)[at - 2]['目標配置%']);
-
-  instSheet.getRange(1, 1, saved.length, width).setValues(saved);
-  Position.rebuild();
-  check('還原後回到原欄位',
-    String(posSheet.raw(at, TARGET_COL)).indexOf(',' + instCol + ',FALSE)') >= 0,
-    String(posSheet.raw(at, TARGET_COL)));
 }
 
 // ─── T21  現金餘額校正（絕對值 → 一列差額）────────────────────────
@@ -1509,17 +1492,13 @@ console.log('\nT23  作廢記錯的交易');
   check('重送同一份檔案不會讓作廢的列復活', countRows() === n1, countRows() + ' vs ' + n1);
 }
 
-// ─── T24  主檔的修改：標的與帳戶 ──────────────────────────────────
-// 主檔沒有「再記一筆」可以退：名稱與目標配置% 都是 VLOOKUP 回主檔，
-// 新建一列正確的並不會讓舊的失效。所以「改」是唯一的修正路徑，
+// ─── T24  主檔的修改：帳戶 ────────────────────────────────────────
+// 帳戶沒有「再記一筆」可以退，「改」是唯一的修正路徑，
 // 而且改名是**跨兩張表**的事 —— 這正是手改試算表最容易漏的一步。
+// （標的的主檔 2026-10-08 退役，分類改在持倉手填，見 T20。）
 console.log('\nT24  主檔的修改');
 {
-  const instSheet = target.getSheetByName('標的');
   const cashSheet = target.getSheetByName('現金');
-  const posSheet  = target.getSheetByName('持倉');
-  const instOf    = (c) => AssetSchema.readObjects(instSheet).find(x => String(x['代號']) === c) || {};
-  const posOf     = (c) => AssetSchema.readObjects(posSheet).find(x => String(x['代號']) === c) || {};
   const balanceOf = (n) => {
     const r = AssetSchema.readObjects(cashSheet).find(x => String(x['帳戶']) === n);
     return r ? num(r['餘額']) : null;
@@ -1527,36 +1506,6 @@ console.log('\nT24  主檔的修改');
   const totalAssets = () => num((AssetSchema.readObjects(target.getSheetByName('指標'))
     .find(x => String(x['指標']) === '總資產') || {})['數值']);
   const code = H0.code;
-
-  // ── 目標配置%：比例不是百分比 ──
-  const target0 = num(instOf(code)['目標配置%']);
-  check('填百分比（15）會被擋下並說清楚要填 0.15',
-    /0 到 1/.test(AssetTools.updateInstrument({ symbol: code, target: 15 })), '');
-  check('被擋下時沒有寫進去', num(instOf(code)['目標配置%']) === target0, instOf(code)['目標配置%']);
-
-  AssetTools.updateInstrument({ symbol: code, target: 0.15 });
-  check('比例寫進「標的」', near(num(instOf(code)['目標配置%']), 0.15, 1e-9), instOf(code)['目標配置%']);
-  check('「持倉」的目標配置% 跟著（指回去的公式，不是抄過來的死值）',
-    near(num(posOf(code)['目標配置%']), 0.15, 1e-9), posOf(code)['目標配置%']);
-
-  check('未知代號被擋下並列出現有的',
-    /沒有 XXXX/.test(AssetTools.updateInstrument({ symbol: 'XXXX', name: 'x' })), '');
-  check('沒給任何要改的欄位時會問', /要改什麼/.test(AssetTools.updateInstrument({ symbol: code })), '');
-
-  // ── 自動建立的標的只生得出半個 ──
-  // recordTrade 買進新代號時會自動登記一列，但區域／類型一律留空，
-  // 而「配置」就是按這兩欄分組的 —— 沒有 updateInstrument 就永遠補不起來。
-  const NEW = '0000T';
-  AssetTools.recordTrade({ action: '買進', symbol: NEW, shares: 100, price: 10, account: '國泰證券戶' });
-  check('自動建立的標的區域與類型是空的',
-    !String(instOf(NEW)['區域']) && !String(instOf(NEW)['類型']), JSON.stringify(instOf(NEW)['區域']));
-  check('listInstruments 會點名缺欄位的標的',
-    new RegExp(NEW + '（缺 區域、類型）').test(AssetTools.listInstruments()), '');
-  AssetTools.updateInstrument({ symbol: NEW, name: '測試標的', region: '測試區', category: '測試類' });
-  check('補上之後「配置」多出那個分組',
-    AssetSchema.readObjects(target.getSheetByName('配置')).some(x => String(x['分組']) === '測試區'), '');
-  check('名稱補上之後交易列的名稱公式也跟著（VLOOKUP 回標的）',
-    AssetSchema.readTrades(target).some(x => String(x['代號']) === NEW && String(x['名稱']) === '測試標的'), '');
 
   // ── 帳戶改名：主檔改了、交易沒改，餘額會靜靜掉回期初 ──
   const OLD = '台新銀行', RENAMED = '台新銀行(數位)';
@@ -1718,11 +1667,7 @@ console.log('\nT26  公式抓不到價時的第三層備援');
     }
   };
 
-  const inst = {};
-  AssetSchema.readObjects(target.getSheetByName('標的'))
-    .forEach(i => { inst[String(i['代號'])] = i; });
-
-  const fix = Position._fillMissingPrices(target, inst);
+  const fix = Position._fillMissingPrices(target);
 
   check('只去問缺價的那一檔，有價的不重抓', asked.indexOf(code) >= 0 && asked.length >= 1,
     JSON.stringify(asked));
@@ -1739,7 +1684,7 @@ console.log('\nT26  公式抓不到價時的第三層備援');
   // 端點也回不出價的情況：不能假裝有價，要留在 stillMissing 讓警告點名
   posSheet.getRange(victim, 8).setValue('');
   global.StockPrice = { getRawPrices: (list) => list.map(c => ({ code: c, current: 0 })) };
-  const fix2 = Position._fillMissingPrices(target, inst);
+  const fix2 = Position._fillMissingPrices(target);
   check('第三層也抓不到就照實留白，不編一個價',
     fix2.filled.length === 0 && fix2.stillMissing.indexOf(code) >= 0 &&
     String(posSheet.getRange(victim, 8).getValue()) === '',
@@ -1794,13 +1739,7 @@ console.log('\nT27  擋下的寫入不算寫入');
   check('寫成功時計數器有動', Utils.ledgerWriteCount() > before4,
     before4 + ' → ' + Utils.ledgerWriteCount() + ' ｜ ' + String(ok).slice(0, 40));
 
-  // ⑤ 更新主檔但值沒變 → 沒動到試算表，不算寫入
-  const inst = AssetSchema.readObjects(target.getSheetByName('標的'))
-    .find(i => String(i['代號']) === code);
-  const before5 = Utils.ledgerWriteCount();
-  AssetTools.updateInstrument({ symbol: code, name: String(inst['名稱']) });
-  check('主檔值沒變時計數器沒有動', Utils.ledgerWriteCount() === before5,
-    before5 + ' → ' + Utils.ledgerWriteCount());
+
 }
 
 // ─── T28  拿不到當日成交價時，不准生出 0% ────────────────────────
@@ -2594,8 +2533,59 @@ console.log('\nT47  「持倉」欄位的跨表引用');
   const mv = String(pos.raw(at, H.indexOf('市值') + 1));
   check('市值公式用的是「股數」×「市價」欄',
     mv.indexOf('$' + L('股數') + at) >= 0 && mv.indexOf('$' + L('市價') + at) >= 0, mv);
-  check('目標配置% 在 ' + L('目標配置%') + ' 欄，而且是指回「標的」的公式',
-    /VLOOKUP\(\$A\d+,標的!/.test(String(pos.raw(at, H.indexOf('目標配置%') + 1))));
+  check('目標配置% 在 ' + L('目標配置%') + ' 欄，是手填的值不是公式（「標的」已退役）',
+    String(pos.raw(at, H.indexOf('目標配置%') + 1)).charAt(0) !== '=');
+}
+
+// ─── T48  名稱 → 代號：證交所優先、只收剛好一檔 ─────────────────────
+// 「標的」退役後，名稱只在 CSV 匯入的入口用一次（對帳單只有股名）。
+// 證交所名單優先，所以主人在持倉怎麼改名都不會讓別檔的交易記錯代號。
+console.log('\nT48  名稱對代號');
+{
+  const pos = target.getSheetByName('持倉');
+  const H = AssetSchema.expected('持倉');
+  const held = AssetSchema.readObjects(pos).filter(x => num(x['股數']) > 0).map(x => String(x['代號']));
+  const A = held[0], B = held[1];
+  const listed = { byCode: {}, byName: {} };
+  const put = (c, n) => { listed.byCode[c] = n; (listed.byName[n] = listed.byName[n] || []).push(c); };
+  put(A, '甲簡稱'); put(B, '乙簡稱'); put('7777', '新上市'); put('8881', '同名'); put('8882', '同名');
+
+  check('證交所名稱對得到代號', AssetSchema.codeForName(target, '甲簡稱', listed).code === A);
+  check('持倉已有的代號不算新標的', AssetSchema.codeForName(target, '甲簡稱', listed).isNew === false);
+  const n7 = AssetSchema.codeForName(target, '新上市', listed);
+  check('持倉沒有的代號標成新標的', n7.code === '7777' && n7.isNew === true, JSON.stringify(n7));
+  check('同名兩檔一律不猜', AssetSchema.codeForName(target, '同名', listed).code === '', '');
+  check('對不到就回空字串', AssetSchema.codeForName(target, '不存在', listed).code === '', '');
+
+  // 主人把 A 在持倉改名成 B 的證交所簡稱：證交所優先，所以「乙簡稱」仍然是 B
+  const rowA = AssetSchema.readObjects(pos).findIndex(x => String(x['代號']) === A) + 2;
+  const nameA = pos.getRange(rowA, H.indexOf('名稱') + 1).getValue();
+  pos.getRange(rowA, H.indexOf('名稱') + 1).setValue('乙簡稱');
+  check('持倉改名撞到別檔的證交所簡稱，對照仍以證交所為準',
+    AssetSchema.codeForName(target, '乙簡稱', listed).code === B, AssetSchema.codeForName(target, '乙簡稱', listed).code);
+  // 證交所查不到（上櫃）才退回持倉的名稱
+  pos.getRange(rowA, H.indexOf('名稱') + 1).setValue('上櫃自訂名');
+  check('證交所查不到時用持倉的名稱', AssetSchema.codeForName(target, '上櫃自訂名', listed).code === A);
+  check('證交所名單抓不到（null）時也退回持倉', AssetSchema.codeForName(target, '上櫃自訂名', null).code === A);
+  pos.getRange(rowA, H.indexOf('名稱') + 1).setValue(nameA);
+
+  // 對帳單整條路：新標的會被點名
+  const savedSP = global.StockPrice;
+  global.StockPrice = Object.assign({}, savedSP || {}, { listedNames: () => listed });
+  const CSV = '股名,日期,成交股數,淨收付,成交單價,成交價金,手續費,交易稅,稅款,委託書號,幣別,備註\n' +
+              '新上市,2026/09/30,100,"-1,001",10,"1,000",1,0,0,T4801,台幣,\n';
+  const parsed = AssetImport.parseStatement(CSV, target);
+  check('對帳單的股名經證交所名單換成代號', parsed.rows.length === 1 && parsed.rows[0].code === '7777',
+    JSON.stringify(parsed.rows.map(r => r.code)) + ' ' + parsed.errors.join('；'));
+  check('新標的被記進 newCodes', parsed.newCodes && parsed.newCodes['7777'] === '新上市', JSON.stringify(parsed.newCodes));
+  const out = AssetImport.importStatement(CSV, { dryRun: true, account: '國泰證券戶' });
+  check('預覽回覆點名新標的、提醒去持倉補分類', /新標的 7777/.test(out) && /持倉/.test(out), out);
+  global.StockPrice = savedSP;
+
+  // 遷移結果（T4 之後跑過一次）：交易的名稱是文字、持倉的分類從標的搬過來了
+  check('遷移把交易的名稱凍結成文字（不是公式）',
+    String(target.getSheetByName('交易').raw(2, AssetSchema.expected('交易').indexOf('名稱') + 1)).charAt(0) !== '=');
+  check('遷移摘要有處理持倉與交易', retiredInst.持倉 > 0 && retiredInst.交易 > 0, JSON.stringify(retiredInst));
 }
 
 //   REALIZED_CSV=path/to.csv node test_asset.cjs

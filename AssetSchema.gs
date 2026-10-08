@@ -3,10 +3,11 @@
  * @description 「資產管理」試算表的結構定義與建表程式
  *
  * 一切從交易明細推導：
- *   輸入層（人或 Iris 會寫）  標的 / 帳戶 / 實體資產 / 交易
+ *   輸入層（人或 Iris 會寫）  帳戶 / 實體資產 / 交易
  *   計算層（程式或公式產生）  持倉 / 現金 / 配置 / 指標
+ *                             （持倉的 名稱／區域／類型／目標配置% 例外：人手維護，重算時依代號保留）
  *   歷史層                   每日快照（長表）
- *   系統層                   env / consolelog / chat / …
+ *   系統層                   consolelog / chat
  *
  * ⚠️ 計算層的分頁不可手改，Position.rebuild() 會整段覆寫。要修正數字改「交易」那一列。
  * ⚠️ 成本用加權平均法（與台灣券商對帳單一致），路徑相依，所以由 Apps Script 重算後寫入。
@@ -60,12 +61,6 @@ var AssetSchema = (() => {
   // 每個分頁都凍結第一列。
 
   s.TABS = [
-    {
-      name: '標的',
-      textColumns: ['代號'],
-      note: '投資標的主檔。新增持股前先在這裡登記一列。',
-      headers: ['代號', '名稱', '市場', '幣別', '報價來源', '區域', '類型', '目標配置%', '狀態', '備註']
-    },
     {
       name: '帳戶',
       note: '帳戶主檔。期初餘額只填一次，之後餘額由交易推導。',
@@ -133,8 +128,9 @@ var AssetSchema = (() => {
   // ⚠️ 欄位字母寫死是這張表的既有慣例，靠 build() 的標題列逐格比對守住 ——
   //    對不上會丟例外，不會靜默寫到隔壁欄。
 
+  // 「名稱」以前是 VLOOKUP 到「標的」的公式。2026-10-08「標的」退役，名稱改成記帳當下
+  // 寫入的文字（見 s.nameFor）—— 它只是顯示用，一律以代號對應。
   s.TRADE_FORMULAS = {
-    '名稱': '=IF($C{r}="","",IFERROR(VLOOKUP($C{r},標的!$A:$B,2,FALSE),""))',
     '現金流':
       '=IF(OR($B{r}="",$Q{r}="' + s.VOID + '"),"",' +
       'IFS(' +
@@ -414,6 +410,121 @@ var AssetSchema = (() => {
     return n;
   };
 
+  // ─── 名稱 ──────────────────────────────────────────────────────
+  //
+  // 2026-10-08 起「標的」分頁退役，名稱只是顯示用 —— 一切以代號對應。
+  // 名稱一律是證交所簡稱（「富邦台50」），與券商對帳單一致。
+
+  /** 證交所名單；測試環境或抓不到時回 null */
+  var _listed = () => {
+    try {
+      return (typeof StockPrice !== 'undefined' && StockPrice.listedNames)
+        ? StockPrice.listedNames() : null;
+    } catch (e) { return null; }
+  };
+
+  /**
+   * 代號 → 顯示名稱。先看持倉（主人可能改過），再看證交所名單，都沒有就回代號本身。
+   */
+  s.nameFor = (ss, code) => {
+    code = s.str(code);
+    if (!code) return '';
+    var pos = ss.getSheetByName('持倉');
+    if (pos) {
+      var hit = s.readObjects(pos).filter(x => s.str(x['代號']) === code)[0];
+      if (hit && s.str(hit['名稱'])) return s.str(hit['名稱']);
+    }
+    var listed = _listed();
+    return (listed && listed.byCode[code]) || code;
+  };
+
+  /**
+   * 名稱 → 代號，給 CSV 匯入用（對帳單只有股名，沒有代號）。
+   *
+   * ⚠️ **證交所名單優先**，持倉的名稱只在證交所查不到時（例如上櫃）才用。
+   *    反過來的話，主人把某檔在持倉改名成剛好等於另一檔的證交所簡稱，那一檔的
+   *    對帳單交易就會記到錯的代號上，而且不會報錯。
+   * ⚠️ 只接受剛好對到一檔。零檔或多檔一律回空字串，不猜。
+   *
+   * @returns {{code: string, isNew: boolean}} isNew = 持倉裡還沒有這個代號
+   */
+  s.codeForName = (ss, name, listed) => {
+    name = s.str(name);
+    var out = { code: '', isNew: false };
+    if (!name) return out;
+    var held = {};
+    var byHeldName = {};
+    var pos = ss.getSheetByName('持倉');
+    if (pos) s.readObjects(pos).forEach(x => {
+      var c = s.str(x['代號']);
+      if (!c) return;
+      held[c] = true;
+      (byHeldName[s.str(x['名稱'])] = byHeldName[s.str(x['名稱'])] || []).push(c);
+    });
+    listed = listed === undefined ? _listed() : listed;
+    var hits = (listed && listed.byName[name]) || [];
+    if (hits.length !== 1) hits = byHeldName[name] || [];
+    if (hits.length !== 1) return out;
+    out.code = hits[0];
+    out.isNew = !held[out.code];
+    return out;
+  };
+
+  /**
+   * 一次性遷移：把「標的」的 區域／類型／目標配置% 搬進持倉，名稱統一成證交所簡稱，
+   * 並把「交易」的名稱公式凍結成文字。**必須在刪掉「標的」之前跑** —— 先刪的話
+   * 交易表每一列的名稱公式會立刻變空白。冪等，重跑結果相同。
+   * @returns {object} 摘要
+   */
+  s.retireInstrumentsTab = (ss) => {
+    ss = ss || s.open();
+    var listed = _listed();
+    var inst = ss.getSheetByName('標的');
+    var instBy = {};
+    if (inst) s.readObjects(inst).forEach(x => { instBy[s.str(x['代號'])] = x; });
+    // 名稱：證交所簡稱 → 「標的」的名稱（上櫃查不到證交所的就靠它）→ 原本的值 → 代號
+    var nameOf = (code, fallback) => (listed && listed.byCode[code]) ||
+      s.str((instBy[code] || {})['名稱']) || s.str(fallback) || code;
+    var out = { 持倉: 0, 交易: 0, 證交所名單: !!listed, 標的分頁: !!inst };
+
+    // 持倉：名稱、區域、類型、目標配置% 改成死值（目標配置% 原本是 VLOOKUP 到標的的公式）
+    var pos = ss.getSheetByName('持倉');
+    if (pos && pos.getLastRow() >= 2) {
+      var pm = s.headerMap(pos);
+      var cols = ['名稱', '區域', '類型', '目標配置%'];
+      if (cols.some(c => pm[c] === undefined)) throw new Error('持倉缺少欄位：' + cols.join('、'));
+      var n = pos.getLastRow() - 1;
+      var data = pos.getRange(2, 1, n, pos.getLastColumn()).getValues();
+      cols.forEach(c => {
+        var vals = data.map(r => {
+          var code = s.str(r[pm['代號']]);
+          var src  = instBy[code] || {};
+          if (c === '名稱') return [code ? nameOf(code, r[pm['名稱']]) : ''];
+          var v = src[c] !== undefined && s.str(src[c]) !== '' ? src[c] : r[pm[c]];
+          return [c === '目標配置%' ? (s.str(v) === '' ? '' : s.num(v)) : s.str(v)];
+        });
+        pos.getRange(2, pm[c] + 1, n, 1).setValues(vals);
+      });
+      out.持倉 = n;
+    }
+
+    // 交易：名稱凍結成文字，順便統一成證交所簡稱
+    var tr = ss.getSheetByName('交易');
+    if (tr && tr.getLastRow() >= 2) {
+      var tm = s.headerMap(tr);
+      var tn = tr.getLastRow() - 1;
+      var rows = tr.getRange(2, 1, tn, tr.getLastColumn()).getValues();
+      var names = rows.map(r => {
+        var code = s.str(r[tm['代號']]);
+        return [code ? nameOf(code, r[tm['名稱']]) : s.str(r[tm['名稱']])];
+      });
+      tr.getRange(2, tm['名稱'] + 1, tn, 1).setValues(names);
+      out.交易 = tn;
+    }
+    Logger.info('AssetSchema.retireInstrumentsTab', '標的退役遷移完成', out);
+    return out;
+  };
+
   /**
    * 新增一筆交易，並補上該列的公式欄。
    * 這是新增交易的**唯一正確途徑** —— 直接 appendRow 會少掉現金流公式，
@@ -429,6 +540,10 @@ var AssetSchema = (() => {
     var map = s.headerMap(sheet);
     var header = map.__header.filter(h => h !== '');
     var row = new Array(header.length).fill('');
+    // 名稱是寫進去的文字，不再是公式。呼叫端沒給就依代號查（見 s.nameFor）
+    if (s.str(fields['代號']) && !s.str(fields['名稱'])) {
+      fields = Object.assign({}, fields, { '名稱': s.nameFor(ss, fields['代號']) });
+    }
     Object.keys(fields).forEach(k => {
       if (map[k] !== undefined) row[map[k]] = fields[k];
     });

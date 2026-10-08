@@ -36,26 +36,36 @@ var AssetImport = (() => {
   var NEEDED = ['股票名稱', '股數', '賣出日期', '賣出單價', '手續費', '交易稅', '賣出價金'];
 
   /**
-   * 券商報表用簡稱，「標的」表用正式名稱，對不上就整列被跳過。
-   * 這裡把已知的寫法統一過去。發現新的簡稱就在這裡加一行 —— 刻意用明列而不是
-   * 模糊比對：猜錯標的會把交易記到別檔頭上，寧可漏掉讓它回報，也不要猜。
+   * 名稱 → 代號。券商報表只給股名，這是整條匯入路徑唯一用到名稱的地方 ——
+   * 換成代號之後，寫進交易、算持倉一律以代號對應。
+   *
+   * 對照交給 AssetSchema.codeForName：**證交所名單優先**（券商用的就是證交所簡稱），
+   * 查不到才看持倉的名稱；只接受剛好一檔，不做模糊比對 —— 猜錯會把交易記到別檔頭上。
+   * 名單只抓一次，整份檔案共用。
+   *
+   * 持倉還沒有的代號記進 lookup.newCodes，匯入完要在回覆裡點名：重算時持倉會長出
+   * 那一列，但區域／類型／目標配置% 是空的，要主人去填。
    */
-  var NAME_FIXES = {
-    '富邦台50': '富邦台灣50'
+  var _nameIndex = (ss) => {
+    var listed;
+    try { listed = (typeof StockPrice !== 'undefined' && StockPrice.listedNames) ? StockPrice.listedNames() : null; }
+    catch (e) { listed = null; }
+    var cache = {};
+    var lookup = (raw) => {
+      var name = _str(raw);
+      if (!(name in cache)) cache[name] = AssetSchema.codeForName(ss, name, listed);
+      var hit = cache[name];
+      if (hit.code && hit.isNew) lookup.newCodes[hit.code] = name;
+      return hit.code;
+    };
+    lookup.newCodes = {};
+    return lookup;
   };
 
-  /** 名稱 → 代號，查表前先套用上面的正規化 */
-  var _nameIndex = (ss) => {
-    var map = {};
-    AssetSchema.readObjects(ss.getSheetByName('標的')).forEach(x => {
-      var n = _str(x['名稱']);
-      if (n) map[n] = _str(x['代號']);
-    });
-    return (raw) => {
-      var name = _str(raw);
-      return map[NAME_FIXES[name] || name] || '';
-    };
-  };
+  /** 匯入回覆裡點名新標的 */
+  var _newCodeLines = (newCodes, dryRun) => Object.keys(newCodes || {}).map(c =>
+    '▸ 新標的 ' + c + ' ' + newCodes[c] + (dryRun ? ' 會' : ' 已') +
+    '加進持倉 —— 區域／類型／目標配置% 請到「持倉」表補上');
 
   // ─── CSV ──────────────────────────────────────────────────────
 
@@ -120,7 +130,7 @@ var AssetImport = (() => {
     }
     var at = (name) => header.indexOf(name);
 
-    // 名稱 → 代號。券商報表只給名稱，代號要靠「標的」表對照。
+    // 名稱 → 代號。券商報表只給名稱，見 _nameIndex
     var lookup = _nameIndex(ss);
 
     var rows = [], errors = [];
@@ -131,7 +141,7 @@ var AssetImport = (() => {
 
       var code = lookup(name);
       if (!code) {
-        errors.push('第 ' + (i + 1) + ' 列：「標的」表裡找不到名稱「' + name + '」，這一列跳過');
+        errors.push('第 ' + (i + 1) + ' 列：證交所名單與持倉都對不到名稱「' + name + '」，這一列跳過');
         continue;
       }
 
@@ -159,7 +169,7 @@ var AssetImport = (() => {
       });
     }
     rows.forEach(r => { r.key = _key(r); });
-    return { rows: rows, errors: errors, header: header };
+    return { rows: rows, errors: errors, header: header, newCodes: lookup.newCodes };
   };
 
   // ─── 匯入 ─────────────────────────────────────────────────────
@@ -248,6 +258,7 @@ var AssetImport = (() => {
         lines.push('▸ ' + code + ' ' + g.name + '：賣出 ' + _money(g.shares) + ' 股（' + g.n + ' 筆），' +
                    '入帳 ' + _money(g.net) + '，券商計算損益 ' + _money(g.pnl));
       });
+      _newCodeLines(parsed.newCodes, options.dryRun).forEach(l => lines.push(l));
       if (parsed.errors.length) {
         lines.push('');
         parsed.errors.forEach(e => lines.push('⚠️ ' + e));
@@ -382,11 +393,11 @@ var AssetImport = (() => {
     }
 
     Object.keys(unknown).forEach(n => {
-      errors.push('「標的」表裡找不到名稱「' + n + '」（' + unknown[n] + ' 列）—— ' +
-                  '請先在標的表補上代號，再傳一次這份檔案');
+      errors.push('證交所名單與持倉都對不到名稱「' + n + '」（' + unknown[n] + ' 列）—— ' +
+                  '上櫃或改過名的標的請先在 Telegram 用代號記一筆，再傳一次這份檔案');
     });
 
-    return { rows: rows, errors: errors, header: header };
+    return { rows: rows, errors: errors, header: header, newCodes: lookup.newCodes };
   };
 
   /**
@@ -483,6 +494,7 @@ var AssetImport = (() => {
         lines.push('已登錄過（不重複記）：');
         dupQty.forEach(d => lines.push('  ' + d));
       }
+      _newCodeLines(parsed.newCodes, options.dryRun).forEach(l => lines.push(l));
       if (parsed.errors.length) {
         lines.push('');
         parsed.errors.forEach(e => lines.push('⚠️ ' + e));

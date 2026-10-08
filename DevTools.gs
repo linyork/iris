@@ -106,6 +106,23 @@ function setupAssetSheet() {
   return r;
 }
 
+/**
+ * 一次性：「標的」分頁退役（2026-10-08）。**刪掉「標的」之前跑。**
+ *   1 持倉的 名稱／區域／類型／目標配置% 改成死值（目標配置% 原本是查「標的」的公式），
+ *     名稱統一成證交所簡稱
+ *   2 交易的名稱公式凍結成文字（同樣統一成證交所簡稱）
+ *   3 重算一次，確認新版的持倉寫法會原樣保留上面那幾欄
+ * 冪等，重跑結果相同。結果也寫進 consolelog（可用診斷入口讀）。
+ */
+function retireInstrumentsTab() {
+  var r = AssetSchema.retireInstrumentsTab();
+  var rb = Position.rebuild();
+  r.rebuild = rb && rb.ok ? 'ok' : (rb && rb.reason) || '失敗';
+  console.log(JSON.stringify(r, null, 2));
+  Logger.info('retireInstrumentsTab', '完成', r);
+  return r;
+}
+
 /** 從「交易」重算持倉、現金、配置、指標 */
 function rebuildPositions() {
   var r = Position.rebuild();

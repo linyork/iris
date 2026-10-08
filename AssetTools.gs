@@ -1,15 +1,16 @@
 /**
  * AssetTools
- * @description 輸入層（標的／帳戶／交易）的用例層，供 Tools.execute 呼叫
+ * @description 輸入層（帳戶／交易）的用例層，供 Tools.execute 呼叫
  *
  * 寫入一律是「交易表 append 一列 + Position.rebuild()」；持倉、成本、已實現損益、
  * 現金餘額都是那一列的推導結果。
  *
  * 讀取分工：計算層（持倉／指標／現金／每日快照）走 Snapshot 與 GoogleSheet；
- * 輸入層三張表走這裡的 listInstruments / listAccounts / listTrades。
+ * 輸入層兩張表走這裡的 listAccounts / listTrades。
  *
  * 修改規則：交易 append-only，記錯用 voidTrade 打作廢記號；
- * 主檔只能 updateInstrument / updateAccount 改，帳戶不可刪除只能停用。
+ * 帳戶主檔只能 updateAccount 改，不可刪除只能停用。
+ * 標的的名稱／區域／類型／目標配置% 由主人直接在「持倉」表填（2026-10-08 起），沒有工具。
  */
 var AssetTools = (() => {
   var t = {};
@@ -154,28 +155,20 @@ var AssetTools = (() => {
       var dateStr = _normalizeDate(a.date, tz);
       if (!dateStr) return '看不懂的日期：' + _str(a.date) + '（請用 yyyy-MM-dd）';
 
-      // ── 標的 ──
-      // 代號一律當文字處理，台股的前導零不能掉（0056 變成 56 就查不到報價了）
-      var instSheet = ss.getSheetByName('標的');
-      var instruments = AssetSchema.readObjects(instSheet);
-      var known = instruments.map(x => _str(x['代號']));
-      var autoAdded = false;
+      // ── 代號 ──
+      // 代號一律當文字處理，台股的前導零不能掉（0056 變成 56 就查不到報價了）。
+      // 已知的代號 = 持倉裡有的。新代號只有「買進」能帶進來 —— 重算時持倉會自己長出
+      // 那一列（名稱用證交所簡稱，區域／類型／目標配置% 留空等主人在持倉填）。
+      var known = AssetSchema.readObjects(ss.getSheetByName('持倉')).map(x => _str(x['代號']));
+      var isNew = false;
 
-      if (val.symbol) {
-        if (known.indexOf(val.symbol) < 0) {
-          if (action !== '買進') {
-            return '「標的」表裡沒有 ' + val.symbol + ' —— ' + action +
-                   '之前它必須已經存在。目前有：' + known.join('、') +
-                   '。如果這是新標的，請先記一筆買進。';
-          }
-          // 新買進的標的自動登記；分類留空等主人補
-          instSheet.getRange(instSheet.getLastRow() + 1, 1, 1, 10).setValues([[
-            val.symbol, val.symbol, 'TPE', 'TWD', 'GOOGLEFINANCE', '', '', '', '持有中',
-            '由 Iris 於 ' + dateStr + ' 首次買進時自動建立，名稱與區域/類型請補上'
-          ]]);
-          Utils.noteLedgerWrite('標的 自動登記 ' + val.symbol);
-          autoAdded = true;
+      if (val.symbol && known.indexOf(val.symbol) < 0) {
+        if (action !== '買進') {
+          return '持倉裡沒有 ' + val.symbol + ' —— ' + action +
+                 '之前它必須已經存在。目前有：' + known.join('、') +
+                 '。如果這是新標的，請先記一筆買進。';
         }
+        isNew = true;
       }
 
       // ── 賣出：檢查該日期當下的持股是否足夠 ──
@@ -261,8 +254,8 @@ var AssetTools = (() => {
         (val.tax ? '，交易稅 ' + _money(val.tax) : '') +
         ' → ' + val.account);
 
-      if (autoAdded) {
-        lines.push('▸ ' + val.symbol + ' 是新標的，已自動加進「標的」表（名稱與區域/類型待補）');
+      if (isNew) {
+        lines.push('▸ ' + val.symbol + ' 是新標的，已加進持倉。區域／類型／目標配置% 請到「持倉」表補上');
       }
 
       if (rebuilt && rebuilt.ok) {
@@ -775,186 +768,6 @@ var AssetTools = (() => {
     } catch (ex) {
       Logger.error('AssetTools.listAccounts', '列出帳戶失敗', ex);
       return '讀取帳戶時發生錯誤：' + (ex && ex.message ? ex.message : String(ex));
-    }
-  };
-
-  /**
-   * 列出「標的」主檔。
-   *
-   * `getHoldings` 讀的是持倉、而且只給股數 > 0 的列 —— 已經出清、以及登記了還
-   * 沒買的標的完全看不到。而區域／類型／目標配置% 只住在這張表上，配置分組就是
-   * 按它們分的，空著的欄位要有人看得見才補得起來，所以缺哪一欄這裡會直接點名。
-   */
-  t.listInstruments = (a) => {
-    a = a || {};
-    try {
-      var ss = AssetSchema.open();
-      var sheet = ss.getSheetByName('標的');
-      if (!sheet) return '找不到「標的」分頁，請先執行 setupAssetSheet()。';
-
-      var rows = AssetSchema.readObjects(sheet).filter(x => _str(x['代號']));
-      if (!rows.length) return '「標的」表還沒有任何標的 —— 記第一筆買進時會自動建立。';
-
-      var held = {};
-      var posSheet = ss.getSheetByName('持倉');
-      if (posSheet) {
-        AssetSchema.readObjects(posSheet).forEach(p => { held[_str(p['代號'])] = _num(p['股數']); });
-      }
-
-      var lines = ['標的（' + rows.length + ' 檔）'];
-      var incomplete = [];
-
-      rows.forEach(x => {
-        var code = _str(x['代號']);
-        var miss = ['區域', '類型'].filter(k => !_str(x[k]));
-        if (miss.length) incomplete.push(code + '（缺 ' + miss.join('、') + '）');
-
-        var target = _num(x['目標配置%']);
-        var bits = ['▸ ' + code + (_str(x['名稱']) ? ' ' + _str(x['名稱']) : ''),
-                    (_str(x['市場']) || 'TPE') + '／' + (_str(x['幣別']) || 'TWD')];
-        bits.push('區域 ' + (_str(x['區域']) || '⚠️ 未填'));
-        bits.push('類型 ' + (_str(x['類型']) || '⚠️ 未填'));
-        // 目標配置% 是 0..1 的比例。兩種寫法都印出來，是因為主人講的是「6%」而
-        // updateInstrument 收的是 0.06 —— 只印一種，換算就會發生在模型腦裡。
-        bits.push('目標 ' + (_str(x['目標配置%']) === ''
-          ? '未設'
-          : target + '（' + Math.round(target * 1000) / 10 + '%）'));
-        bits.push(held[code] > 0 ? '持有 ' + _money(held[code]) + ' 股' : '目前無持股');
-        if (_str(x['狀態'])) bits.push(_str(x['狀態']));
-        lines.push(bits.join(' | '));
-      });
-
-      if (incomplete.length) {
-        lines.push('⚠️ 區域／類型沒填的標的不會進「配置」的分組統計：' + incomplete.join('、') +
-          '。可以用 updateInstrument 補。');
-      }
-      return lines.join('\n');
-
-    } catch (ex) {
-      Logger.error('AssetTools.listInstruments', '列出標的失敗', ex);
-      return '讀取標的時發生錯誤：' + (ex && ex.message ? ex.message : String(ex));
-    }
-  };
-
-  /** updateInstrument 收的參數 → 「標的」表的欄位 */
-  var INSTRUMENT_FIELDS = {
-    name: '名稱', market: '市場', currency: '幣別', quoteSource: '報價來源',
-    region: '區域', category: '類型', target: '目標配置%', status: '狀態', note: '備註'
-  };
-
-  /**
-   * 修改「標的」主檔的欄位。
-   *
-   * 主檔沒有「再記一筆」可以退：`交易!名稱` 與 `持倉!目標配置%` 都是 VLOOKUP
-   * 回這張表，新建一列正確的並不會讓舊的失效。所以更新就是唯一的修正路徑。
-   *
-   * 這個工具存在的直接原因是 `recordTrade` 的自動建立只生得出半個標的 ——
-   * 區域／類型／目標配置% 一律留空，而「配置」就是按區域與類型分組的。
-   *
-   * ⚠️ **代號不給改。** 它是 `交易`、`持倉`、`每日快照` 共同的比對鍵，改一張
-   *    表就會讓另外兩張對不上；真的遇到代號變更，請連同歷史列一起手動處理。
-   *
-   * @param {object} a
-   * @param {string} a.symbol 代號（必填，用來定位）
-   * @param {string} [a.name] [a.market] [a.currency] [a.quoteSource] [a.region]
-   *                 [a.category] [a.status] [a.note]
-   * @param {number} [a.target] 目標配置%，**0..1 的比例**（6% 要填 0.06）
-   */
-  t.updateInstrument = (a) => {
-    a = a || {};
-    try {
-      var ss = AssetSchema.open();
-      var sheet = ss.getSheetByName('標的');
-      if (!sheet) return '找不到「標的」分頁，請先執行 setupAssetSheet()。';
-
-      var symbol = _str(a.symbol);
-      if (!symbol) return '要修改哪一檔標的？請給代號（用 listInstruments 查）。';
-
-      var found = _findRow(sheet, '代號', symbol);
-      if (!found.row) {
-        var known = AssetSchema.readObjects(sheet).map(x => _str(x['代號'])).filter(Boolean);
-        return '「標的」表裡沒有 ' + symbol + '。目前有：' + known.join('、');
-      }
-      var map = found.map;
-
-      // ── 收要改的欄位 ──
-      var updates = {};
-      Object.keys(INSTRUMENT_FIELDS).forEach(k => {
-        if (a[k] === undefined || a[k] === null || a[k] === '') return;
-        updates[INSTRUMENT_FIELDS[k]] = a[k];
-      });
-      if (!Object.keys(updates).length) {
-        return '要改什麼？可以改的有：' + Object.keys(INSTRUMENT_FIELDS)
-          .map(k => INSTRUMENT_FIELDS[k]).join('、') + '（代號不能改）。';
-      }
-
-      // ── 驗證 ──
-      if (updates['目標配置%'] !== undefined) {
-        var target = _num(a.target);
-        // ⚠️ 這裡**不做 /100 的自動換算**。12.5 到底是 12.5% 還是有人手滑多打
-        //    一位，程式分不出來，猜錯就是整整一百倍的偏離而且不會報錯。
-        if (!(target >= 0) || target > 1) {
-          return '目標配置% 要填 0 到 1 之間的**比例**，不是百分比 —— ' +
-                 '6% 請填 0.06，收到的是 ' + _str(a.target) + '。' +
-                 '（「配置」的偏離% = 實際% − 目標%，兩邊都是比例，基準都是股票市值）';
-        }
-        updates['目標配置%'] = target;
-      }
-      if (updates['幣別'] !== undefined) {
-        var cur = _str(a.currency).toUpperCase();
-        if (!/^[A-Z]{3}$/.test(cur)) {
-          return '看不懂的幣別：「' + _str(a.currency) + '」。請用三碼代碼，例如 TWD / USD。';
-        }
-        updates['幣別'] = cur;
-      }
-      if (updates['市場'] !== undefined) updates['市場'] = _str(a.market).toUpperCase();
-
-      // ── 寫入 ──
-      var changed = [], skipped = [];
-      Object.keys(updates).forEach(col => {
-        var idx = map[col];
-        if (idx === undefined || idx < 0) { skipped.push(col); return; }
-        var cell = sheet.getRange(found.row, idx + 1);
-        var before = cell.getValue();
-        if (_str(before) === _str(updates[col])) return;      // 沒變就不寫
-        cell.setValue(updates[col]);
-        changed.push(col + '：' + (_str(before) || '(空白)') + ' → ' + _str(updates[col]));
-      });
-
-      // 沒有任何一欄真的變動就不算寫入 —— 上面那個迴圈「沒變就不寫」，
-      // 這裡的提前返回也就是「這次沒動到試算表」，計數器不能動。
-      if (!changed.length) {
-        return symbol + ' 的這些欄位本來就是這個值，沒有改動。' +
-               (skipped.length ? '（表上沒有這些欄位：' + skipped.join('、') + '）' : '');
-      }
-      Utils.noteLedgerWrite('標的 更新 ' + symbol + '：' + changed.length + ' 欄');
-
-      var rebuilt = Position.rebuild();
-
-      var lines = ['已更新標的 ' + symbol + '（第 ' + found.row + ' 列）：'];
-      changed.forEach(c => lines.push('▸ ' + c));
-      if (skipped.length) lines.push('⚠️ 表上沒有這些欄位，未寫入：' + skipped.join('、'));
-      if (updates['市場'] !== undefined && updates['市場'] !== 'TPE') {
-        lines.push('⚠️ 只有 TPE 的市價有 TWSE 備援，其他市場抓不到 GOOGLEFINANCE 就是空白');
-      }
-      if (rebuilt && rebuilt.ok) {
-        if (updates['目標配置%'] !== undefined) {
-          lines.push('▸ 「配置」的目標與偏離已跟著重算');
-        }
-        if (rebuilt.warnings && rebuilt.warnings.length) lines.push('⚠️ ' + rebuilt.warnings.join('；'));
-      } else {
-        lines.push('⚠️ 已寫入，但重算失敗：' +
-          (rebuilt && rebuilt.reason ? rebuilt.reason : '未知原因') + '。數字暫時不準。');
-      }
-
-      Logger.info('AssetTools.updateInstrument', '更新標的', {
-        symbol: symbol, row: found.row, changed: changed, rebuilt: rebuilt && rebuilt.ok
-      });
-      return lines.join('\n');
-
-    } catch (ex) {
-      Logger.error('AssetTools.updateInstrument', '更新標的失敗', ex);
-      return '更新標的時發生錯誤：' + (ex && ex.message ? ex.message : String(ex));
     }
   };
 

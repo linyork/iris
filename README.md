@@ -2,14 +2,14 @@
 
 > ⚠️ **專案性質聲明 — 請先讀**
 >
-> 本專案目前的實作（ReAct 迴圈、工具分派、AI Provider 切換、等）**全部以原生 JavaScript 手刻在 Google Apps Script 上**，目的只是為了**快速驗證概念與演示**（GAS 部署成本為 0、內建排程、Sheet 直接當資料庫，最適合 PoC）。
+> 本專案目前的實作（ReAct 迴圈、工具分派、AI Provider 切換等）**全部以原生 JavaScript 手刻在 Google Apps Script 上**，目的只是為了**快速驗證概念與演示**（GAS 部署成本為 0、內建排程、Sheet 直接當資料庫，最適合 PoC）。
 >
 > 整套架構在設計上對應的就是 **LangChain / LangGraph** 的標準元件：
 >
 > | 目前手刻 | 對應的 LangChain / LangGraph 概念 |
 > |---|---|
 > | `ChatBot.gs` 的 ReAct 迴圈 | `LangGraph` StateGraph + ToolNode |
-> | `Tools.gs` 的 16 個工具 | `@tool` decorator / `StructuredTool` |
+> | `Tools.gs` 的 14 個工具 | `@tool` decorator / `StructuredTool` |
 > | `AIServiceFactory` + `AIAdapter` | `BaseChatModel` 抽象 + provider 子類 |
 > | `GoogleSheet` 的 chat 讀寫 | `Memory` / `Checkpointer` |
 >
@@ -92,15 +92,14 @@ Telegram Bot API ───┤        │
                  │
                  ▼
 ┌──────────────────────────────────────────────┐
-│  Tools.gs · 16 個工具                         │
+│  Tools.gs · 14 個工具                         │
 │   ├─ 資產查詢：getHoldings / getDashboard /    │
 │   │           getHistory / getPrice           │
 │   ├─ 股利：getDividendHistory / recordDividend │
 │   ├─ 記帳：addAccount / recordTrade /          │
 │   │       setCashBalance / voidTrade          │
 │   ├─ 主檔：listTrades / listAccounts /         │
-│   │       listInstruments /                   │
-│   │       updateAccount / updateInstrument    │
+│   │       updateAccount                       │
 │   └─ 外部：searchWeb (Google Custom Search)    │
 └────────────────┬─────────────────────────────┘
                  │
@@ -151,7 +150,7 @@ Telegram Bot API ───┤        │
 | `WebSearch.gs` | Google Custom Search 包裝 |
 | `Utils.gs` | 執行時間預算（`execElapsedMs`）、帳本寫入計數（`noteLedgerWrite`）、「說已完成」偵測（`claimsWriteDone`）、文字格式化與分段 |
 | `Logger.gs` | 寫入 `consolelog` 工作表 |
-| `AssetTools.gs` | 新表**輸入層**的用例層：`recordTrade` 驗證後 append 一列並重算；`voidTrade` 作廢記錯的列；`updateInstrument` / `updateAccount` 改主檔；`listTrades` / `listAccounts` / `listInstruments` 讀主檔（計算層的讀取在 `Snapshot`） |
+| `AssetTools.gs` | 新表**輸入層**的用例層：`recordTrade` 驗證後 append 一列並重算；`voidTrade` 作廢記錯的列；`updateAccount` 改帳戶主檔；`listTrades` / `listAccounts` 讀輸入層（計算層的讀取在 `Snapshot`） |
 | `AssetImport.gs` | 券商 CSV 匯入（Telegram 傳檔進來）。認得兩種格式：**證券對帳單**（有「委託書號」，買賣都記，首選）與**已實現損益**（有「賣出日期」，只記賣出）。兩種格式互相去重 |
 | `DevTools.gs` | **所有在 GAS 編輯器手動執行的進入點**：建表、重算、dry run、診斷。編輯器的函式下拉選單不顯示檔案來源，所以集中在這裡；trigger 與 web 進入點因為綁定名稱，仍留在各自的檔案。遷移相關的進入點已移除 —— 遷移做完了，留在選單裡只會被誤觸 |
 | `Config.gs` | 集中讀取 Script Properties 與系統常數 |
@@ -171,7 +170,6 @@ Telegram Bot API ───┤        │
 
 | 工作表 | 層 | 用途 |
 |---|---|---|
-| `標的` | 輸入 | 投資標的主檔。區域／類型／目標配置% 空著的話不會進「配置」的分組 |
 | `帳戶` | 輸入 | 帳戶主檔。期初餘額只填一次，之後的水位由交易推導 |
 | `實體資產` | 輸入 | 黃金這類非證券資產 |
 | `交易` | 輸入 | **唯一的事實來源**。只新增不改；記錯用 `voidTrade` 把「狀態」設成作廢 |
@@ -343,10 +341,9 @@ TWSE 的 `STOCK_DAY_AVG` 端點硬解析收盤價。
 
 ### 主檔怎麼改
 
-`標的` 與 `帳戶` 是**被不可變資料用字串引用的參考資料**，和交易的規則正好相反：
+`帳戶` 是**被不可變資料用字串引用的參考資料**，和交易的規則正好相反：
 交易禁止修改、只能作廢；主檔沒有「再記一筆」可以退，**更新是唯一的修正路徑**。
 
-- `交易!名稱`、`持倉!目標配置%` 都是 VLOOKUP 回主檔，新建一列正確的並不會讓舊的失效
 - **改帳戶名是跨兩張表的事**：`現金!交易淨流` 按帳戶名 SUMIF，只改主檔那一格、不改
   「交易」裡的每一列，那個帳戶的餘額會靜靜地掉回期初值，而且不會有任何錯誤。
   `updateAccount({newName})` 會一起改寫（「每日快照」的歷史列保持舊名，那是當時的紀錄）
@@ -354,18 +351,23 @@ TWSE 的 `STOCK_DAY_AVG` 端點硬解析收盤價。
   `Position` 從「現金」表整列濾掉，裡面還有錢的話那筆錢會直接從總資產上消失
 - **已經有交易的帳戶不給改幣別**：那些列的金額是用舊幣別記的，改了之後餘額會變成
   兩種貨幣加在一起再乘新匯率
-- `updateInstrument` 的 `target` **一律填 0..1 的比例**，15% 要填 0.15。填 15 會被擋下來，
-  程式不做 `/100` 的自動換算 —— 12.5 是「12.5%」還是手滑多打一位，猜錯就是一百倍的偏離
+### 標的：沒有主檔，分類直接填在持倉
 
-> `updateInstrument` 存在的直接原因是 `recordTrade` 的自動建立只生得出**半個**標的：
-> 買進新代號時會自動登記一列，但 `區域` / `類型` / `目標配置%` 一律留空，而「配置」就是
-> 按區域與類型分組的。`listInstruments` 會直接點名哪幾檔還缺。
+`標的` 分頁 2026-10-08 退役。一切以**代號**對應，名稱只是顯示用（統一用證交所簡稱，
+例如「富邦台50」），在持倉怎麼改都不影響記帳與匯入。
+
+- **區域／類型／目標配置%／名稱直接在「持倉」表填**，重算時依代號原樣保留
+- `目標配置%` **一律填 0..1 的比例**，15% 要填 0.15 —— 程式不做 `/100` 的自動換算
+- 新代號只有「買進」帶得進來（Telegram 記帳或券商匯入）。持倉會自動多出那一列，
+  分類留空，回覆會提醒去補
+- 券商對帳單只有股名：匯入時先查**證交所名單**換成代號，查不到（上櫃）才看持倉的名稱；
+  只接受剛好對到一檔，不猜
 
 ---
 
 ## AI 工具集
 
-`Tools.gs` 共定義 16 個工具，呼叫者為 LLM。
+`Tools.gs` 共定義 14 個工具，呼叫者為 LLM。
 工具以 `definitions` 陣列（給模型看的 schema）加上 `execute()` 內的 `switch` 分派實作，
 **新增工具時兩處都要改**，只加 definitions 會讓模型叫得出來卻一律收到「未知的工具」。
 
@@ -383,8 +385,6 @@ TWSE 的 `STOCK_DAY_AVG` 端點硬解析收盤價。
 | `voidTrade(row, reason)` | 作廢一筆記錯的交易：列與原始數字留著，只在「狀態」打記號並讓現金流失效 —— 見[記錯了怎麼撤](#記錯了怎麼撤) |
 | `listTrades(limit, symbol, account, action, includeVoid)` | 列出逐筆交易，**每筆都帶「第 N 列」**（`voidTrade` 要的列號）。與 `getHistory`（每日快照）不同 |
 | `listAccounts` | 列出所有帳戶（含停用）與**原幣**餘額。`getDashboard` 只給換算後的台幣值 |
-| `listInstruments` | 列出「標的」主檔，含已出清與尚未買進的，並點名區域／類型還沒填的 |
-| `updateInstrument(symbol, name, market, currency, quoteSource, region, category, target, status, note)` | 改「標的」主檔。代號不能改；`target` 一律 0..1 的比例，填百分比會被擋下 |
 | `updateAccount(name, newName, type, currency, institution, status, note)` | 改「帳戶」主檔。改名會**連「交易」的每一列一起改寫**；不提供刪除，只有停用，且停用前餘額必須是 0 |
 | `searchWeb(query)` | Google Custom Search 取得即時時事 |
 

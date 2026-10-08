@@ -216,7 +216,16 @@ var AssetMigrate = (() => {
                      '舊表僅剩股利紀錄，名稱與分類請自行補上']);
     });
     counts['已出清標的'] = retired.length;
-    _replaceByKey(ss.getSheetByName('標的'), instRows, 10, 0);
+    // 「標的」已退役（2026-10-08），不在 AssetSchema.TABS 裡了。這支遷移只剩測試在用，
+    // 照舊表的樣子建出來，再由 AssetSchema.retireInstrumentsTab 搬進持倉 —— 跟線上走的是同一條路。
+    var instSheet = ss.getSheetByName('標的');
+    if (!instSheet) {
+      instSheet = ss.insertSheet('標的');
+      instSheet.getRange(1, 1, 1, 10).setValues([['代號', '名稱', '市場', '幣別', '報價來源', '區域', '類型', '目標配置%', '狀態', '備註']]);
+      // 代號要是純文字，否則 0056 會被吃成 56（同 AssetSchema 的 textColumns）
+      instSheet.getRange(1, 1, instSheet.getMaxRows(), 1).setNumberFormat('@');
+    }
+    _replaceByKey(instSheet, instRows, 10, 0);
     counts['標的'] = instRows.length;
 
     // ── 帳戶 ──

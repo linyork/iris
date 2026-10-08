@@ -26,7 +26,7 @@ There is a second, read-only face on the same script: a web dashboard served by 
 See [Web Dashboard](#web-dashboard).
 
 **Everything lives in one spreadsheet, named by one value.** The Script Property `SHEET_ID` is the
-single source — asset tabs (標的/交易/持倉/…) *and* system tabs (chat,
+single source — asset tabs (交易/持倉/帳戶/…) *and* system tabs (chat,
 consolelog). `AssetSchema.SHEET_ID` is a getter that returns `Config.SHEET_ID`, not a second constant, so
 repointing the property moves the whole bot. `AssetSchema.open()` throws a named error if the
 property is unset rather than letting `openById(null)` produce GAS's unreadable message.
@@ -87,11 +87,11 @@ renaming or relocating them fails silently:
 1. `Main.gs` — `doPost()` receives the LINE **or** Telegram webhook, normalizes it into a single LINE-shaped event object, deduplicates via `CacheService` (6h TTL), silently drops non-master events, calls `ChatBot.reply()`
 2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 5 turns; the cap is not the time guard — each turn checks `Utils.execElapsedMs()` and stops opening new ones past 200s). Injects the `Facts` block into the system context. Caches **successful** tool results within a turn (a failure is not cached — an over-eager cache would pin one flaky TWSE call as this turn's verdict, when the model's retry might well have worked), strips Markdown before returning, and blocks a 「已記錄」 claim that the ledger does not corroborate.
 3. `AIServiceFactory.gs` — Routes to `GeminiService` or `NvidiaService` based on `Config.AI_PROVIDER`. NVIDIA path goes through `AIAdapter` (Gemini ↔ OpenAI format conversion) so the rest of the codebase always speaks Gemini format.
-4. `Tools.gs` — Defines and executes **16** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. `execute()` returns an envelope, `{ok, status, text}` — `status` is `ok` / `invalid_args` / `error`, and `ChatBot` sends it to the model alongside the text so a failure cannot be read as data (see [工具回傳要分得出成功與失敗](#工具回傳要分得出成功與失敗)). Grouped by which layer they touch:
+4. `Tools.gs` — Defines and executes **14** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. `execute()` returns an envelope, `{ok, status, text}` — `status` is `ok` / `invalid_args` / `error`, and `ChatBot` sends it to the model alongside the text so a failure cannot be read as data (see [工具回傳要分得出成功與失敗](#工具回傳要分得出成功與失敗)). Grouped by which layer they touch:
    - **Computed-layer reads** (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, answering "what do I have now".
-   - **Input-layer reads** (`listTrades`, `listAccounts`, `listInstruments`) — the 交易/帳戶/標的 tabs themselves, answering "how did this get recorded, which row do I change". They live in `AssetTools.gs`, not `Snapshot`, because each one is the precondition for a write: `listTrades` hands out the row number `voidTrade` needs, `listAccounts` is the only surface exposing **原幣** balances (`Snapshot._cash` gives TWD-converted only), `listInstruments` names the instruments whose 區域/類型 are still blank.
+   - **Input-layer reads** (`listTrades`, `listAccounts`) — the 交易/帳戶 tabs themselves, answering "how did this get recorded, which row do I change". They live in `AssetTools.gs`, not `Snapshot`, because each one is the precondition for a write: `listTrades` hands out the row number `voidTrade` needs, `listAccounts` is the only surface exposing **原幣** balances (`Snapshot._cash` gives TWD-converted only).
    - **Ledger writes** (`recordTrade`, `recordDividend`, `setCashBalance`, `voidTrade`) — all four land in the 交易 tab via `AssetTools.gs`; a dividend, a balance correction and a void are each just one row with a different 動作 or 狀態.
-   - **Master writes** (`addAccount`, `updateAccount`, `updateInstrument`) — the only code that writes 帳戶 and 標的.
+   - **Master writes** (`addAccount`, `updateAccount`) — the only code that writes 帳戶. Instruments have no master any more — see [標的退役](#標的退役名稱只是顯示分類住在持倉).
    - **External** (`searchWeb`).
 5. `GoogleSheet.gs` — System tabs (chat / log) plus the formatting layer for asset queries, which read through `Snapshot`. Single spreadsheet instance cached per execution.
 
@@ -402,18 +402,10 @@ and immune to that quota.
 
 ### 目標配置%
 
-只有一個地方填：**`標的` 的 `目標配置%`**。寫得進去的只有兩條路 —— 人手改，或
-`AssetTools.updateInstrument()`；遷移與自動登記新標的一律留空。`持倉` 同名那一欄是
-`=IFERROR(VLOOKUP($A{r},標的!$A:$H,8,FALSE),0)` —— 指回去，不是重算當下抄過來的
-死值。偏離只在 `配置` 算（重算時寫入），`持倉` 已不再有偏離欄（2026-10-08 拿掉）。
+只有一個地方填：**`持倉` 的 `目標配置%`**，由主人手填（2026-10-08 起，見
+[標的退役](#標的退役名稱只是顯示分類住在持倉)）。重算時依代號原樣保留。偏離只在 `配置` 算。
 
-那個欄索引是 `AssetSchema.headerMap(instSheet)` 讀**活的標題列**算出來的，不是寫死的
-數字，也不是 `TABS` —— 公式住在試算表裡，就得對得上試算表實際的欄序。寫死的話，在
-`目標配置%` 左邊插一欄就會靜默抓到隔壁欄（現在那裡是 `類型`，文字讀成 0），每一檔的
-目標都變 0 而且不報錯。同一個坑在 [`AssetSchema.gs`](AssetSchema.gs) 的
-`TRADE_FORMULAS` 還在（`名稱` 寫死 `標的!$A:$B,2`），只是第 2 欄幾乎不會被推走。
-
-⚠️ **基準是股票市值，不是總資產。** 目標只填在 `標的`，而那張表裡全部都是股票 ——
+⚠️ **基準是股票市值，不是總資產。** 目標只填在 `持倉`，而那張表裡全部都是股票 ——
 現金與實體資產沒有 `目標配置%` 這一欄，也不可能有。所以那些目標加起來的 100% 講的是
 **股票這一塊**的 100%。因此 `配置` 的
 `區域` / `類型` 兩維用股票市值當分母；只有 `大類`（股票／現金／實體）那三列在講
@@ -427,8 +419,8 @@ and immune to that quota.
 `T5` 現在釘住三個維度各自的分母（各維實際% 相加 = 1）。
 
 ⚠️ **填比例不是百分比。** `目標配置%` 與 `配置` 的 `實際%` 都是 0..1 的比例。
-填 12.5 而不是 0.125，偏離會差一百倍。`updateInstrument` 因此**擋下所有 > 1 的值而不是
-自己 ÷100** —— 12.5 到底是 12.5% 還是有人手滑多打一位，程式分不出來，猜錯不會報錯。
+填 12.5 而不是 0.125，偏離會差一百倍。手填時要填比例；程式**不會替你 ÷100** ——
+12.5 到底是 12.5% 還是有人手滑多打一位，程式分不出來，猜錯不會報錯。
 
 ⚠️ 留空讀到 0，而 `配置` 用 `target > 0` 判斷「有沒有設目標」—— 所以某個
 區域／類型分組全部留空時，`目標%` / `偏離%` / `偏離金額` 三欄寫成空字串，
@@ -485,7 +477,7 @@ moments a false 「已記錄」 is most likely and most costly.
 ⚠️ **`noteLedgerWrite` must never become a blanket hook on spreadsheet writes.** `Logger` appends
 to `consolelog` constantly and `ChatBot` writes two `chat` rows per reply, so a global counter is
 always true — the guard would be off, and would look fixed. The call sites are deliberately the
-handful of real action boundaries (`AssetSchema.appendTrade`, the 標的/帳戶 master writes,
+handful of real action boundaries (`AssetSchema.appendTrade`, the 帳戶 master writes,
 and `voidTrade`'s 狀態).
 
 Forgetting a call site makes the guard *over*-fire: a successful write gets the banner anyway.
@@ -583,14 +575,32 @@ a row number). Miss one reader and that void comes back to life in exactly one n
 `GoogleSheet.getDividendHistory`, both `AssetImport` dedup loops (those pass
 `{includeVoid: true}` on purpose), `AssetMigrate`.
 
+### 標的退役：名稱只是顯示，分類住在持倉
+
+2026-10-08 拿掉 `標的` 分頁。它的十欄裡，系統真正靠的只有代號（各表的對應鍵）、
+區域／類型／目標配置%（`配置` 的分組與目標），其餘是顯示或沒人讀。現在：
+
+- **一切以代號對應。** 名稱是顯示用的文字，主人在持倉怎麼改都不影響記帳、重算、匯入。
+  統一用證交所簡稱（「富邦台50」），因為券商對帳單用的就是它。
+- **持倉的 名稱／區域／類型／目標配置% 由主人手填。** 持倉每次重算都整張重寫，所以
+  `Position.rebuild` 先依代號讀出這四欄、原樣寫回 —— 漏掉這一步，填的東西記一筆帳就
+  消失，而且不會報錯（`T20`）。持倉裡已有的代號即使交易還沒有它，也會保留那一列。
+- **`交易!名稱` 是記帳當下寫入的文字**，不再是 VLOOKUP。`AssetSchema.appendTrade` 沒收到
+  名稱時用 `AssetSchema.nameFor`：持倉的名稱 → 證交所簡稱 → 代號本身。
+- **市場寫死 TPE**，主人只投資台股上市。
+- `listInstruments` / `updateInstrument` 兩個工具一併拿掉。
+
+一次性遷移是 `AssetSchema.retireInstrumentsTab()`（DevTools 的 `retireInstrumentsTab()`）：
+把標的的分類搬進持倉、名稱統一成證交所簡稱、交易的名稱公式凍結成文字。⚠️ **必須在刪掉
+`標的` 之前跑** —— 先刪的話交易表每一列的名稱公式會立刻變空白。測試的夾具
+（`AssetMigrate`）也是先建出 `標的` 再走同一支遷移，所以遷移本身有被測到。
+
 ### 主檔改得動，帳本改不動
 
-`標的` / `帳戶` are **reference data referenced by string from immutable data**, so the rule
+`帳戶` is **reference data referenced by string from immutable data**, so the rule
 inverts: the ledger forbids updates and offers voiding; the masters have no "record another one"
 escape, which makes **update the only correction path** — and delete the dangerous one.
 
-- `交易!名稱` and `持倉!目標配置%` are VLOOKUPs into the masters. Adding a corrected row does
-  not retire the wrong one.
 - **Renaming an account is a two-table transaction.** `現金!交易淨流` matches by account *name*;
   change the master cell alone and that account's balance silently falls back to 期初 with no
   error. `updateAccount({newName})` rewrites every matching row in `交易` (voided ones included —
@@ -603,9 +613,9 @@ escape, which makes **update the only correction path** — and delete the dange
   new FX rate.
 - **代號 cannot be changed at all** — it is the join key shared by 交易 / 持倉 / 每日快照.
 
-⚠️ `recordTrade` 的自動登記只生得出**半個標的**：買進沒見過的代號時會補一列 `標的`，但
-`區域` / `類型` / `目標配置%` 全留空，而 `配置` 正是按 `區域` 與 `類型` 分組的。也就是說
-那個 C **保證**後面需要一次 `updateInstrument`；`listInstruments` 會直接點名缺哪一欄。
+A new 代號 can only enter through 買進 (or a broker import); `recordTrade` refuses any other
+action on a code 持倉 has never seen. The next rebuild grows its 持倉 row with 區域／類型／目標配置%
+blank, and the reply says so — `配置` groups by those columns, so they need filling by hand.
 
 ### 人設寫的是行為，排版放最後
 
@@ -843,7 +853,7 @@ timezone only adds a place for them to land one day off.
 and `GoogleSheet.getDashboard`.
 
 ⚠️ **`持倉` columns are referenced by letter from other tabs** — 指標's `=SUM(持倉!$I$2:$I)` (市值),
-and within 持倉 the 市值 / 目標配置% formulas. On 2026-10-08 the owner deleted seven unread columns
+and within 持倉 the 市值 formula. On 2026-10-08 the owner deleted seven unread columns
 (未實現損益／報酬率／淨成本／淨報酬率／佔股票%／佔總資產%／偏離) by hand, which moved 區域／類型／
 目標配置% from O/P/Q to J/K/L; 市值 stayed at I. Change the layout in `AssetSchema.TABS` and
 `Position.rebuild` together, then run the suite — `T47` derives every letter from the header and
@@ -989,10 +999,12 @@ recorded* for the same (date, code, action) and skip what is already covered, in
 their own row key (`stm:date:order:shares`, `imp:date:code:shares:net`). The two directions
 are symmetric; a test sends the same sale in both formats and asserts nothing is written twice.
 
-Broker statements use short names (富邦台50) where 標的 uses the full one (富邦台灣50).
-`NAME_FIXES` in `AssetImport.gs` maps the known variants — deliberately an explicit list rather
-than fuzzy matching, because guessing wrong files a trade against the wrong instrument. An
-unmatched name is reported and skipped, never guessed. `doPost` routes `message.type === 'document'` straight to `AssetImport.fromUpload()` —
+The statement has **no ticker column**, only 股名 — the one place in the system where a name
+is turned into a code. `AssetSchema.codeForName` looks it up in **TWSE's listed-securities list
+first** (`StockPrice.listedNames`, the same 證交所簡稱 the broker prints), and only falls back to
+持倉's names for what TWSE doesn't list (上櫃). Exactly one match or nothing — never fuzzy, since
+a wrong guess files the trade against the wrong instrument. A code 持倉 doesn't have yet is
+named in the reply so its classification gets filled in. `doPost` routes `message.type === 'document'` straight to `AssetImport.fromUpload()` —
 no ChatBot, no LLM. The file is already structured; handing it to a model only adds a place
 for it to go wrong.
 
@@ -1010,8 +1022,6 @@ for it to go wrong.
   (`imp:date:code:shares:net`) stored in 備註; rows whose key already exists are skipped and
   counted. That is what makes importing on receipt acceptable without a confirmation step.
 - Add `預覽` to the message caption to parse and summarise without writing.
-- Instruments are matched by 名稱 against the `標的` tab — the report has no ticker column. An
-  unknown name is reported and skipped, never guessed.
 
 `Telegram.fetchFileText()` does the two-step download (`getFile` → `/file/bot<token>/<path>`)
 and falls back from UTF-8 to Big5 when the Chinese headers do not decode. ⚠️ That download URL

@@ -139,5 +139,52 @@ var StockPrice = (() => {
     }
   };
 
+  /**
+   * 證交所上市證券的「代號 ↔ 簡稱」對照（openapi 的 STOCK_DAY_ALL，約 1,400 檔）。
+   *
+   * 2026-10-08 起名稱一律用這份簡稱（「富邦台50」不是「富邦台灣50」）：券商對帳單用的
+   * 就是它，CSV 匯入因此能直接對上，新標的也不必有人手打名稱。
+   *
+   * ⚠️ byName 的值是陣列。用名稱反查代號時**只接受剛好一檔**，對到零檔或多檔一律不猜 ——
+   *    猜錯會把交易記到別檔頭上，而且不會報錯。
+   * 上櫃（例如 00687B）不在這份名單裡。快取 6 小時；抓不到回 null，呼叫端自己退回。
+   *
+   * @returns {{byCode: Object<string,string>, byName: Object<string,Array<string>>}|null}
+   */
+  sp.listedNames = () => {
+    var KEY = 'twse_listed_names';
+    var pairs = null;
+    try {
+      var cached = CacheService.getScriptCache().get(KEY);
+      if (cached) pairs = JSON.parse(cached);
+    } catch (e) { /* 快取壞了就重抓 */ }
+
+    if (!pairs) {
+      try {
+        var resp = UrlFetchApp.fetch('https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL',
+          { muteHttpExceptions: true, headers: { 'Accept': 'application/json' } });
+        if (resp.getResponseCode() !== 200) {
+          Logger.warning('StockPrice.listedNames', 'HTTP ' + resp.getResponseCode(),
+            String(resp.getContentText()).slice(0, 200));
+          return null;
+        }
+        pairs = JSON.parse(resp.getContentText())
+          .filter(x => x && x.Code && x.Name)
+          .map(x => [String(x.Code).trim(), String(x.Name).trim()]);
+        try { CacheService.getScriptCache().put(KEY, JSON.stringify(pairs), 6 * 3600); } catch (e) {}
+      } catch (ex) {
+        Logger.error('StockPrice.listedNames', '抓證交所名單失敗', ex);
+        return null;
+      }
+    }
+
+    var out = { byCode: {}, byName: {} };
+    pairs.forEach(p => {
+      out.byCode[p[0]] = p[1];
+      (out.byName[p[1]] = out.byName[p[1]] || []).push(p[0]);
+    });
+    return out;
+  };
+
   return sp;
 })();

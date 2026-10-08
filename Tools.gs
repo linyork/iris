@@ -160,36 +160,6 @@ var Tools = (() => {
       parameters: { type: 'object', properties: {}, required: [] }
     },
     {
-      name: 'listInstruments',
-      description: '列出「標的」主檔：代號、名稱、市場、區域、類型、目標配置%、目前股數。' +
-        '和 getHoldings 不同 —— 這裡連已出清、以及登記了還沒買的標的都看得到，' +
-        '也會點名哪幾檔的區域／類型還沒填（沒填就不會進「配置」的分組統計）。',
-      parameters: { type: 'object', properties: {}, required: [] }
-    },
-    {
-      name: 'updateInstrument',
-      description: '修改「標的」主檔的欄位：名稱、市場、幣別、報價來源、區域、類型、目標配置%、狀態、備註。' +
-        '當主人說「00878 的類型是高股息」「把 0056 的目標配置設成 15%」時使用。' +
-        '⚠️ 代號不能改（它是各表共用的比對鍵）。' +
-        '⚠️ 目標配置% 一律填 0 到 1 的比例：15% 要填 0.15，填 15 會被擋下來。',
-      parameters: {
-        type: 'object',
-        properties: {
-          symbol:      { type: 'string', description: '要修改的標的代號（必填）' },
-          name:        { type: 'string', description: '名稱（可選）' },
-          market:      { type: 'string', description: '市場，例如 TPE / NASDAQ（可選）。只有 TPE 的市價有 TWSE 備援' },
-          currency:    { type: 'string', description: '三碼幣別（可選）' },
-          quoteSource: { type: 'string', description: '報價來源，例如 GOOGLEFINANCE（可選）' },
-          region:      { type: 'string', description: '區域，配置分組用，例如 台股／美股／全球（可選）' },
-          category:    { type: 'string', description: '類型，配置分組用，例如 高息／市值型／債券（可選）' },
-          target:      { type: 'number', description: '目標配置%，⚠️ 0..1 的比例，15% 填 0.15（可選）' },
-          status:      { type: 'string', description: '狀態，例如 持有中／已出清／觀察中（可選）' },
-          note:        { type: 'string', description: '備註（可選）' }
-        },
-        required: ['symbol']
-      }
-    },
-    {
       name: 'updateAccount',
       description: '修改帳戶主檔：改名、改類型／機構／幣別、停用或重新啟用。' +
         '當主人說「那個帳戶改叫 XXX」「郵局那個戶頭我關了」時使用。' +
@@ -305,13 +275,6 @@ var Tools = (() => {
 
         case 'listAccounts':
           return AssetTools.listAccounts();
-
-        case 'listInstruments':
-          return AssetTools.listInstruments(args);
-
-        case 'updateInstrument':
-          if (!args.symbol) return invalid('缺少必要參數：symbol。');
-          return AssetTools.updateInstrument(args);
 
         case 'updateAccount':
           if (!args.name) return invalid('缺少必要參數：name。');
