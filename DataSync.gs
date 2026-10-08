@@ -8,16 +8,17 @@
  * 加一檔 ETF 就整排右移，維護成本全花在對齊欄位上（見 git 歷史裡的
  * 「Daily Snapshot Column Contract」）。長表把那個問題整個消滅：
  *
- *     日期 | 類型 | 鍵 | 名稱 | 數量 | 單價 | 市值 | 幣別 | 狀態
+ *     日期 | 類型 | 鍵 | 單價 | 市值 | 狀態
  *
- * 一列一個項目，欄位永遠是這九個。新增標的、新增帳戶、賣光一檔，
- * 都只是列數變化，沒有任何欄位需要跟著移動。
+ * 一列一個項目。新增標的、賣光一檔，都只是列數變化，沒有欄位需要跟著移動。
+ * 讀寫一律依**欄名**（不靠欄位位置），主人在表上刪欄不會讓它寫錯位置。
  *
- * 寫入的內容（一天約 15~20 列）：
- *   合計 / 總資產、股票市值   ← 指標
- *   持股 / 每檔代號            ← 持倉（僅股數 > 0）
- *   現金 / 每個帳戶            ← 現金（台幣值）
- *   實體 / 黃金                ← 實體資產
+ * 寫入的內容（一天約 8 列）：
+ *   合計 / 總資產、股票市值   ← 指標（走勢、日週月漲跌、XIRR 開帳市值都讀這兩列）
+ *   持股 / 每檔代號            ← 持倉（僅股數 > 0）；只有「單價」被讀 —— 判斷「資料未更新」
+ *
+ * 2026-10-08 起不再寫「現金」「實體」列，也拿掉名稱／數量／幣別三欄：從來沒有讀者。
+ * 舊的現金／實體列還留在表上（歷史資料），讀的地方都只挑合計與持股，不受影響。
  */
 var DataSync = (() => {
   var ds = {};
@@ -61,8 +62,8 @@ var DataSync = (() => {
     };
 
     // ── 合計 ──
-    rows.push([dateStr, '合計', '總資產',   '', '', '', pick('總資產'),   'TWD', '']);
-    rows.push([dateStr, '合計', '股票市值', '', '', '', pick('股票市值'), 'TWD', '']);
+    rows.push({ 日期: dateStr, 類型: '合計', 鍵: '總資產',   市值: pick('總資產') });
+    rows.push({ 日期: dateStr, 類型: '合計', 鍵: '股票市值', 市值: pick('股票市值') });
 
     // ── 持股 ──
     AssetSchema.readObjects(ss.getSheetByName('持倉')).forEach(p => {
@@ -72,26 +73,9 @@ var DataSync = (() => {
       var price = _num(p['市價']);
       if (price <= 0) badCodes.push(code);
       prices[code] = price;
-      rows.push([dateStr, '持股', code, _str(p['名稱']), shares,
-                 price || '', _num(p['市值']) || '', 'TWD', '']);
+      rows.push({ 日期: dateStr, 類型: '持股', 鍵: code, 單價: price || '', 市值: _num(p['市值']) || '' });
     });
     var held = Object.keys(prices).length;
-
-    // ── 現金 ──
-    AssetSchema.readObjects(ss.getSheetByName('現金')).forEach(c => {
-      var label = _str(c['帳戶']);
-      if (!label) return;
-      // 記台幣值，跨帳戶才加得起來；原幣留在餘額欄，快照不重複
-      rows.push([dateStr, '現金', label, '', '', '', _num(c['台幣值']), 'TWD', '']);
-    });
-
-    // ── 實體資產 ──
-    var phys = AssetSchema.readObjects(ss.getSheetByName('實體資產'));
-    if (phys.length) {
-      rows.push([dateStr, '實體', '黃金', '',
-                 phys.reduce((s, r) => s + _num(r['數量']), 0), '',
-                 phys.reduce((s, r) => s + _num(r['市值']), 0), 'TWD', '']);
-    }
 
     return { rows: rows, prices: prices, badCodes: badCodes, held: held };
   };
@@ -120,20 +104,22 @@ var DataSync = (() => {
     var lastRow = sheet.getLastRow();
     if (lastRow < 2) return null;
     var span = Math.min(lastRow - 1, 200);         // 往回 200 列足夠涵蓋前幾天
-    var data = sheet.getRange(lastRow - span + 1, 1, span, 6).getValues();
+    var m = AssetSchema.headerMap(sheet);
+    var D = m['日期'], T = m['類型'], K = m['鍵'], P = m['單價'];
+    var data = sheet.getRange(lastRow - span + 1, 1, span, Math.max(sheet.getLastColumn(), 1)).getValues();
 
     var prevDate = null;
     for (var i = data.length - 1; i >= 0; i--) {
-      var d = _dateKey(data[i][0], tz);
+      var d = _dateKey(data[i][D], tz);
       if (d && d !== todayStr) { prevDate = d; break; }
     }
     if (!prevDate) return null;
 
     var out = {};
     data.forEach(r => {
-      if (_dateKey(r[0], tz) !== prevDate) return;
-      if (_str(r[1]) !== '持股') return;
-      out[_str(r[2])] = _num(r[5]);
+      if (_dateKey(r[D], tz) !== prevDate) return;
+      if (_str(r[T]) !== '持股') return;
+      out[_str(r[K])] = _num(r[P]);
     });
     return Object.keys(out).length ? out : null;
   };
@@ -142,7 +128,7 @@ var DataSync = (() => {
   var _removeDate = (sheet, dateStr, tz) => {
     var lastRow = sheet.getLastRow();
     if (lastRow < 2) return 0;
-    var dates = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    var dates = sheet.getRange(2, AssetSchema.headerMap(sheet)['日期'] + 1, lastRow - 1, 1).getValues();
 
     var first = -1, count = 0;
     for (var i = 0; i < dates.length; i++) {
@@ -196,7 +182,7 @@ var DataSync = (() => {
 
     var prevPrices = _previousPrices(sheet, dateStr, tz);
     var status = _decideStatus(now, built.prices, prevPrices, built.badCodes.length > 0);
-    built.rows.forEach(r => { r[8] = status; });
+    built.rows.forEach(r => { r['狀態'] = status; });
 
     var summary = {
       ok: true,
@@ -208,13 +194,22 @@ var DataSync = (() => {
     };
 
     if (options.dryRun) {
-      summary.preview = built.rows.map(r => r.slice(1, 4).filter(String).join('/') + '=' + r[6]).join(' | ');
+      summary.preview = built.rows.map(r => r['類型'] + '/' + r['鍵'] + '=' + r['市值']).join(' | ');
       return summary;
     }
 
     // 同日重跑覆寫：先刪掉當天的列再寫，不會長出兩份
     summary.replaced = _removeDate(sheet, dateStr, tz);
-    sheet.getRange(sheet.getLastRow() + 1, 1, built.rows.length, 9).setValues(built.rows);
+    // 依欄名寫：表上多一欄或少一欄都放對位置（標題列一定要有 TABS 定義的欄）
+    var hm = AssetSchema.headerMap(sheet);
+    var missing = AssetSchema.expected(SNAP).filter(h => hm[h] === undefined);
+    if (missing.length) {
+      Logger.error('DataSync.run', '「' + SNAP + '」缺少欄位', missing);
+      return { ok: false, reason: '每日快照缺少欄位：' + missing.join('、') };
+    }
+    var header = hm.__header;
+    var out = built.rows.map(o => header.map(h => (h && o[h] !== undefined) ? o[h] : ''));
+    sheet.getRange(sheet.getLastRow() + 1, 1, out.length, header.length).setValues(out);
 
     if (built.badCodes.length) {
       Logger.warning('DataSync.run', '部分持股抓不到市價', { codes: built.badCodes });

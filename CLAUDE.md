@@ -945,11 +945,20 @@ figures and breaks the ratio identity above.
 `setData()` writes one day of state into `每日快照` at 18:00 — a **long table**:
 
 ```
-日期 | 類型 | 鍵 | 名稱 | 數量 | 單價 | 市值 | 幣別 | 狀態
+日期 | 類型 | 鍵 | 單價 | 市值 | 狀態
 ```
 
-One row per item: 合計/總資產, 合計/股票市值, one 持股 row per held position, one
-現金 row per account, one 實體 row for gold. About 15–20 rows a day.
+One row per item: 合計/總資產, 合計/股票市值 (市值), and one 持股 row per held position
+(單價). About 8 rows a day. Each has exactly the readers it needs: 總資產 feeds the trend,
+day/week/month change and `getHistory`; 股票市值 is XIRR's opening value; the 持股 prices are
+compared with the previous day to detect 資料未更新.
+
+Until 2026-10-08 it also wrote one 現金 row per account, one 實體 row, and 名稱／數量／幣別
+columns — none of which anything ever read. Older 現金/實體 rows are still in the sheet as
+history; every reader filters on 類型 so they are inert. ⚠️ **Both the writer (`DataSync`) and
+the trend reader (`Snapshot._totalHistory`) locate columns by header name.** They used to be
+positional ("column 7 is 市值"), and the owner removes unread columns by hand; `T52` runs both
+against the old 9-column and the new 6-column header.
 
 **This shape is why the old column contract is gone.** The legacy `@所有股票紀錄` gave
 each holding its own column, so adding one ETF shifted every value one column right while

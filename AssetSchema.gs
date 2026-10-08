@@ -118,7 +118,8 @@ var AssetSchema = (() => {
       name: '每日快照',
       textColumns: ['鍵'],
       note: '每日 18:00 寫入的長表。一列一個項目，加減標的不用改結構。',
-      headers: ['日期', '類型', '鍵', '名稱', '數量', '單價', '市值', '幣別', '狀態']
+      // 2026-10-08 拿掉名稱／數量／幣別：只寫不讀。讀寫這張表一律依欄名。
+      headers: ['日期', '類型', '鍵', '單價', '市值', '狀態']
     },
     { name: 'consolelog',        headers: ['timestamp', 'level', 'tag', 'message', 'details'] },
     { name: 'chat',              headers: ['userId', 'role', 'message', 'timestamp'] }

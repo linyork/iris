@@ -491,7 +491,7 @@ check('每日快照 = 950 天 × 18 列', mig.counts['每日快照'] === 950 * 1
 {
   const snap = target.getSheetByName('每日快照');
   const hdr = snap.rows[0].filter(v => v !== '');
-  check('快照是長表 9 欄', hdr.length === 9 && hdr[1] === '類型', hdr.join('|'));
+  check('快照是長表 6 欄（日期 類型 鍵 單價 市值 狀態）', hdr.join('|') === '日期|類型|鍵|單價|市值|狀態', hdr.join('|'));
   const rows = AssetSchema.readObjects(snap);
   const last = rows.filter(x => x['日期'] === '2026-08-02');
   const total = last.find(x => x['鍵'] === '總資產');
@@ -986,9 +986,10 @@ load('DataSync.gs');
   check('持股列只記在持部位',
     written.filter(x => x['類型'] === '持股').length === heldCount,
     written.filter(x => x['類型'] === '持股').length + ' vs ' + heldCount);
-  check('現金列涵蓋所有帳戶',
-    written.filter(x => x['類型'] === '現金').length ===
-      AssetSchema.readObjects(target.getSheetByName('現金')).length, '');
+  // 2026-10-08 起不再寫現金／實體列：從來沒有讀者
+  check('新的快照不寫現金與實體列',
+    written.every(x => x['類型'] === '合計' || x['類型'] === '持股'),
+    written.map(x => x['類型']).filter((v, i, a) => a.indexOf(v) === i).join(','));
   // 前面測試加過一檔沒有報價的合成標的，所以這裡本來就該是「報價異常」——
   // 抓不到價的那檔要被點名，其餘照常寫入，而不是整天不寫。
   check('有持股抓不到市價時標記報價異常',
@@ -1571,7 +1572,7 @@ console.log('\nT25  XIRR 錨點與殖利率');
   // 只留一列：早於錨定日 120 天的股票市值。writeBlock 會把既有列清掉，
   // 所以 _openingValue 只會挑到它 —— 跨度 120 天 > 90 天門檻，該出數字了
   AssetSchema.writeBlock(snapSheet,
-    [[ymd(day(-120)), '合計', '股票市值', '', '', '', OPEN, 'TWD', '交易日']], 9);
+    [[ymd(day(-120)), '合計', '股票市值', '', OPEN, '交易日']], 6);
 
   const open = Position._openingValue(target, anchor);
   check('_openingValue 取到早於錨定日的那一天', open !== null && num(open.value) === OPEN,
@@ -2307,7 +2308,9 @@ console.log('\nT41  近一週是按日期找的，不是往回數幾列');
   // 往回數列的話「近一月」會落在第 1 筆之外而回 null；按日期找則找得到。
   const mk = (date, total, status) => {
     const row = new Array(hdr.length).fill('');
-    row[0] = date; row[1] = '合計'; row[2] = '總資產'; row[6] = total; row[8] = status;
+    const at = (h) => hdr.indexOf(h);
+    row[at('日期')] = date; row[at('類型')] = '合計'; row[at('鍵')] = '總資產';
+    row[at('市值')] = total; row[at('狀態')] = status;
     return row;
   };
   snapSheet.rows = [hdr,
@@ -2678,6 +2681,36 @@ console.log('\nT51  交易表刪欄');
   AssetTools.voidTrade({ row: row, reason: 'T51' });
   Position.rebuild();
   check('作廢那一列之後餘額回到原樣', balances() === before);
+}
+
+// ─── T52  每日快照依欄名讀寫：9 欄（刪欄前）與 6 欄（刪欄後）都對 ───────
+// 2026-10-08 程式先上線、主人再手動刪掉名稱／數量／幣別。以前寫入照位置（9 欄）、
+// 讀走勢照位置（第 7 欄是市值），刪欄後兩邊都會靜默錯位。
+console.log('\nT52  每日快照依欄名讀寫');
+{
+  const snap = target.getSheetByName('每日快照');
+  const saved = snap.rows.map(r => r.slice());
+  const OLD = ['日期', '類型', '鍵', '名稱', '數量', '單價', '市值', '幣別', '狀態'];
+  const NEW = AssetSchema.expected('每日快照');
+  Position.rebuild();
+  const total = num((AssetSchema.readObjects(target.getSheetByName('指標')).find(x => x['指標'] === '總資產') || {})['數值']);
+
+  [['9 欄（刪欄前）', OLD], ['6 欄（刪欄後）', NEW]].forEach(([label, H]) => {
+    snap.rows = [H.slice()];
+    EVAL.reset();
+    const r = DataSync.run();
+    const rows = AssetSchema.readObjects(snap);
+    const tot = rows.find(x => x['類型'] === '合計' && x['鍵'] === '總資產') || {};
+    check(label + '：寫入成功', r.ok === true, JSON.stringify(r).slice(0, 100));
+    check(label + '：總資產落在「市值」欄', near(num(tot['市值']), total, 2), JSON.stringify(tot));
+    check(label + '：只寫合計與持股', rows.every(x => x['類型'] === '合計' || x['類型'] === '持股'));
+    const series = Snapshot.totalSeries(30, target);
+    check(label + '：走勢讀得到今天的總資產', series.length > 0 && near(series[series.length - 1].total, total, 2),
+      JSON.stringify(series.slice(-1)));
+  });
+
+  snap.rows = saved;
+  EVAL.reset();
 }
 
 //   REALIZED_CSV=path/to.csv node test_asset.cjs

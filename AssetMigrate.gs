@@ -283,7 +283,7 @@ var AssetMigrate = (() => {
     // ── 每日快照 ──
     if (!options.skipSnapshot) {
       var snapRows = m._buildSnapshotRows(legacy, tz);
-      _replaceByStatus(ss.getSheetByName('每日快照'), snapRows, 9, '遷移');
+      _replaceByStatus(ss.getSheetByName('每日快照'), snapRows, 6, '遷移');
       counts['每日快照'] = snapRows.length;
     } else {
       counts['每日快照'] = '略過';
@@ -330,20 +330,22 @@ var AssetMigrate = (() => {
       var dateStr = d instanceof Date ? Utilities.formatDate(d, tz, 'yyyy-MM-dd') : _str(d);
       if (!dateStr) return;
 
-      rows.push([dateStr, '合計', '總資產', '', '', '', _num(r[idxTotal]), 'TWD', '遷移']);
-      rows.push([dateStr, '合計', '股票市值', '', '', '', _num(r[idxStock]), 'TWD', '遷移']);
+      // 欄序：日期 類型 鍵 單價 市值 狀態
+      rows.push([dateStr, '合計', '總資產', '', _num(r[idxTotal]), '遷移']);
+      rows.push([dateStr, '合計', '股票市值', '', _num(r[idxStock]), '遷移']);
 
       stockCols.forEach(sc => {
         var price = _num(r[sc.col]);
         if (!price) return;
-        rows.push([dateStr, '持股', sc.code, sc.name, '', price, '', 'TWD', '遷移']);
+        rows.push([dateStr, '持股', sc.code, price, '', '遷移']);
       });
 
       cashCols.forEach(cc => {
         var v = _num(r[cc.col]);
         if (!v) return;
         var kind = /黃金|金塊/.test(cc.name) ? '實體' : '現金';
-        rows.push([dateStr, kind, cc.name, '', '', '', v, 'TWD', '遷移']);
+        // 舊表有現金／黃金的歷史，照樣搬過來（線上那份也還留著）；新的快照不再寫這兩種
+        rows.push([dateStr, kind, cc.name, '', v, '遷移']);
       });
     });
 

@@ -39,7 +39,8 @@ var Snapshot = (() => {
 
   /**
    * 每日快照裡的「總資產」逐日序列（由舊到新）
-   * 長表結構：日期 | 類型 | 鍵 | 名稱 | 數量 | 單價 | 市值 | 幣別 | 狀態
+   * 長表：日期 | 類型 | 鍵 | 單價 | 市值 | 狀態。欄位依**標題列的名稱**找，不靠位置 ——
+   * 2026-10-08 主人手動刪掉名稱／數量／幣別三欄，寫死欄號的話市值會讀到隔壁欄。
    */
   var _totalHistory = (ss, limit) => {
     var sheet = ss.getSheetByName('每日快照');
@@ -47,21 +48,28 @@ var Snapshot = (() => {
     var lastRow = sheet.getLastRow();
     if (lastRow < 2) return [];
 
-    // 一天 18 列左右，往回抓足夠的量就好，不要整張讀
+    var m = AssetSchema.headerMap(sheet);
+    var D = m['日期'], T = m['類型'], K = m['鍵'], V = m['市值'], S = m['狀態'];
+    if ([D, T, K, V].some(i => i === undefined)) {
+      Logger.warning('Snapshot._totalHistory', '每日快照缺少必要欄位');
+      return [];
+    }
+
+    // 一天十幾列（舊資料 18 列），往回抓足夠的量就好，不要整張讀
     var span = Math.min(lastRow - 1, (limit || 40) * 40);
     var startRow = Math.max(2, lastRow - span + 1);
-    var data = sheet.getRange(startRow, 1, lastRow - startRow + 1, 9).getValues();
+    var data = sheet.getRange(startRow, 1, lastRow - startRow + 1, Math.max(sheet.getLastColumn(), 1)).getValues();
 
     return data
-      .filter(r => r[0] && _str(r[1]) === '合計' && _str(r[2]) === '總資產')
+      .filter(r => r[D] && _str(r[T]) === '合計' && _str(r[K]) === '總資產')
       .map(r => {
         var o = {
-          date:  r[0] instanceof Date ? _ymd(r[0]) : _str(r[0]),
-          total: _num(r[6])
+          date:  r[D] instanceof Date ? _ymd(r[D]) : _str(r[D]),
+          total: _num(r[V])
         };
         // 狀態只在非正常交易日時帶出（休市／資料未更新／報價異常）。
         // 一年 365 個 "交易日" 字串會吃掉 Dashboard 的 90KB 快取額度。
-        var st = _str(r[8]);
+        var st = S === undefined ? '' : _str(r[S]);
         if (st && st !== '交易日') o.status = st;
         return o;
       })
