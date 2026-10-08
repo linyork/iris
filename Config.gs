@@ -78,7 +78,7 @@ var Config = (() => {
     // ─── NVIDIA ───────────────────────────────────────────────
     get NVIDIA_API_KEY() { return scriptProperties.getProperty(ENV_KEYS.NVIDIA_KEY); },
     NVIDIA_API_BASE:     'https://integrate.api.nvidia.com/v1',
-    NVIDIA_DEFAULT_MODEL: 'moonshotai/kimi-k3',
+    NVIDIA_DEFAULT_MODEL: 'google/gemma-4-31b-it',
 
     // 可用性保底（N-1）：主模型失敗（404/410 下架、503/504/529 過載、重試耗盡回 null）時，
     // AIServiceFactory 會改用這顆重試一次。
@@ -88,11 +88,28 @@ var Config = (() => {
     //    NvidiaService 有專屬分支，換掉這顆要一併處理那裡。
     // ⚠️ 備援不會自己報平安：換主模型時、或發現排程報告失敗時，
     //    要順手確認備援還在目錄上（用 find-nim-model skill）。
+    // ⚠️ 2026-10-08 實測它並不可靠：忠實轉述把總損益算成 63,000（正解 15,000），
+    //    寫入意圖 4/6（台幣戶校正叫成 listAccounts／updateAccount）。還在目錄上、
+    //    還接得住，但只是「比沒有好」——替代品待找（見 TODO.md）。
     AI_FALLBACK_ENABLED:   true,
     NVIDIA_FALLBACK_MODEL: 'openai/gpt-oss-20b',
 
-    // 全檔次使用 Kimi K3（moonshotai/kimi-k3，原生 Function Calling、含繁中）。
+    // 全檔次使用 Gemma 4 31B（google/gemma-4-31b-it，非思考模型、原生 Function Calling、含繁中）。
     //
+    // 2026-10-08 換掉 kimi-k3：10/5 它對四次「把某帳戶調成 X」都沒叫工具，照
+    // setCashBalance 的輸出格式編出「已校正（第 98 列）…」，另有兩次只吐 `!!!!!!!!`。
+    // find-nim-model 加了第五關 testNimWriteIntent（真的 systemContext + 全部工具 +
+    // 一段「看起來沒叫工具就回了已記錄」的歷史），kimi-k3 0/6、拿掉歷史也只有 2/6，
+    // 還會吐 `<|open|>tools…` 這種亂碼。gemma-4-31b-it 是唯一全過的：寫入意圖有無歷史
+    // 都 6/6、日幣不換算成台幣、忠實轉述 2/2 算對。nemotron-3-super／ultra 寫入也 6/6，
+    // 但推理關不掉，在 512 token 預算內吐不出正文或把英文推理當正文。（n=2，見 DevTools）
+    //
+    // gemma 沒有思考開關可送，也不需要：NvidiaService 沒有它的分支，什麼都不加；
+    // 工具呼叫時不送 tool_choice（既有的 gemma 例外，實測就是這樣過關的）。
+    // 所以 enableThinking 對它沒有作用，三個 tier 只差在字數預算 —— 早報／週報／月報
+    // 不再有推理這一步，SMART 不必再為 reasoning 預留大預算。
+    //
+    // ── 以下是 kimi-k3 上任時（2026-09-24）的紀錄 ──
     // ⚠️ `deepseek-ai/deepseek-v4-flash-0731` 已於 2026-09-24 從 NIM 目錄消失（下架，
     //    不是過載 —— 同代的 `deepseek-ai/deepseek-v4.1-flash` 單獨測也整整 302s 504，
     //    不是候選）。`find-nim-model` 流程重新掃過一輪：同批一起下架的還有
@@ -111,15 +128,19 @@ var Config = (() => {
     // 1.0 / 0.95 是 NVIDIA 官方範例**針對 deepseek-v4-flash** 的建議組合，沒有對應
     // 給 kimi 的官方數字，硬套舊模型的建議值沒有依據。
     //
-    // enableThinking 依「使用者是否在等」分流：
-    //   FAST  → ChatBot ReAct 迴圈，使用者在等 → 關思考求快
-    //   SMART → 早報／週報／月報、顧問檢查，背景排程 → 開思考求質
-    //   LITE  → 目前無呼叫端，比照 FAST
-    // 思考開啟時 reasoning 會佔用 max_tokens，故 SMART 的預算較寬。
+    // 三個 tier 的用途：
+    //   FAST  → ChatBot ReAct 迴圈，使用者在等
+    //   SMART → 早報／週報／月報，背景排程
+    //   LITE  → 目前無呼叫端
+    // enableThinking 仍照「使用者是否在等」填：gemma 不吃這個旗標，但備援 gpt-oss
+    // 吃（決定 reasoning_effort low／high），所以這個欄位對備援路徑仍有意義。
+    // ⚠️ 備援沿用同一個 tier 的 maxOutputTokens（AIServiceFactory 只換 model）。
+    //    SMART 備援是 reasoning_effort=high，推理會吃預算，所以 SMART 給 8192，
+    //    不是 gemma 自己需要的量 —— 縮回去的話備援接手早報時正文會被截掉。
     NVIDIA_MODELS: {
-      LITE:  { model: 'moonshotai/kimi-k3', maxOutputTokens: 3072,  enableThinking: false },
-      FAST:  { model: 'moonshotai/kimi-k3', maxOutputTokens: 4096,  enableThinking: false },
-      SMART: { model: 'moonshotai/kimi-k3', maxOutputTokens: 12288, enableThinking: true  }
+      LITE:  { model: 'google/gemma-4-31b-it', maxOutputTokens: 2048, enableThinking: false },
+      FAST:  { model: 'google/gemma-4-31b-it', maxOutputTokens: 4096, enableThinking: false },
+      SMART: { model: 'google/gemma-4-31b-it', maxOutputTokens: 8192, enableThinking: true  }
     },
 
     // ─── 對話管理 ─────────────────────────────────────────────

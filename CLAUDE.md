@@ -96,9 +96,9 @@ renaming or relocating them fails silently:
 5. `GoogleSheet.gs` — System tabs (chat / log) plus the formatting layer for asset queries, which read through `Snapshot`. Single spreadsheet instance cached per execution.
 
 ### AI Provider Switching
-Switch provider with the Script Property `AI_PROVIDER` (`GEMINI` / `NVIDIA`). ⚠️ **Unset means NVIDIA**, not Gemini — that is what was live on 2026-10-08 when the setting moved out of the old `env` tab, and defaulting to anything else would silently swap the model before the property was filled in (`T45`). Takes effect on the next execution, no redeploy. Model tiers (`LITE`/`FAST`/`SMART`) are defined in `Config.gs` for both providers. Current NVIDIA model: `moonshotai/kimi-k3` for all tiers (native function calling, clean thinking on/off via `chat_template_kwargs.thinking`, no official temperature/top_p guidance so those are left unset). ⚠️ `deepseek-ai/deepseek-v4-flash-0731` (the previous default) **disappeared from `/v1/models` on 2026-09-24 — delisted, not overloaded** — see [下架的症狀是「講話變笨」](#下架的症狀是講話變笨).
+Switch provider with the Script Property `AI_PROVIDER` (`GEMINI` / `NVIDIA`). ⚠️ **Unset means NVIDIA**, not Gemini — that is what was live on 2026-10-08 when the setting moved out of the old `env` tab, and defaulting to anything else would silently swap the model before the property was filled in (`T45`). Takes effect on the next execution, no redeploy. Model tiers (`LITE`/`FAST`/`SMART`) are defined in `Config.gs` for both providers. Current NVIDIA model: `google/gemma-4-31b-it` for all tiers (non-thinking, native function calling). It replaced `moonshotai/kimi-k3` on 2026-10-08 — see [模型不叫工具也是一種下架](#模型不叫工具也是一種下架). Before that, `deepseek-ai/deepseek-v4-flash-0731` **disappeared from `/v1/models` on 2026-09-24 — delisted, not overloaded** — see [下架的症狀是「講話變笨」](#下架的症狀是講話變笨).
 
-**Thinking is controllable on this model, and the tiers use it as the fast/quality dial:**
+**Gemma has no thinking step, so `enableThinking` does nothing for the primary.** The tiers still carry it because the fallback (`gpt-oss-20b`) reads it as `reasoning_effort` low/high:
 
 | Tier | Used by | `enableThinking` |
 |---|---|---|
@@ -106,7 +106,7 @@ Switch provider with the Script Property `AI_PROVIDER` (`GEMINI` / `NVIDIA`). �
 | `SMART` | daily/weekly/monthly reports — scheduled background | `true` |
 | `LITE` | (no caller yet) | `false` |
 
-Control goes out as `chat_template_kwargs: {thinking}` from the `moonshotai/kimi` branch in `NvidiaService.gs` — same shape as the retired `deepseek-ai/deepseek-v4` branch, verified 2026-09-24 (`thinking: false` takes reasoning length to zero cleanly). Reasoning text comes back in `reasoning_content` (separated by `AIAdapter.fromOpenAIResponse`) and consumes the `max_tokens` budget, which is why `SMART` gets a much larger budget than `FAST`.
+`NvidiaService.gs` has no gemma branch on purpose — nothing to switch — and gemma requests omit `tool_choice` (an older exception that is exactly how it passed the tests). ⚠️ **The fallback inherits the tier's `maxOutputTokens`** (`AIServiceFactory` only swaps the model), and `SMART` fallback runs with high reasoning, which consumes the budget — that is why `SMART` is 8192 rather than what gemma itself needs.
 
 ⚠️ **Every model family shapes that switch differently — NIM has no common flag.** `NvidiaService.gs`
 branches per family: kimi and deepseek use `chat_template_kwargs.thinking`, glm uses
@@ -727,6 +727,25 @@ written it would have made the model ignore a correct number sitting in front of
 obey. The ban was always about quoting *stale numbers from conversation history*; the rule now
 names the two acceptable sources (this block, and tool returns) and says which questions each
 answers.
+
+### 模型不叫工具也是一種下架
+
+2026-10-05 `kimi-k3` 還在目錄上、回應正常、沒有任何錯誤 —— 但主人四次要它校正帳戶餘額，
+四次都 `toolCallCount: 0`，照 `setCashBalance` 的輸出格式編出「已校正（第 98 列）…」，
+另有兩次只回 `!!!!!!!!`。帳本一個字沒動。對記帳機器人來說，這跟下架一樣嚴重，而且更難發現。
+
+`find-nim-model` 原本四關（可用性、單一工具的 function calling、思考開關、忠實轉述）
+**全都測不出這件事** —— 它們給一個工具、一句乾淨的指令。所以加了第五關
+`testNimWriteIntent`：真的 `systemContext`、全部工具定義、加一段「看起來沒叫工具就回了
+已記錄」的歷史，每個案例跑兩次。kimi-k3 在這關 0/6；換上的 `gemma-4-31b-it` 有無歷史都 6/6。
+
+⚠️ **歷史確實會帶壞模型，但不是主因。** `chat` 只存 assistant 的最終文字，所以上一次真的記帳時
+工具回傳的「已記錄第 97 列：…」，在下一輪看起來就是「Iris 直接回了這句」。拿掉歷史後 kimi-k3
+從 0/6 升到 2/6 —— 有影響，但它本身就壞了。gemma 不受影響，所以這次沒有動歷史的存法；
+下次換模型時這一關要繼續帶著歷史跑。
+
+⚠️ **備援 `gpt-oss-20b` 同一輪也沒過乾淨**：忠實轉述把總損益算成 63,000（正解 15,000），
+寫入意圖 4/6。它還接得住主模型失敗，但接手時的品質沒有保證 —— 替代品見 TODO.md。
 
 ### 下架的症狀是「講話變笨」
 

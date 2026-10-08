@@ -5,7 +5,8 @@
  * 格式轉換由 AIAdapter 負責，此層純 I/O。
  *
  * 思考模式依模型廠商分流。**NIM 沒有統一開關，每家形狀都不一樣**：
- *   moonshotai/kimi*         → chat_template_kwargs.{thinking(bool)}（現役預設，2026-09-24 起）
+ *   google/gemma*            → 非思考模型，什麼都不送（現役預設，2026-10-08 起）；帶工具時也不送 tool_choice
+ *   moonshotai/kimi*         → chat_template_kwargs.{thinking(bool)}（2026-09-24～10-08 的主模型，已退役：會不叫工具直接編「已記錄」）
  *   deepseek-ai/deepseek-v4* → chat_template_kwargs.{thinking(bool)[, reasoning_effort]}（已退役，保留分支備查——同家族日後可能再上架）
  *   z-ai/glm*                → chat_template_kwargs.{enable_thinking, clear_thinking}（實測只降低推理量，關不乾淨，見 Config.gs NVIDIA_MODELS 註解）
  *   openai/gpt-oss*          → **top-level** reasoning_effort（現役備援）

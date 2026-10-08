@@ -18,7 +18,7 @@
 ---
 
 Iris 是一個建構在 **Google Apps Script (GAS)** 上的私人資產管理助理，透過 **LINE 或 Telegram** 與使用者互動。
-所有資料以單一 Google Sheet 為唯一資料庫，AI 推論支援 **Gemini** 與 **NVIDIA NIM (Kimi K3)** 雙引擎熱切換，
+所有資料以單一 Google Sheet 為唯一資料庫，AI 推論支援 **Gemini** 與 **NVIDIA NIM (Gemma 4 31B)** 雙引擎熱切換，
 具備 ReAct 工具呼叫（查資產、記帳）、每日／每週／每月報告、盤中異動警報，
 以及一個唯讀的網頁資產儀表板。
 
