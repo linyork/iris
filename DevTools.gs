@@ -27,9 +27,7 @@ function listTriggers() {
  * - 列印環境變數狀態
  */
 function setup() {
-  // advice_log 不在這裡：AdviceLog 找不到就自己建（見那裡的註解），
-  // 列進來只會在第一次記建議之前一直顯示「缺少工作表」的假警報。
-  var requiredSheets = ['env', 'consolelog', 'chat', 'short_term_memory', 'knowledge', 'alert_log'];
+  var requiredSheets = ['env', 'consolelog', 'chat', 'short_term_memory', 'knowledge'];
   var ss = SpreadsheetApp.openById(Config.SHEET_ID);
 
   requiredSheets.forEach(name => {
@@ -153,10 +151,7 @@ function testAdvisorCheck() {
     console.log('\n【決策清單】共 ' + decisions.length + ' 條');
     decisions.forEach((d, i) => console.log((i + 1) + '. [' + d.tags + '] ' + d.content));
 
-    var recentAlerts = AlertLog.formatForPrompt(7);
-    console.log('\n【最近通知】\n' + recentAlerts);
-
-    var llmResult = AdvisorCheck._askLLM(snapshot, decisions, recentAlerts, 'manual-test');
+    var llmResult = AdvisorCheck._askLLM(snapshot, decisions, 'manual-test');
     console.log('\n【LLM 判斷】');
     console.log(JSON.stringify(llmResult, null, 2));
 

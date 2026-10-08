@@ -34,17 +34,7 @@ var ChatBot = (() => {
       // 只讀三張表、不打外部 API，所以每則訊息都付得起這個成本。
       var factsBlock = Facts.build();
 
-      // 先前給過的建議。「後來如何」是現算的（拿當時的總資產跟現在比），所以要有
-      // 現在的總資產 —— Facts 已經讀過一次，這裡再讀一次是浪費，直接從快照層拿。
-      var adviceBlock = '';
-      try {
-        var nowTotals = Snapshot._totals(Snapshot._open());
-        adviceBlock = AdviceLog.formatForPrompt(30, nowTotals ? nowTotals.today : 0, 5);
-      } catch (e) {
-        Logger.warning('ChatBot.reply', '讀先前建議失敗（已略過）', e.message);
-      }
-
-      // ⚠️ 這行一定要在上面兩個區塊**算完之後**。原本它排在前面，而 `var` 會提升宣告
+      // ⚠️ 這行一定要在上面的區塊**算完之後**。原本它排在前面，而 `var` 會提升宣告
       //    卻不提升賦值 —— 於是它讀到的永遠是 undefined，log 每一則都寫
       //    「無（讀不到或出錯）」，不管 Facts 實際上跑得多好。
       //    2026-08-09 就是這樣讓人以為 Facts 壞了，實際上它一直是對的。
@@ -54,8 +44,7 @@ var ChatBot = (() => {
         knowledge: (relevantKnowledge && !/沒有找到|尚無資料/.test(relevantKnowledge))
                    ? relevantKnowledge.slice(0, 60) + '...' : '無相關知識',
         // 事實區塊會進每一則 prompt，長度失控是最先要看見的訊號
-        facts:     factsBlock ? factsBlock.length + ' 字' : '無（讀不到或出錯）',
-        advice:    adviceBlock ? adviceBlock.length + ' 字' : '無先前建議'
+        facts:     factsBlock ? factsBlock.length + ' 字' : '無（讀不到或出錯）'
       });
 
       var systemContext = Prompt.systemContext({
@@ -63,8 +52,7 @@ var ChatBot = (() => {
         user:      event.isMaster ? '主人 (Master)' : '訪客 (Guest)',
         knowledge: relevantKnowledge,
         stm:       stm,
-        facts:     factsBlock,
-        advice:    adviceBlock
+        facts:     factsBlock
       });
 
       systemContext +=

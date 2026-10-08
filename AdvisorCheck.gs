@@ -1,12 +1,11 @@
 /**
  * AdvisorCheck
  * @description 主動顧問感知層：依 Trigger 執行，
- * 把 Snapshot + 決策 + 通知史餵給 LLM，由 LLM 判斷是否主動推送通知。
+ * 把 Snapshot + 決策餵給 LLM，由 LLM 判斷是否主動推送通知。
  *
  * 設計理念：
  *   - 程式碼負責「備料」與「短路檢查」
  *   - LLM 負責「判斷與表達」
- *   - alert_log 負責「去重與可追溯」
  */
 var AdvisorCheck = (() => {
   var ac = {};
@@ -42,23 +41,20 @@ var AdvisorCheck = (() => {
       // 3. 讀全部決策（不用 keyword 搜尋，直接全餵）
       var decisions = ac._loadDecisions();
 
-      // 4. 讀最近通知史（去重用）
-      var recentAlerts = AlertLog.formatForPrompt(7);
-
-      // 5. 組 prompt 呼叫 LLM
-      var llmResult = ac._askLLM(snapshot, decisions, recentAlerts, triggerSource);
+      // 4. 組 prompt 呼叫 LLM
+      var llmResult = ac._askLLM(snapshot, decisions, triggerSource);
       if (!llmResult) {
         Logger.info('AdvisorCheck.run', 'LLM 無回應或解析失敗');
         return;
       }
 
-      // 6. LLM 判斷無事
+      // 5. LLM 判斷無事
       if (!llmResult.shouldAlert) {
         Logger.info('AdvisorCheck.run', 'LLM 判定無需通知', { reason: llmResult.reason });
         return;
       }
 
-      // 7. 推送
+      // 6. 推送
       var message = llmResult.message;
       if (!message) {
         Logger.warning('AdvisorCheck.run', 'LLM 判斷要通知但無訊息內容');
@@ -66,20 +62,6 @@ var AdvisorCheck = (() => {
       }
 
       MessagingServiceFactory.pushToMasters(message);
-
-      // 8. 記錄到 alert_log（去重用）與 advice_log（回饋閉環用）
-      var summary = ac._summarizeSnapshot(snapshot);
-      AlertLog.record(triggerSource, llmResult.decisionRef || '', message, summary);
-
-      // 兩張表用途不同，不要合併：alert_log 記「推播過什麼」給去重看，保留 60 天；
-      // advice_log 記「我建議了什麼」給日後的自己看，保留 180 天，而且會被注入對話。
-      // 主動推播就是 Iris 講得最篤定的時候，不記下來的話它下次會忘記自己講過。
-      AdviceLog.record({
-        source: 'advisor',
-        topic:  llmResult.decisionRef || triggerSource,
-        advice: message.slice(0, 200),
-        totalAssets: (snapshot.totals || {}).today
-      });
 
       Logger.info('AdvisorCheck.run', '通知已發送', {
         source: triggerSource,
@@ -124,7 +106,7 @@ var AdvisorCheck = (() => {
   /**
    * 組 prompt 呼叫 LLM，期待回傳 JSON
    */
-  ac._askLLM = (snapshot, decisions, recentAlerts, triggerSource) => {
+  ac._askLLM = (snapshot, decisions, triggerSource) => {
     var systemPrompt = Prompt.ADVISOR_PROMPT || '';
 
     var userPrompt =
@@ -136,7 +118,6 @@ var AdvisorCheck = (() => {
         ? '（尚無記錄）'
         : decisions.map((d, i) => (i + 1) + '. [' + d.tags + '] ' + d.content).join('\n')
       ) + '\n\n' +
-      '【最近 7 天已通知過的內容】\n' + recentAlerts + '\n\n' +
       '請依系統提示詞判斷，並回傳純 JSON：\n' +
       '{"shouldAlert": true/false, "decisionRef": "對應的決策標籤或空字串", ' +
       '"message": "通知訊息全文（若不通知則空）", "reason": "判斷理由（簡短，僅供日誌）"}';
@@ -182,28 +163,9 @@ var AdvisorCheck = (() => {
     }
   };
 
-  /**
-   * 為 alert_log 製作關鍵指標摘要（用於日後追溯為什麼通知）
-   */
-  ac._summarizeSnapshot = (s) => {
-    var parts = [];
-    if (s.totals) {
-      parts.push('總資產 ' + s.totals.today +
-        (s.totals.dayChangePct !== null ? ' (日 ' + (s.totals.dayChangePct * 100).toFixed(2) + '%)' : '')
-      );
-    }
-    var movers = (s.holdings || [])
-      .filter(h => h.dayChangePct !== null && Math.abs(h.dayChangePct) >= 0.02)
-      .slice(0, 3)
-      .map(h => h.code + ' ' + (h.dayChangePct * 100).toFixed(2) + '%');
-    if (movers.length > 0) parts.push('異動: ' + movers.join(', '));
-    return parts.join(' | ');
-  };
-
   // ─── Trigger 入口（GAS Time-based Trigger 直接呼叫）────────
 
-  // ⚠️ 這個字串會原封不動寫進 alert_log 的 trigger_source 與 advice_log 的 topic，
-  //    所以它要對得上 Cron.SCHEDULE 實際排的時間（19:00），不是隨手寫的標籤。
+  // 這個字串會進 prompt 的【觸發時機】，要對得上 Cron.SCHEDULE 實際排的時間（19:00）。
   ac.runEvening = () => ac.run('19:00');
 
   return ac;

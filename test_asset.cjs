@@ -88,7 +88,7 @@ class Sheet {
   }
   /**
    * 資產層一律走 getRange().setValues()，所以這個 mock 本來沒有 appendRow ——
-   * 但系統層（AlertLog / AdviceLog / GoogleSheet 的記憶與日誌）用的是它。
+   * 但系統層（GoogleSheet 的記憶與日誌）用的是它。
    * 少了它的症狀是那些模組**安靜地回失敗**：它們都包在 try/catch 裡，
    * 例外被吞掉，測試只看到「寫入回傳 false」而看不出原因。
    */
@@ -445,7 +445,7 @@ console.log('\nT3  建表');
 const target = SpreadsheetApp.openById(AssetSchema.SHEET_ID);
 target.sheets.push(new Sheet('工作表1'));          // 模擬新試算表的預設分頁
 let r3 = AssetSchema.build();
-check('建立 15 個分頁', r3.created.length === 15, r3.created.length);
+check('建立 14 個分頁', r3.created.length === 14, r3.created.length);
 check('預設的「工作表1」被移除', !target.getSheetByName('工作表1'));
 check('交易表標題正確', target.getSheetByName('交易').raw(1, 2) === '動作', target.getSheetByName('交易').raw(1, 2));
 // 公式只填到有資料的最後一列。空表就該是空的 —— 預灌公式會讓 getLastRow()
@@ -2056,69 +2056,6 @@ console.log('\nT31  工具回傳分得出成功與失敗');
     blocked.ok === true && blocked.status === 'ok', JSON.stringify(blocked.status));
 }
 
-// ─── T32  建議紀錄與回饋閉環 ──────────────────────────────────────
-console.log('\nT32  Iris 記得自己說過什麼');
-{
-  load('AdviceLog.gs');
-
-  // 分頁不存在時要自己建，不能安靜地什麼都不做
-  check('一開始沒有 advice_log 分頁', !target.getSheetByName('advice_log'));
-  const wrote = AdviceLog.record({
-    source: 'chat', topic: '00878', advice: '佔比偏高，建議先不要加碼', totalAssets: 1000000
-  });
-  check('第一次記錄會自己把分頁建出來',
-    wrote === true && !!target.getSheetByName('advice_log'));
-
-  const before = Utils.ledgerWriteCount();
-  AdviceLog.record({ source: 'chat', topic: '現金水位', advice: '現金偏低，先留著', totalAssets: 1000000 });
-  check('記建議算一次帳本寫入（模型會說「我記下來了」）',
-    Utils.ledgerWriteCount() > before, before + ' → ' + Utils.ledgerWriteCount());
-
-  check('空建議不寫', AdviceLog.record({ topic: 'X', advice: '  ' }) === false);
-
-  const recent = AdviceLog.getRecent(30);
-  // ⚠️ 不比對順序：測試把時間凍住，兩筆的 timestamp 一模一樣，排序本來就不保證。
-  //    真正要釘的是**代號的前導零沒掉** —— 主題欄若不是純文字格式，Sheets 會把
-  //    '00878' 存成 878，於是「同一個 topic 串得起來」會默默失效。
-  check('讀得回來，而且代號的前導零沒被 Sheets 吃掉',
-    recent.length === 2 && recent.some(r => r.topic === '00878') &&
-    recent.some(r => r.topic === '現金水位'),
-    recent.map(r => r.topic).join(','));
-
-  // 「後來如何」是現算的，不是存在表裡的死值
-  const grown = AdviceLog.formatForPrompt(30, 1100000, 5);
-  check('有帶出當時總資產與至今變化', /當時總資產/.test(grown) && /\+10\.00%/.test(grown),
-    grown.split('\n')[1] || '');
-  const shrunk = AdviceLog.formatForPrompt(30, 900000, 5);
-  check('同一筆建議、換一個現在的總資產，算出來就不同（沒有把結果存死）',
-    /-10\.00%/.test(shrunk), shrunk.split('\n')[1] || '');
-  check('沒給現在的總資產就不硬算', !/至今/.test(AdviceLog.formatForPrompt(30, 0, 5)), '');
-
-  check('明講這些是自己說過的話、要認帳', /要認帳/.test(grown), grown.split('\n')[0]);
-
-  // 會進每一則 prompt，所以要有上限
-  for (let i = 0; i < 20; i++) {
-    AdviceLog.record({ source: 'chat', topic: 'T' + i, advice: '第 ' + i + ' 筆測試建議', totalAssets: 1000000 });
-  }
-  const capped = AdviceLog.formatForPrompt(30, 1000000, 5);
-  check('筆數有上限（標題 + 5 筆）', capped.split('\n').length === 6,
-    capped.split('\n').length + ' 行');
-
-  // 走 Tools 這條路（模型實際用的介面）
-  const viaTool = Tools.execute('logAdvice', { topic: '0056', advice: '殖利率轉弱，建議觀察' });
-  check('logAdvice 工具走得通', viaTool.ok === true && /已登記建議/.test(viaTool.text),
-    JSON.stringify(viaTool).slice(0, 80));
-  check('logAdvice 缺參數 → invalid_args',
-    Tools.execute('logAdvice', { topic: '0056' }).status === 'invalid_args', '');
-  const logged = AdviceLog.getRecent(30).find(r => r.topic === '0056');
-  check('總資產由程式讀，不是模型傳進來的',
-    !!logged && logged.totalAssets > 0, JSON.stringify(logged && logged.totalAssets));
-
-  // 沒有紀錄時回空字串，呼叫端才好整段略過
-  target.sheets = target.sheets.filter(s => s.getName() !== 'advice_log');
-  check('沒有分頁時回空字串而不是一句廢話', AdviceLog.formatForPrompt(30, 1000000, 5) === '', '');
-}
-
 // ─── T33  人設：行為準則優先，排版退到最後 ────────────────────────
 console.log('\nT33  人設寫的是行為準則，不是排版規範');
 {
@@ -2151,11 +2088,10 @@ console.log('\nT33  人設寫的是行為準則，不是排版規範');
   // 這段每則訊息都要送，長度要看得住
   check('SYSTEM_PROMPT 長度在 6000 字以內', sys.length <= 6000, sys.length + ' 字');
 
-  // systemContext 把事實與建議接在最後（離問題最近）
-  const ctx = Prompt.systemContext({ scope: '回覆', facts: 'FACTS_HERE', advice: 'ADVICE_HERE' });
-  check('事實與建議接在 systemContext 最後',
-    ctx.indexOf('FACTS_HERE') > ctx.indexOf('[重要：日期與年份規則]') &&
-    ctx.indexOf('ADVICE_HERE') > ctx.indexOf('FACTS_HERE'), '');
+  // systemContext 把事實接在最後（離問題最近）
+  const ctx = Prompt.systemContext({ scope: '回覆', facts: 'FACTS_HERE' });
+  check('事實接在 systemContext 最後',
+    ctx.indexOf('FACTS_HERE') > ctx.indexOf('[重要：日期與年份規則]'), '');
   check('沒傳就不留空段落', Prompt.systemContext({ scope: '回覆' }).indexOf('undefined') < 0, '');
 }
 
@@ -2219,7 +2155,7 @@ console.log('\nT34  每日指標聚合');
 //
 // 這支到今天為止完全沒有測試替身，而假宣稱攔截、工具信封、輪數上限全都住在裡面。
 // 替身只要兩個：把 LLM 換成一個可以排隊的假回應，把訊息推送換成一個記事本。
-// 其餘（Tools / Facts / AdviceLog / Utils / Prompt / GoogleSheet）都用真的。
+// 其餘（Tools / Facts / Utils / Prompt / GoogleSheet）都用真的。
 console.log('\nT35  ReAct 迴圈');
 {
   const AI_QUEUE = [];   // 依序回給 ChatBot 的假 LLM 回應

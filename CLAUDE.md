@@ -26,7 +26,7 @@ There is a second, read-only face on the same script: a web dashboard served by 
 See [Web Dashboard](#web-dashboard).
 
 **Everything lives in one spreadsheet, named by one value.** The Script Property `SHEET_ID` is the
-single source — asset tabs (標的/交易/持倉/…) *and* system tabs (chat, memory, knowledge, alert_log,
+single source — asset tabs (標的/交易/持倉/…) *and* system tabs (chat, memory, knowledge,
 env). `AssetSchema.SHEET_ID` is a getter that returns `Config.SHEET_ID`, not a second constant, so
 repointing the property moves the whole bot. `AssetSchema.open()` throws a named error if the
 property is unset rather than letting `openById(null)` produce GAS's unreadable message.
@@ -38,7 +38,7 @@ only a test fixture (see [Legacy sheet](#legacy-sheet)). Its id stays hardcoded 
 Two ways in, both landing on the same property:
 
 - **Asset layer** — `AssetSchema.open()` / `Snapshot._open()`. Guarded, and the one to use for new code.
-- **System layer** — `GoogleSheet`, `AlertLog`, `AdvisorCheck._loadDecisions`, `dailyCleanUp`, and
+- **System layer** — `GoogleSheet`, `AdvisorCheck._loadDecisions`, `dailyCleanUp`, and
   `Config`'s own `env!B2`/`B3` reads call `SpreadsheetApp.openById(Config.SHEET_ID)` directly. No
   guard, but each already wraps its own try/catch and degrades to an empty result.
 
@@ -86,14 +86,14 @@ renaming or relocating them fails silently:
 
 ### Request Flow
 1. `Main.gs` — `doPost()` receives the LINE **or** Telegram webhook, normalizes it into a single LINE-shaped event object, deduplicates via `CacheService` (6h TTL), silently drops non-master events, calls `ChatBot.reply()`
-2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 5 turns; the cap is not the time guard — each turn checks `Utils.execElapsedMs()` and stops opening new ones past 200s). Injects short-term memory, standing knowledge, the `Facts` block and recent `AdviceLog` entries into the system context. Caches **successful** tool results within a turn (a failure is not cached — an over-eager cache would pin one flaky TWSE call as this turn's verdict, when the model's retry might well have worked), strips Markdown before returning, and blocks a 「已記錄」 claim that the ledger does not corroborate.
+2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 5 turns; the cap is not the time guard — each turn checks `Utils.execElapsedMs()` and stops opening new ones past 200s). Injects short-term memory, standing knowledge, and the `Facts` block into the system context. Caches **successful** tool results within a turn (a failure is not cached — an over-eager cache would pin one flaky TWSE call as this turn's verdict, when the model's retry might well have worked), strips Markdown before returning, and blocks a 「已記錄」 claim that the ledger does not corroborate.
 3. `AIServiceFactory.gs` — Routes to `GeminiService` or `NvidiaService` based on `env!B3`. NVIDIA path goes through `AIAdapter` (Gemini ↔ OpenAI format conversion) so the rest of the codebase always speaks Gemini format.
-4. `Tools.gs` — Defines and executes **22** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. `execute()` returns an envelope, `{ok, status, text}` — `status` is `ok` / `invalid_args` / `error`, and `ChatBot` sends it to the model alongside the text so a failure cannot be read as data (see [工具回傳要分得出成功與失敗](#工具回傳要分得出成功與失敗)). Grouped by which layer they touch:
+4. `Tools.gs` — Defines and executes **21** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. `execute()` returns an envelope, `{ok, status, text}` — `status` is `ok` / `invalid_args` / `error`, and `ChatBot` sends it to the model alongside the text so a failure cannot be read as data (see [工具回傳要分得出成功與失敗](#工具回傳要分得出成功與失敗)). Grouped by which layer they touch:
    - **Computed-layer reads** (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, answering "what do I have now".
    - **Input-layer reads** (`listTrades`, `listAccounts`, `listInstruments`) — the 交易/帳戶/標的 tabs themselves, answering "how did this get recorded, which row do I change". They live in `AssetTools.gs`, not `Snapshot`, because each one is the precondition for a write: `listTrades` hands out the row number `voidTrade` needs, `listAccounts` is the only surface exposing **原幣** balances (`Snapshot._cash` gives TWD-converted only), `listInstruments` names the instruments whose 區域/類型 are still blank.
    - **Ledger writes** (`recordTrade`, `recordDividend`, `setCashBalance`, `voidTrade`) — all four land in the 交易 tab via `AssetTools.gs`; a dividend, a balance correction and a void are each just one row with a different 動作 or 狀態.
    - **Master writes** (`addAccount`, `updateAccount`, `updateInstrument`) — the only code that writes 帳戶 and 標的.
-   - **Memory** (`rememberShortTerm`, `saveKnowledge`, `searchKnowledge`, `listMemories`, `deleteMemory`), **feedback** (`logAdvice`, see [回饋閉環](#回饋閉環)), **external** (`searchWeb`).
+   - **Memory** (`rememberShortTerm`, `saveKnowledge`, `searchKnowledge`, `listMemories`, `deleteMemory`), **external** (`searchWeb`).
 5. `GoogleSheet.gs` — System tabs (chat / memory / knowledge / log) plus the formatting layer for asset queries, which read through `Snapshot`. Single spreadsheet instance cached per execution.
 
 ### AI Provider Switching
@@ -337,8 +337,6 @@ System tabs (this file's other sections cover the asset tabs, which are defined 
 | `chat` | Conversation history per userId, purged after 30 days |
 | `short_term_memory` | Temporary context entries with expiry |
 | `knowledge` | Persistent user preferences/facts |
-| `alert_log` | Proactive-notification history, used by `AdvisorCheck` for dedup (60 days) |
-| `advice_log` | What Iris advised, for follow-up (180 days). Self-creating. |
 | `metrics` | Daily rollup of `consolelog`, written by `Metrics`. Self-creating. |
 | `eval_set` | Evaluation questions and their latest verdict. Self-creating. |
 
@@ -745,37 +743,15 @@ Keep the strip in `Telegram.pushMsg`: reports, market alerts and `AdvisorCheck` 
 through `ChatBot`. The cost, stated plainly: the eval can no longer see whether the model obeys
 the no-Markdown rule. That signal was traded for one consistent version of the text.
 
-### 回饋閉環
+### 不記自己講過什麼：alert_log 與 advice_log 已移除
 
-`alert_log` records what was pushed, for dedup. Nothing reads it back, so Iris never knew what it
-had advised — which is the line between an advisor and a query interface. `advice_log` +
-`AdviceLog.gs` close that: `AdvisorCheck` writes a row after every push, the `logAdvice` tool
-lets the model register advice it gives in chat, and `ChatBot` injects the last five into every
-prompt.
+2026-10-08 拿掉。`alert_log` 存 `AdvisorCheck` 推過的通知給下一次去重，`advice_log`
+（`AdviceLog.gs` + `logAdvice` 工具）存 Iris 給過的建議並注入每則對話。兩個月各只有
+同樣 2 筆、`logAdvice` 從沒被呼叫過 —— 那條回饋閉環沒轉起來，而主人把 Iris 的範圍收窄成
+「讀表報告 + 記帳」，不再做依長期規劃回應的顧問。
 
-**「後來如何」 is computed at read time, not backfilled.** The roadmap called for a scheduled job
-to fill in outcomes; this stores the total assets *at the time of the advice* and compares against
-the current figure whenever the block is built. Three reasons, and the second is the real one:
-
-- One less trigger, against a 20-trigger quota.
-- A backfilled cell is stale the next day. 「後來如何」 is inherently a question about *now*;
-  freezing it into a cell means committing to keep updating it.
-- A failed backfill leaves that row blank forever and nobody notices. Computing on read has no
-  such state.
-
-The cost is that callers must supply the current total — they already have it.
-
-⚠️ **主題 must be a text-formatted column.** Topics are usually ticker symbols, and Sheets turns
-`00878` into `878` on write. Nothing errors; the topic simply never matches again, so advice on
-one instrument stops linking up. Same trap as `AssetSchema`'s `textColumns`. `T32` pins it.
-
-⚠️ `AdviceLog` creates its own tab when missing, unlike `AlertLog`, which logs a warning and gives
-up. `AlertLog`'s tab is hand-made and predates it; a *new* module that quietly does nothing would
-be indistinguishable from a working one. That is also why `advice_log` is **not** in `setup()`'s
-`requiredSheets` — it would report a missing sheet until the first advice is recorded.
-
-Retention is 180 days versus `alert_log`'s 60, because the span is the point: 「你三個月前說要
-降現金比例」 is the whole reason the table exists.
+代價要知道：`AdvisorCheck` 現在**沒有去重**，同一個異常（例如某檔報價歸零）連續幾天都在，
+就會連續幾天推。
 
 ### 工具回傳要分得出成功與失敗
 

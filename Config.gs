@@ -36,7 +36,7 @@ var Config = (() => {
     // ─── Google Sheets ────────────────────────────────────────
     //
     // 整個專案**只有這一個**試算表 ID。資產分頁（標的／交易／持倉／…）與系統分頁
-    // （chat／knowledge／short_term_memory／alert_log／env）都在同一張表裡，
+    // （chat／knowledge／short_term_memory／env）都在同一張表裡，
     // `AssetSchema.SHEET_ID` 也是指回這裡的 getter，不是另一個寫死的值。
     // 換試算表只要改這個屬性一個地方。
     get SHEET_ID()     { return scriptProperties.getProperty(ENV_KEYS.SHEET_ID); },
