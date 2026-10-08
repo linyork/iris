@@ -513,7 +513,7 @@ counted whether or not anyone remembered to declare it.
 move. `AssetTools.voidTrade(row, reason)` writes a tombstone: the row and its original numbers
 stay, `狀態` becomes `作廢`, and every consumer skips it.
 
-> `狀態` is the 17th column of `交易` and was added after the sheet already existed.
+> `狀態` is the last column of `交易` and was added after the sheet already existed.
 > **Run `setupAssetSheet()` once after deploying** — `build()` appends the header (tail-only,
 > so no existing column moves) and `applyTradeFormulas()` refills every row's 現金流 with the
 > guarded version. `voidTrade` refuses to run while the column is missing rather than writing
@@ -527,8 +527,8 @@ disappear, it gains a fake sibling.
 Three things that must stay true:
 
 - **The 現金流 cell has to die with the row.** `現金!交易淨流` is
-  `SUMIF(交易!$L:$L, 帳戶, 交易!$J:$J)` — a whole-column sum that knows nothing about what JS
-  filtered out. So the guard lives **in the formula** (`IF(OR($B="",$Q="作廢"),"",…)`), and
+  `SUMIF(交易!<帳戶>, 帳戶, 交易!<現金流>)` — a whole-column sum that knows nothing about what JS
+  filtered out. So the guard lives **in the formula** (`IF(OR(<動作>="",<狀態>="作廢"),"",…)`), and
   `voidTrade` rewrites that row's formulas via `AssetSchema.writeRowFormulas` — rows written
   before the 狀態 column existed still carry the unguarded version, and skipping that rewrite
   gives you "row ignored, money still there".
@@ -867,6 +867,13 @@ The owner doesn't track P&L on it for now, so cost, P&L and the unread columns w
 `配置`'s 大類／實體 row writes its 成本 as blank, not 0 (`T50`). Everything reading this tab goes
 by column name, and rebuild never rewrites it, so columns can be deleted by hand in any order. `持倉` is still positional (`writeBlock`), so a layout change
 there means editing `AssetSchema.TABS` and `Position.rebuild` together; `T47` checks the letters.
+
+**`交易`'s formulas find their columns by name too.** `TRADE_FORMULAS['現金流']` is a function of
+`(L, r)` where `L(name)` reads the live header, and `現金!交易淨流`'s SUMIF gets `交易`'s 帳戶 / 現金流
+letters from `liveCol`. They used to be literal `$B…$Q` / `$L` / `$J`; on 2026-10-08 the owner
+deleted 幣別 and 分類 by hand, which moves 帳戶 from L to K and 狀態 from Q to O. Existing rows'
+formulas are re-pointed by Sheets itself; it is every row written *afterwards*, and the SUMIF
+that rebuild rewrites, that would have silently summed the wrong column (`T51`).
 
 Two calculated tabs were removed on 2026-10-08 as part of shrinking the spreadsheet:
 

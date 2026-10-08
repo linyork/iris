@@ -1280,7 +1280,6 @@ console.log('\nT21  講絕對值也能改餘額');
   check('外幣戶校正的是原幣餘額', near(num(usdRow['餘額']), usdBefore + 100, 0.01), usdRow['餘額']);
   check('台幣值仍然是餘額 × 匯率',
     near(num(usdRow['台幣值']), (usdBefore + 100) * FX.USDTWD, 1), usdRow['台幣值']);
-  check('校正列的幣別跟著帳戶走', String(lastTrade()['幣別']) === 'USD', lastTrade()['幣別']);
 
   // 差額只能由 setCashBalance 算出來，不能讓呼叫端自己填
   const n2 = countTrades();
@@ -1288,9 +1287,9 @@ console.log('\nT21  講絕對值也能改餘額');
     /setCashBalance/.test(AssetTools.recordTrade({ action: '調整', amount: 100, account: TWD })) &&
     countTrades() === n2, countTrades() + ' vs ' + n2);
 
-  // 順手修的：存提的幣別也該跟著帳戶，寫死 TWD 會讓外幣戶的每一列都在說謊
+  // 交易表不再存幣別（2026-10-08）：金額的幣別就是帳戶的幣別，存提照樣記得進外幣戶
   AssetTools.recordTrade({ action: '存入', amount: 50, account: USD });
-  check('存入外幣戶時幣別是 USD', String(lastTrade()['幣別']) === 'USD', lastTrade()['幣別']);
+  check('存入外幣戶照樣記得進去', num(lastTrade()['金額']) === 50 && String(lastTrade()['帳戶']) === USD, JSON.stringify(lastTrade()));
 
   // 校正只動現金
   check('校正不會碰到持倉', sharesOf(H0.code) === heldShares, sharesOf(H0.code) + ' vs ' + heldShares);
@@ -2634,6 +2633,51 @@ console.log('\nT50  實體資產不追蹤損益');
   const phys = AssetSchema.readObjects(target.getSheetByName('配置')).find(x => x['維度'] === '大類' && x['分組'] === '實體') || {};
   check('配置的「大類／實體」成本是空白，不是 0', phys['成本'] === '', JSON.stringify(phys['成本']));
   check('配置的「大類／實體」市值照算', num(phys['市值']) > 0, phys['市值']);
+}
+
+// ─── T51  交易表刪欄之後，現金流與帳戶餘額照樣對 ─────────────────────
+// 2026-10-08 主人手動刪掉「幣別」「分類」。公式以前寫死 $L（帳戶）、$J（現金流）、
+// $Q（狀態）…，刪欄後那些字母會指到隔壁欄 —— 餘額靜默算錯。現在一律依標題列找字母。
+// 這裡模擬「刪掉兩欄」：既有列的公式在真的 Sheets 會自動跟著移，mock 不會，所以刪完
+// 用 applyTradeFormulas 重寫一次（等同 Sheets 的自動調整），再重算比對餘額。
+console.log('\nT51  交易表刪欄');
+{
+  const tr = target.getSheetByName('交易');
+  const cash = target.getSheetByName('現金');
+  const balances = () => AssetSchema.readObjects(cash).map(x => String(x['帳戶']) + '=' + Math.round(num(x['餘額']) * 100)).join(',');
+  Position.rebuild();
+  const before = balances();
+
+  // 回到舊的 17 欄樣子：在「現金流」後面插回「幣別」、在「帳戶」後面插回「分類」
+  const H0 = AssetSchema.headerMap(tr).__header.filter(h => h !== '');
+  const n = tr.getLastRow();
+  const vals = tr.getRange(1, 1, n, H0.length).getValues();
+  const insertAfter = (row, afterName, v) => { const i = H0.indexOf(afterName) + 1; const r = row.slice(); r.splice(i, 0, v); return r; };
+  let old = vals.map((r, i) => insertAfter(r, '現金流', i === 0 ? '幣別' : 'TWD'));
+  const H1 = old[0];
+  old = old.map((r, i) => { const j = H1.indexOf('帳戶') + 1; const c = r.slice(); c.splice(j, 0, i === 0 ? '分類' : '投資'); return c; });
+  tr.getRange(1, 1, n, old[0].length).setValues(old);
+  AssetSchema.applyTradeFormulas(target);
+  const r1 = Position.rebuild();
+  check('17 欄（還有幣別、分類）時重算成功、餘額不變', r1.ok === true && balances() === before, balances().slice(0, 80));
+  const cashF = () => String(cash.raw(2, AssetSchema.expected('現金').indexOf('交易淨流') + 1));
+  check('現金的加總指向 17 欄版的帳戶 L、現金流 J', /交易!\$L:\$L/.test(cashF()) && /交易!\$J:\$J/.test(cashF()), cashF());
+
+  // 主人刪掉那兩欄：回到 15 欄
+  const back = old.map(r => r.filter((_, i) => old[0][i] !== '幣別' && old[0][i] !== '分類'));
+  tr.getRange(1, 1, n, old[0].length).setValues(old.map((r, i) => back[i].concat(['', ''])));
+  AssetSchema.applyTradeFormulas(target);
+  const r2 = Position.rebuild();
+  check('刪掉兩欄後重算成功、每個帳戶餘額不變', r2.ok === true && balances() === before, balances().slice(0, 80));
+  check('現金的加總改指 15 欄版的帳戶 K、現金流 J', /交易!\$K:\$K/.test(cashF()) && /交易!\$J:\$J/.test(cashF()), cashF());
+
+  // 新寫入的一列：現金流公式要引用 15 欄版的狀態欄（O），不是舊的 Q
+  const row = AssetSchema.appendTrade({ 日期: '2026-10-08', 動作: '存入', 金額: 1, 帳戶: '國泰證券戶', 備註: 'T51' }, target);
+  const f = String(tr.raw(row, AssetSchema.expected('交易').indexOf('現金流') + 1));
+  check('新列的現金流公式引用狀態欄 O', f.indexOf('$O' + row) >= 0 && f.indexOf('$Q') < 0, f.slice(0, 60));
+  AssetTools.voidTrade({ row: row, reason: 'T51' });
+  Position.rebuild();
+  check('作廢那一列之後餘額回到原樣', balances() === before);
 }
 
 //   REALIZED_CSV=path/to.csv node test_asset.cjs

@@ -79,8 +79,10 @@ var AssetSchema = (() => {
       textColumns: ['代號'],
       note: '唯一的事實來源。每一筆買賣、股利、存提都在這裡。只新增，不改歷史數字；' +
             '記錯了把「狀態」設成「作廢」（voidTrade），不要刪列、不要改金額。',
+      // 2026-10-08 拿掉「幣別」「分類」：只寫不讀（金額的幣別就是帳戶的幣別）。
+      // 「來源」「建立時間」也沒有程式讀，但留著當稽核線索：哪一列是誰、何時寫的。
       headers: ['日期', '動作', '代號', '名稱', '股數', '單價', '手續費', '交易稅',
-                '金額', '現金流', '幣別', '帳戶', '分類', '備註', '來源', '建立時間', '狀態']
+                '金額', '現金流', '帳戶', '備註', '來源', '建立時間', '狀態']
     },
     {
       name: '持倉',
@@ -128,22 +130,32 @@ var AssetSchema = (() => {
   //   調整 金額欄原樣（帶正負號）　其餘 ±金額欄
   // 轉帳寫成兩列（轉出／轉入），不設「對方帳戶」欄，每個帳戶的餘額都只是一次 SUMIF。
   //
-  // ⚠️ $Q 是「狀態」欄，作廢的列現金流必須是空字串，那筆錢才會退出帳戶餘額。
-  // ⚠️ 欄位字母寫死是這張表的既有慣例，靠 build() 的標題列逐格比對守住 ——
-  //    對不上會丟例外，不會靜默寫到隔壁欄。
+  // ⚠️ 「狀態」是作廢記號：作廢的列現金流必須是空字串，那筆錢才會退出帳戶餘額。
+  // ⚠️ 公式裡的欄位字母**依實際標題列決定**（s.tradeFormula 收一個 L(欄名) → 字母）。
+  //    以前寫死 $B/$E…/$Q，2026-10-08 主人要手動刪掉「幣別」「分類」兩欄，刪完帳戶
+  //    從 L 變 K、狀態從 Q 變 O —— 寫死的字母會讓之後新寫入的列靜默算錯錢。
 
   // 「名稱」以前是 VLOOKUP 到「標的」的公式。2026-10-08「標的」退役，名稱改成記帳當下
   // 寫入的文字（見 s.nameFor）—— 它只是顯示用，一律以代號對應。
   s.TRADE_FORMULAS = {
-    '現金流':
-      '=IF(OR($B{r}="",$Q{r}="' + s.VOID + '"),"",' +
-      'IFS(' +
-      '$B{r}="買進",-(N($E{r})*N($F{r})+N($G{r})),' +
-      '$B{r}="賣出",N($E{r})*N($F{r})-N($G{r})-N($H{r}),' +
-      'OR($B{r}="股利",$B{r}="存入",$B{r}="利息",$B{r}="轉入"),N($I{r}),' +
-      'OR($B{r}="提出",$B{r}="費用",$B{r}="轉出"),-N($I{r}),' +
-      '$B{r}="調整",N($I{r}),' +
-      'TRUE,0))'
+    '現金流': (L, r) => {
+      var c = (name) => '$' + L(name) + r;
+      var act = c('動作');
+      return '=IF(OR(' + act + '="",' + c('狀態') + '="' + s.VOID + '"),"",' +
+        'IFS(' +
+        act + '="買進",-(N(' + c('股數') + ')*N(' + c('單價') + ')+N(' + c('手續費') + ')),' +
+        act + '="賣出",N(' + c('股數') + ')*N(' + c('單價') + ')-N(' + c('手續費') + ')-N(' + c('交易稅') + '),' +
+        'OR(' + act + '="股利",' + act + '="存入",' + act + '="利息",' + act + '="轉入"),N(' + c('金額') + '),' +
+        'OR(' + act + '="提出",' + act + '="費用",' + act + '="轉出"),-N(' + c('金額') + '),' +
+        act + '="調整",N(' + c('金額') + '),' +
+        'TRUE,0))';
+    }
+  };
+
+  /** 交易表的「欄名 → 實際欄位字母」，給 TRADE_FORMULAS 用 */
+  var _tradeLetter = (map) => (name) => {
+    if (map[name] === undefined) throw new Error('「交易」找不到「' + name + '」欄');
+    return s.colLetter(map[name] + 1);
   };
 
   // ⚠️ 公式**只填到有資料的最後一列**，絕對不要預先灌滿幾千列。
@@ -442,9 +454,9 @@ var AssetSchema = (() => {
     Object.keys(s.TRADE_FORMULAS).forEach(colName => {
       var idx = map[colName];
       if (idx === undefined || idx < 0) return;
-      var tpl = s.TRADE_FORMULAS[colName];
+      var fn = s.TRADE_FORMULAS[colName], L = _tradeLetter(map);
       var values = [];
-      for (var r = 2; r <= lastData; r++) values.push([tpl.replace(/\{r\}/g, r)]);
+      for (var r = 2; r <= lastData; r++) values.push([fn(L, r)]);
       sheet.getRange(2, idx + 1, n, 1).setFormulas(values);
     });
     return n;
@@ -608,7 +620,7 @@ var AssetSchema = (() => {
     Object.keys(s.TRADE_FORMULAS).forEach(colName => {
       var idx = map[colName];
       if (idx === undefined || idx < 0) return;
-      sheet.getRange(r, idx + 1).setFormula(s.TRADE_FORMULAS[colName].replace(/\{r\}/g, r));
+      sheet.getRange(r, idx + 1).setFormula(s.TRADE_FORMULAS[colName](_tradeLetter(map), r));
     });
   };
 

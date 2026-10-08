@@ -282,9 +282,7 @@ var AssetImport = (() => {
           '單價': r.price,
           '手續費': r.fee,
           '交易稅': r.tax,
-          '幣別': 'TWD',
           '帳戶': account,
-          '分類': '投資',
           '備註': '券商已實現匯入｜買進 ' + (r.buyDate || '?') + ' @' + r.buyPrice +
                   '｜報表賣出單價 ' + r.shownPrice +
                   '｜券商損益 ' + _money(r.brokerPnl) + '｜' + r.key,
@@ -509,7 +507,7 @@ var AssetImport = (() => {
           '日期': r.date, '動作': r.action, '代號': r.code,
           '股數': r.shares, '單價': r.price,
           '手續費': r.fee, '交易稅': r.tax,
-          '幣別': 'TWD', '帳戶': account, '分類': '投資',
+          '帳戶': account,
           '備註': '對帳單匯入｜委託書號 ' + (r.order || '—') +
                   '｜報表單價 ' + r.shownPrice + '｜淨收付 ' + _money(r.net) + '｜' + r.key,
           '來源': 'csv', '建立時間': stamp

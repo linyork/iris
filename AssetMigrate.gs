@@ -262,7 +262,7 @@ var AssetMigrate = (() => {
       if (h.shares <= 0) return;
       tradeRows.push([
         epochStr, '期初', h.code, h.name, h.shares, h.cost / h.shares, 0, 0, '',
-        '', 'TWD', '', '投資',
+        '', '',
         '期初部位（舊表遷移，非真實買進日）', MIGRATION_SOURCE, stamp
       ]);
     });
@@ -271,12 +271,13 @@ var AssetMigrate = (() => {
       tradeRows.push([
         d.date instanceof Date ? Utilities.formatDate(d.date, tz, 'yyyy-MM-dd') : _str(d.date),
         '股利', d.code, '', '', '', '', '', d.amount,
-        '', 'TWD', '', '投資',
+        '', '',
         '舊表股利紀錄', MIGRATION_SOURCE, stamp
       ]);
     });
 
-    _replaceBySource(ss.getSheetByName('交易'), tradeRows, 16);
+    // 欄序：日期 動作 代號 名稱 股數 單價 手續費 交易稅 金額 現金流 帳戶 備註 來源 建立時間（狀態留空）
+    _replaceBySource(ss.getSheetByName('交易'), tradeRows, 14);
     counts['交易'] = tradeRows.length;
 
     // ── 每日快照 ──

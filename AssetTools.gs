@@ -218,11 +218,6 @@ var AssetTools = (() => {
         return action + ' 要記在哪個帳戶？目前有：' + names.join('、');
       }
 
-      // 幣別取自帳戶。餘額是 SUMIF 算的、不讀這一欄，但寫死 TWD 會讓外幣戶的
-      // 每一列幣別都是錯的，之後按幣別分群的讀者會拿到錯的結果。
-      var accRow = accounts.filter(x => _str(x['帳戶']) === val.account)[0];
-      var currency = (accRow && _str(accRow['幣別'])) || 'TWD';
-
       // ⚠️ 必須走 appendTrade：它會補上「現金流」公式，缺了那欄這筆錢不會進帳戶餘額。
       var row = AssetSchema.appendTrade({
         '日期': dateStr,
@@ -233,9 +228,7 @@ var AssetTools = (() => {
         '手續費': val.fee || 0,
         '交易稅': val.tax || 0,
         '金額': val.amount || '',
-        '幣別': currency,
         '帳戶': val.account,
-        '分類': (action === '買進' || action === '賣出' || action === '股利') ? '投資' : '其他',
         '備註': _str(a.note),
         '來源': 'iris',
         '建立時間': Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd HH:mm:ss')
@@ -460,9 +453,7 @@ var AssetTools = (() => {
         '日期': dateStr,
         '動作': '調整',
         '金額': delta,
-        '幣別': currency,
         '帳戶': account,
-        '分類': '校正',
         '備註': '餘額校正：' + _amt(current) + ' → ' + _amt(target) +
                 (reason ? '（' + reason + '）' : ''),
         '來源': 'iris',

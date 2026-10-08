@@ -372,6 +372,9 @@ var Position = (() => {
     // 依欄名寫（writeBlockByName）：公式裡的欄位字母也由實際標題列決定，
     // 主人在表上刪掉沒人讀的欄時，不必等程式先改也不會寫錯位置。
     var activeAccounts = accounts.filter(a => _str(a['帳戶']) && _str(a['狀態']) !== '停用');
+    // 「交易」的帳戶與現金流欄位，同樣依實際標題列找（主人會手動刪欄）
+    var trAcc  = AssetSchema.liveCol(ss.getSheetByName('交易'), '帳戶');
+    var trFlow = AssetSchema.liveCol(ss.getSheetByName('交易'), '現金流');
     var cashRows = (L) => activeAccounts.map((a, n) => {
       var r   = n + 2;
       var cur = _str(a['幣別']) || 'TWD';
@@ -379,7 +382,8 @@ var Position = (() => {
         '帳戶':     _str(a['帳戶']),
         '幣別':     cur,
         '期初':     _num(a['期初餘額']),
-        '交易淨流': '=SUMIF(交易!$L:$L,$' + L('帳戶') + r + ',交易!$J:$J)',
+        '交易淨流': '=SUMIF(交易!$' + trAcc + ':$' + trAcc + ',$' + L('帳戶') + r +
+                    ',交易!$' + trFlow + ':$' + trFlow + ')',
         '餘額':     '=$' + L('期初') + r + '+$' + L('交易淨流') + r,
         '匯率':     cur === 'TWD' ? 1 : '=IFERROR(GOOGLEFINANCE("CURRENCY:' + cur + 'TWD"),1)',
         '台幣值':   '=$' + L('餘額') + r + '*$' + L('匯率') + r
