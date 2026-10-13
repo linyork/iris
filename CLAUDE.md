@@ -398,7 +398,10 @@ and immune to that quota.
   dashboard banner. Push it afterwards and only the chat reply knows.
 - **If MIS has no price either, the cell stays blank.** Never invent one; the existing
   "抓不到市價" warning is the correct outcome.
-- MIS is `tse_` only, same limit `StockPrice` already had, so non-TPE rows are not sent.
+- MIS is asked for every code as both `tse_` and `otc_` (it returns an empty-`c` stub for the
+  side that doesn't exist), so a 上櫃 holding still gets a price here. This layer is the only one
+  that covers 上櫃 — `STOCK_DAY_AVG` is TWSE-only, so such a row raises the fallback warning
+  whenever GOOGLEFINANCE misses it.
 
 ### 目標配置%
 
@@ -1036,9 +1039,11 @@ their own row key (`stm:date:order:shares`, `imp:date:code:shares:net`). The two
 are symmetric; a test sends the same sale in both formats and asserts nothing is written twice.
 
 The statement has **no ticker column**, only 股名 — the one place in the system where a name
-is turned into a code. `AssetSchema.codeForName` looks it up in **TWSE's listed-securities list
-first** (`StockPrice.listedNames`, the same 證交所簡稱 the broker prints), and only falls back to
-持倉's names for what TWSE doesn't list (上櫃). Exactly one match or nothing — never fuzzy, since
+is turned into a code. `AssetSchema.codeForName` looks it up in **the exchange name lists
+first** (`StockPrice.listedNames` — TWSE 上市 *and* TPEx 上櫃, the same 簡稱 the broker prints), and
+only falls back to 持倉's names when the lists can't be fetched. ⚠️ The TPEx half is not optional:
+on 2026-10-12 the first 上櫃 buy (00679B) failed to import with 「對不到名稱」 — only TWSE was
+fetched, and 持倉 had no row for a code being bought for the first time. Exactly one match or nothing — never fuzzy, since
 a wrong guess files the trade against the wrong instrument. A code 持倉 doesn't have yet is
 named in the reply so its classification gets filled in. `doPost` routes `message.type === 'document'` straight to `AssetImport.fromUpload()` —
 no ChatBot, no LLM. The file is already structured; handing it to a model only adds a place

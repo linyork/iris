@@ -2768,6 +2768,32 @@ if (process.env.REALIZED_CSV && fs.existsSync(process.env.REALIZED_CSV)) {
   real.errors.forEach(e => console.log('  ⚠️ ' + e));
 }
 
+// 2026-10-12 第一次買上櫃的 00679B，對帳單匯入回「對不到名稱」：名單只抓證交所，
+// 而持倉還沒有這一檔。名單要含櫃買中心；MIS 報價要同時問 tse_／otc_ 並濾掉空殼。
+console.log('\nT54  上櫃標的的名稱與報價');
+{
+  const savedSP = global.StockPrice, savedFetch = global.UrlFetchApp;
+  const reply = (code, obj) => ({ getResponseCode: () => code, getContentText: () => JSON.stringify(obj) });
+  let tpexUp = true;
+  global.UrlFetchApp = { fetch: (url) => {
+    if (/twse\.com\.tw\/v1/.test(url)) return reply(200, [{ Code: '1111', Name: '上市甲' }]);
+    if (/tpex\.org\.tw/.test(url)) return tpexUp
+      ? reply(200, [{ SecuritiesCompanyCode: '2222B', CompanyName: '上櫃乙' }]) : reply(500, {});
+    // MIS：tse_／otc_ 兩邊都問，不存在的那邊回 c 為空的空殼
+    return reply(200, { msgArray: [{ c: '', z: '-' }, { c: '2222B', n: '上櫃乙', z: '24.80', y: '24.70' }] });
+  } };
+  load('StockPrice.gs');
+  const L = StockPrice.listedNames();
+  check('名單含上市', L && L.byName['上市甲'] && L.byName['上市甲'][0] === '1111', JSON.stringify(L));
+  check('名單含上櫃', L && L.byName['上櫃乙'] && L.byName['上櫃乙'][0] === '2222B', JSON.stringify(L));
+  tpexUp = false;
+  const L2 = StockPrice.listedNames();
+  check('櫃買中心抓不到時仍回證交所那一份', L2 && L2.byCode['1111'] === '上市甲' && !L2.byCode['2222B'], JSON.stringify(L2));
+  const q = StockPrice.getRawPrices(['2222B']);
+  check('MIS 的空殼被濾掉，上櫃報價拿得到', q.length === 1 && q[0].code === '2222B' && q[0].current === 24.8, JSON.stringify(q));
+  global.StockPrice = savedSP; global.UrlFetchApp = savedFetch;
+}
+
 console.log('\n' + (fail === 0 ? '全部通過' : fail + ' 項失敗') + '（' + pass + '/' + (pass + fail) + '）');
 if (fail > 0 && process.env.SHOW_LOGS) console.log(JSON.stringify(LOGS, null, 1));
 process.exit(fail === 0 ? 0 : 1);

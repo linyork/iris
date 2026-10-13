@@ -2,7 +2,7 @@
  * StockPrice
  * @description 查詢台灣上市 ETF / 股票即時（或最新）股價
  * 使用 TWSE 開放 API，免費無需 API Key，資料延遲約 20 分鐘
- * 注意：僅支援上市（TSE）股票，上櫃（OTC）不適用
+ * MIS 端點每個代號同時問 tse_ 與 otc_，不存在的那一邊回 c 為空的空殼，濾掉即可
  */
 var StockPrice = (() => {
   var sp = {};
@@ -19,7 +19,8 @@ var StockPrice = (() => {
   var _fetch = (list) => {
     var url = '';
     try {
-      var codes = list.map(s => 'tse_' + s + '.tw').join('|');
+      // 不知道是上市還是上櫃，兩邊都問；MIS 對不存在的那邊回一筆 c 為空的空殼
+      var codes = list.map(s => 'tse_' + s + '.tw|otc_' + s + '.tw').join('|');
       url = 'https://mis.twse.com.tw/stock/api/getStockInfo.jsp' +
             '?ex_ch=' + encodeURIComponent(codes) + '&_=' + Date.now();
       var response = UrlFetchApp.fetch(url, {
@@ -53,7 +54,8 @@ var StockPrice = (() => {
           { codes: list, rtcode: String(data.rtcode || ''), rtmessage: String(data.rtmessage || '') });
         return [];
       }
-      return data.msgArray;
+      var seen = {};
+      return data.msgArray.filter(x => x && x.c && !seen[x.c] && (seen[x.c] = true));
     } catch (ex) {
       Logger.error('StockPrice._fetch', '請求丟出例外', ex);
       return [];
@@ -106,7 +108,7 @@ var StockPrice = (() => {
       Logger.info('StockPrice.getPrice', '查詢股價', { symbols: list });
 
       var items = _fetch(list);
-      if (items.length === 0) return '查無資料，請確認代號是否正確（僅支援上市股票）';
+      if (items.length === 0) return '查無資料，請確認代號是否正確';
 
       var lines = items.map(item => {
         // 同 getRawPrices：沒有當日成交價時不要算漲跌 —— 舊版這裡會印出
@@ -180,19 +182,41 @@ var StockPrice = (() => {
       j => j.chart.result[0].meta.regularMarketPrice);
 
   /**
-   * 證交所上市證券的「代號 ↔ 簡稱」對照（openapi 的 STOCK_DAY_ALL，約 1,400 檔）。
+   * 台股「代號 ↔ 簡稱」對照：證交所上市（STOCK_DAY_ALL）＋ 櫃買中心上櫃
+   * （tpex_mainboard_daily_close_quotes），合計約兩千檔。
    *
    * 2026-10-08 起名稱一律用這份簡稱（「富邦台50」不是「富邦台灣50」）：券商對帳單用的
    * 就是它，CSV 匯入因此能直接對上，新標的也不必有人手打名稱。
    *
+   * ⚠️ 上櫃那份不可省。2026-10-12 第一次買上櫃的 00679B，對帳單匯入回「對不到名稱」——
+   *    當時只抓證交所，而持倉還沒有這一檔，兩層對照都落空。
    * ⚠️ byName 的值是陣列。用名稱反查代號時**只接受剛好一檔**，對到零檔或多檔一律不猜 ——
    *    猜錯會把交易記到別檔頭上，而且不會報錯。
-   * 上櫃（例如 00687B）不在這份名單裡。快取 6 小時；抓不到回 null，呼叫端自己退回。
+   * 兩份都抓到才快取 6 小時；只抓到一份就先用那一份、不快取，下次再試。
+   * 兩份都抓不到回 null，呼叫端自己退回。
    *
    * @returns {{byCode: Object<string,string>, byName: Object<string,Array<string>>}|null}
    */
+  var _namePairs = (tag, url, codeKey, nameKey) => {
+    try {
+      var resp = UrlFetchApp.fetch(url,
+        { muteHttpExceptions: true, headers: { 'Accept': 'application/json' } });
+      if (resp.getResponseCode() !== 200) {
+        Logger.warning('StockPrice.listedNames', tag + ' HTTP ' + resp.getResponseCode(),
+          String(resp.getContentText()).slice(0, 200));
+        return null;
+      }
+      return JSON.parse(resp.getContentText())
+        .filter(x => x && x[codeKey] && x[nameKey])
+        .map(x => [String(x[codeKey]).trim(), String(x[nameKey]).trim()]);
+    } catch (ex) {
+      Logger.error('StockPrice.listedNames', '抓' + tag + '名單失敗', ex);
+      return null;
+    }
+  };
+
   sp.listedNames = () => {
-    var KEY = 'twse_listed_names';
+    var KEY = 'tw_listed_names_v2';
     var pairs = null;
     try {
       var cached = CacheService.getScriptCache().get(KEY);
@@ -200,26 +224,20 @@ var StockPrice = (() => {
     } catch (e) { /* 快取壞了就重抓 */ }
 
     if (!pairs) {
-      try {
-        var resp = UrlFetchApp.fetch('https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL',
-          { muteHttpExceptions: true, headers: { 'Accept': 'application/json' } });
-        if (resp.getResponseCode() !== 200) {
-          Logger.warning('StockPrice.listedNames', 'HTTP ' + resp.getResponseCode(),
-            String(resp.getContentText()).slice(0, 200));
-          return null;
-        }
-        pairs = JSON.parse(resp.getContentText())
-          .filter(x => x && x.Code && x.Name)
-          .map(x => [String(x.Code).trim(), String(x.Name).trim()]);
+      var twse = _namePairs('證交所', 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL',
+        'Code', 'Name');
+      var tpex = _namePairs('櫃買中心', 'https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes',
+        'SecuritiesCompanyCode', 'CompanyName');
+      if (!twse && !tpex) return null;
+      pairs = (twse || []).concat(tpex || []);
+      if (twse && tpex) {
         try { CacheService.getScriptCache().put(KEY, JSON.stringify(pairs), 6 * 3600); } catch (e) {}
-      } catch (ex) {
-        Logger.error('StockPrice.listedNames', '抓證交所名單失敗', ex);
-        return null;
       }
     }
 
     var out = { byCode: {}, byName: {} };
     pairs.forEach(p => {
+      if (out.byCode[p[0]]) return;   // 同一代號只算一次，免得 byName 自己跟自己撞名
       out.byCode[p[0]] = p[1];
       (out.byName[p[1]] = out.byName[p[1]] || []).push(p[0]);
     });

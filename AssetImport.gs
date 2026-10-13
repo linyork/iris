@@ -391,8 +391,8 @@ var AssetImport = (() => {
     }
 
     Object.keys(unknown).forEach(n => {
-      errors.push('證交所名單與持倉都對不到名稱「' + n + '」（' + unknown[n] + ' 列）—— ' +
-                  '上櫃或改過名的標的請先在 Telegram 用代號記一筆，再傳一次這份檔案');
+      errors.push('證交所／櫃買中心名單與持倉都對不到名稱「' + n + '」（' + unknown[n] + ' 列）—— ' +
+                  '改過名或剛上市的標的請先在 Telegram 用代號記一筆，再傳一次這份檔案');
     });
 
     return { rows: rows, errors: errors, header: header, newCodes: lookup.newCodes };
