@@ -91,7 +91,7 @@ renaming or relocating them fails silently:
    - **Computed-layer reads** (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, answering "what do I have now".
    - **Input-layer reads** (`listTrades`, `listAccounts`) — the 交易/帳戶 tabs themselves, answering "how did this get recorded, which row do I change". They live in `AssetTools.gs`, not `Snapshot`, because each one is the precondition for a write: `listTrades` hands out the row number `voidTrade` needs, `listAccounts` is the only surface exposing **原幣** balances (`Snapshot._cash` gives TWD-converted only).
    - **Ledger writes** (`recordTrade`, `recordDividend`, `setCashBalance`, `voidTrade`) — all four land in the 交易 tab via `AssetTools.gs`; a dividend, a balance correction and a void are each just one row with a different 動作 or 狀態.
-   - **Master writes** (`addAccount`, `updateAccount`) — the only code that writes 帳戶. Instruments have no master any more — see [標的退役](#標的退役名稱只是顯示分類住在持倉).
+   - **Master writes** (`addAccount`, `updateAccount`) — the only code that writes 帳戶. Instruments have no master any more — see [標的退役](#標的退役名稱只是顯示).
    - **External** (`searchWeb`).
 5. `GoogleSheet.gs` — System tabs (chat / log) plus the formatting layer for asset queries, which read through `Snapshot`. Single spreadsheet instance cached per execution.
 
@@ -172,7 +172,7 @@ answer is fixed skip the whole ReAct loop and one LLM call.
 |---|---|
 | `/dashboard` | On Telegram, sends a message with an inline `web_app` button that opens the Mini App; elsewhere returns `Config.DASHBOARD_URL` (Script Property — the browser dashboard is on the HEAD deployment's `/dev`, whose deployment id differs from the webhook's `/exec`, so it cannot be derived). The handler sends its own message and returns `''` — "handled, nothing left to push" — which is distinct from `null`. |
 | `/report` | Runs `buildDailyReport()` — the same generator the 09:00 trigger uses, minus the weekend guard, replying only to the caller |
-| `/refresh` | Runs `Position.rebuild()` on demand. 持倉 prices are live formulas, but 指標 and 配置 hold values frozen at rebuild time — and the total-assets figure everything downstream reads comes from 指標. The 13:00 job does the same thing on a schedule; this is for when you don't want to wait. |
+| `/refresh` | Runs `Position.rebuild()` on demand. 持倉 prices are live formulas, but 指標 holds values frozen at rebuild time — and the total-assets figure everything downstream reads comes from 指標. The 13:00 job does the same thing on a schedule; this is for when you don't want to wait. |
 
 The command list is shared between dispatch and `Telegram.setupCommands()` (`setMyCommands`) so the
 menu cannot drift from what is implemented. **After adding or renaming a command, run
@@ -200,28 +200,17 @@ serialized into `AdvisorCheck`'s prompt, went with it on 2026-10-08.)
 charts were replaced by 累計股利 + 今年 YoY in the performance row, which `_dividends` already
 provides. The function stays (covered by `test_asset.cjs`) for whoever wants those charts back.
 
-**The dashboard is not a page of pretty numbers — three of its blocks exist to be acted on:**
+**The dashboard is not a page of pretty numbers — two of its blocks exist to be acted on:**
 
 | Block | Source | Why it's there |
 |---|---|---|
 | 警示條 | `metrics.warnings` + live `priceMissing` + latest `series[].status` | `Position.replay`'s warnings had **no reader on this page**. A dangling 賣出 or a missing quote used to be drawn as a perfectly clean chart. |
 | 投資績效 | `metrics` (指標) | 未實現／已實現／累計股利／淨損益／XIRR were computed at every rebuild and displayed nowhere. The page could say how much you have, never how much you made. |
-| 目標配置偏離 | `allocation` (配置) | The only block that answers "where does the next dollar go". |
 
-Three things that must stay true there:
+The 目標配置偏離 block went away on 2026-10-13 together with the `配置` tab and 持倉's
+區域／類型／目標配置% — see [配置退役](#配置退役).
 
-- **The 偏離 bars do not use `--up` / `--down`.** Red-up/green-down is the *P&L* convention; over-
-  weighting a good holding is not a loss. Deviation gets its own neutral `--over` / `--under` pair.
-- **"No target set" is not "target is 0".** `配置` writes an empty string for a group with no target
-  (see 目標配置%), so `renderDeviation` filters on **whether the `偏離%` key exists**, not on its value —
-  `_allocation` drops empty cells, which is exactly what makes that distinction survive.
-- **The deviation chart's denominator is 股票市值; the donut right above it is 總資產.** Two ratios,
-  same visual form, different meaning (see 目標配置%). That is why `devHint` has to spell the basis
-  out — the numbers alone cannot.
-
-The allocation **donut** is still derived from `holdings` + `cash`, **not** from the `配置` sheet,
-because that sheet's columns are read dynamically by header name and have changed before. The
-deviation chart does read `配置` — it has to, since targets exist nowhere else.
+The allocation **donut** is derived from `holdings` + `cash`.
 
 `totalSeries()` points carry `status` **only when the day was not a normal 交易日**. A year of
 `"交易日"` strings would eat the 90KB single-key cache limit for nothing, and the only days that change
@@ -289,10 +278,9 @@ from Telegram's `--tg-theme-*` variables so the panel matches the user's theme; 
 stays fixed because it is semantics, not decoration.
 
 Both faces eat the **same** `Dashboard.getPayload()`, so a block that needs no new field costs only
-front-end work — that is how 投資績效 (`metrics`) and 累計貢獻 (`holdings`) landed on both. The three
-blocks the panel deliberately does **not** carry are the warning banner, 目標配置偏離 and 持倉明細:
-the first two are wide diverging charts that stop being readable at 375px, and the table is what the
-tappable holdings list replaces. The browser dashboard stays the place to go when something looks wrong.
+front-end work — that is how 投資績效 (`metrics`) and 累計貢獻 (`holdings`) landed on both. The two
+blocks the panel deliberately does **not** carry are the warning banner and 持倉明細: the banner
+needs width the 375px panel doesn't have, and the table is what the tappable holdings list replaces. The browser dashboard stays the place to go when something looks wrong.
 
 Tapping a holding calls `miniAppAsk()`, which builds a `doPost`-shaped synthetic event and runs it
 through `ChatBot.reply()` — so tools, memory and chat history all follow the normal path. The answer
@@ -394,7 +382,7 @@ and immune to that quota.
   fails again. Blank is worse: `$I` goes to 0 and takes 總資產, every percentage and that day's
   snapshot with it.
 - **A successful fallback still raises a warning**, pushed into `replayed.warnings` **before**
-  `_writeMetricsAndAllocation` — that is what puts it in 指標's `⚠️ 待修正` row and on the
+  `_writeMetrics` — that is what puts it in 指標's `⚠️ 待修正` row and on the
   dashboard banner. Push it afterwards and only the chat reply knows.
 - **If MIS has no price either, the cell stays blank.** Never invent one; the existing
   "抓不到市價" warning is the correct outcome.
@@ -403,31 +391,15 @@ and immune to that quota.
   that covers 上櫃 — `STOCK_DAY_AVG` is TWSE-only, so such a row raises the fallback warning
   whenever GOOGLEFINANCE misses it.
 
-### 目標配置%
+### 配置退役
 
-只有一個地方填：**`持倉` 的 `目標配置%`**，由主人手填（2026-10-08 起，見
-[標的退役](#標的退役名稱只是顯示分類住在持倉)）。重算時依代號原樣保留。偏離只在 `配置` 算。
+2026-10-13 拿掉 `配置` 分頁，連同 `持倉` 的 `區域`／`類型`／`目標配置%`、儀表板的「目標配置偏離」
+與 `getDashboard` 工具的【資產配置】段。主人決定不再追蹤目標配置，而那三欄唯一的讀者就是 `配置`。
+總資產怎麼切（股票／現金／實體）還在 `指標` 的三個佔比，`Facts` 照樣帶給模型。
 
-⚠️ **基準是股票市值，不是總資產。** 目標只填在 `持倉`，而那張表裡全部都是股票 ——
-現金與實體資產沒有 `目標配置%` 這一欄，也不可能有。所以那些目標加起來的 100% 講的是
-**股票這一塊**的 100%。因此 `配置` 的
-`區域` / `類型` 兩維用股票市值當分母；只有 `大類`（股票／現金／實體）那三列在講
-總資產怎麼切，分母才是總資產。`Position._writeMetricsAndAllocation` 的 `pushGroup` 收
-`base` 參數就是為了這件事，不是漏改。
-
-拿總資產去減目標的話，每一組都會固定低配 `目標×(1−股票佔比)`，全部加起來剛好是
-−(現金＋實體佔比) —— 憑空長出來的低配。而這個錯誤**沒有難看的症狀**：每一組偏的方向
-都一樣，圖上只是整排藍的「都買太少」，沒有任何一根 bar 會站出來說分母錯了。2026-08-12
-發現它的方式不是哪個數字看起來不對，是主人講出「我填的加起來就是以股票為 100%」。
-`T5` 現在釘住三個維度各自的分母（各維實際% 相加 = 1）。
-
-⚠️ **填比例不是百分比。** `目標配置%` 與 `配置` 的 `實際%` 都是 0..1 的比例。
-填 12.5 而不是 0.125，偏離會差一百倍。手填時要填比例；程式**不會替你 ÷100** ——
-12.5 到底是 12.5% 還是有人手滑多打一位，程式分不出來，猜錯不會報錯。
-
-⚠️ 留空讀到 0，而 `配置` 用 `target > 0` 判斷「有沒有設目標」—— 所以某個
-區域／類型分組全部留空時，`目標%` / `偏離%` / `偏離金額` 三欄寫成空字串，
-「沒設目標」和「目標是 0」在畫面上長得一樣。
+如果哪天要把目標配置找回來，git 歷史裡有完整實作。要記得的坑：區域／類型的偏離**分母是股票市值，
+不是總資產**（目標只填在股票上，加起來的 100% 是股票的 100%）；拿總資產去減，每一組都會一致地
+低配，圖上看不出分母錯了。還有「沒設目標」要跟「目標是 0」分開。
 
 ### 現金餘額只有兩個入口
 
@@ -577,18 +549,17 @@ a row number). Miss one reader and that void comes back to life in exactly one n
 `GoogleSheet.getDividendHistory`, both `AssetImport` dedup loops (those pass
 `{includeVoid: true}` on purpose), `AssetMigrate`.
 
-### 標的退役：名稱只是顯示，分類住在持倉
+### 標的退役：名稱只是顯示
 
 2026-10-08 拿掉 `標的` 分頁。它的十欄裡，系統真正靠的只有代號（各表的對應鍵）、
-區域／類型／目標配置%（`配置` 的分組與目標），其餘是顯示或沒人讀。現在：
+區域／類型／目標配置%（`配置` 的分組與目標，2026-10-13 一起退役），其餘是顯示或沒人讀。現在：
 
 - **一切以代號對應。** 名稱是顯示用的文字，主人在持倉怎麼改都不影響記帳、重算、匯入。
   統一用證交所簡稱（「富邦台50」），因為券商對帳單用的就是它。
-- **持倉的 名稱／區域／類型／目標配置% 由主人手填。** 持倉每次重算都整張重寫，所以
-  `Position.rebuild` 先依代號讀出這四欄、原樣寫回 —— 漏掉這一步，填的東西記一筆帳就
-  消失，而且不會報錯（`T20`）。持倉裡已有的代號即使交易還沒有它，也會保留那一列。
-- **持倉只列現在有股數的標的**（2026-10-13 起）。出清的列重算時直接拿掉，手填的分類跟著消失，
-  之後再買進要重填。⚠️ 所以 指標 的 已實現損益／累計股利 是從 `replay` 加總，**不是**加總持倉
+- **持倉的名稱主人可以手改。** 持倉每次重算都整張重寫，所以 `Position.rebuild` 先依代號
+  讀出名稱、原樣寫回 —— 漏掉這一步，改的名稱記一筆帳就消失，而且不會報錯（`T20`）。持倉裡已有的代號即使交易還沒有它，也會保留那一列。
+- **持倉只列現在有股數的標的**（2026-10-13 起）。出清的列重算時直接拿掉，手改的名稱跟著消失，
+  之後再買進會回到證交所簡稱。⚠️ 所以 指標 的 已實現損益／累計股利 是從 `replay` 加總，**不是**加總持倉
   那兩欄 —— 加總持倉的話出清標的賺賠的錢會從指標消失（`T55`）。`recordTrade` 認得的代號
   也因此是「持倉 ∪ 交易裡出現過的」：出清前除息、出清後才入帳的股利要記得進來。
 - **`交易!名稱` 是記帳當下寫入的文字**，不再是 VLOOKUP。`AssetSchema.appendTrade` 沒收到
@@ -620,8 +591,8 @@ escape, which makes **update the only correction path** — and delete the dange
 - **代號 cannot be changed at all** — it is the join key shared by 交易 / 持倉 / 每日快照.
 
 A new 代號 can only enter through 買進 (or a broker import); `recordTrade` refuses any other
-action on a code 持倉 has never seen. The next rebuild grows its 持倉 row with 區域／類型／目標配置%
-blank, and the reply says so — `配置` groups by those columns, so they need filling by hand.
+action on a code neither 持倉 nor 交易 has seen. The next rebuild grows its 持倉 row (named by
+the exchange's 簡稱), and the reply names it.
 
 ### 人設寫的是行為，排版放最後
 
@@ -855,7 +826,7 @@ timezone only adds a place for them to land one day off.
 ### 指標 is the only number table — 面板 and 已實現損益 are gone
 
 `指標` (指標 / 數值 / 說明, values frozen at rebuild time) is written by
-`Position._writeMetricsAndAllocation()` and read by `Snapshot._totals`, `DataSync`,
+`Position._writeMetrics()` and read by `Snapshot._totals`, `DataSync`,
 and `GoogleSheet.getDashboard`.
 
 ⚠️ **Cross-tab sums find their column by header name, not by letter.** 指標's 總資產 / 股票市值 /
@@ -870,8 +841,7 @@ reordered column doesn't break it. That is what let the code ship before the own
 
 `實體資產` is cut to 名稱／數量／現價／市值 (2026-10-08). 單位成本 had never been filled in, so
 指標's 「實體資產損益」 always equalled the whole market value — a figure that looked real and wasn't.
-The owner doesn't track P&L on it for now, so cost, P&L and the unread columns went together;
-`配置`'s 大類／實體 row writes its 成本 as blank, not 0 (`T50`). Everything reading this tab goes
+The owner doesn't track P&L on it for now, so cost, P&L and the unread columns went together (`T50`). Everything reading this tab goes
 by column name, and rebuild never rewrites it, so columns can be deleted by hand in any order.
 
 ⚠️ **Gold's 現價 is written by rebuild, as a number.** Its old formula,
@@ -881,7 +851,7 @@ of total assets sat frozen for two months while looking perfectly normal. `Posit
 now fetches USD/oz server-side (`StockPrice.goldUsdPerOz`: gold-api.com, Yahoo `GC=F` as backup),
 USD/TWD from Yahoo `TWD=X` (falling back to the 現金 tab's USD rate), and writes TWD/gram into
 every row. A plain value, not a formula: a fresh GOOGLEFINANCE formula can still read
-「Loading…」 within the same rebuild, which would drop gold from 指標, 配置 and that day's
+「Loading…」 within the same rebuild, which would drop gold from 指標 and that day's
 snapshot. On failure it leaves the cells alone **and says so** in 指標's `⚠️ 待修正` (`T53`).
 Every row is treated as gold in grams; a different kind of physical asset needs its own branch. `持倉` is still positional (`writeBlock`), so a layout change
 there means editing `AssetSchema.TABS` and `Position.rebuild` together; `T47` checks the letters.
@@ -1011,7 +981,7 @@ their own modules**; the table only registers names.
 
 ⚠️ `atHour(9)` fires somewhere between 9:00 and 10:00, so **never use trigger order to
 guarantee freshness**. `setData()` and `buildDailyReport()` each call `Position.rebuild()`
-themselves, because 指標 and 配置 hold values computed at rebuild time — 持倉 prices
+themselves, because 指標 holds values computed at rebuild time — 持倉 prices
 are live formulas, but the total assets figure Snapshot reads is only as fresh as the last rebuild.
 `/refresh` does the same on demand.
 

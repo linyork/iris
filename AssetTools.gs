@@ -10,7 +10,7 @@
  *
  * 修改規則：交易 append-only，記錯用 voidTrade 打作廢記號；
  * 帳戶主檔只能 updateAccount 改，不可刪除只能停用。
- * 標的的名稱／區域／類型／目標配置% 由主人直接在「持倉」表填（2026-10-08 起），沒有工具。
+ * 標的的名稱由主人直接在「持倉」表改（2026-10-08 起），沒有工具。
  */
 var AssetTools = (() => {
   var t = {};
@@ -159,7 +159,7 @@ var AssetTools = (() => {
       // 代號一律當文字處理，台股的前導零不能掉（0056 變成 56 就查不到報價了）。
       // 已知的代號 = 持倉裡有的，加上交易裡出現過的（出清後持倉不留那一列，但除息日在
       // 出清前的股利可能晚幾週才入帳，那一筆還是要記得進來）。新代號只有「買進」能帶進來
-      // —— 重算時持倉會自己長出那一列（區域／類型／目標配置% 留空等主人在持倉填）。
+      // —— 重算時持倉會自己長出那一列（名稱用證交所簡稱）。
       var known = AssetSchema.readObjects(ss.getSheetByName('持倉')).map(x => _str(x['代號']));
       AssetSchema.readTrades(ss).forEach(t => {
         var c = _str(t['代號']);
@@ -253,7 +253,7 @@ var AssetTools = (() => {
         ' → ' + val.account);
 
       if (isNew) {
-        lines.push('▸ ' + val.symbol + ' 是新標的，已加進持倉。區域／類型／目標配置% 請到「持倉」表補上');
+        lines.push('▸ ' + val.symbol + ' 是新標的，已加進持倉');
       }
 
       if (rebuilt && rebuilt.ok) {

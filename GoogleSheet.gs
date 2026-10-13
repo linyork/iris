@@ -212,7 +212,7 @@ var GoogleSheet = (() => {
   };
 
   /**
-   * 總覽儀表板：指標（直式 key-value）＋ 各帳戶現金 ＋ 配置三個維度
+   * 總覽儀表板：指標（直式 key-value）＋ 各帳戶現金
    */
   gs.getDashboard = () => {
     try {
@@ -239,18 +239,6 @@ var GoogleSheet = (() => {
         out.push('【各帳戶現金（已換算台幣）】');
         cash.accounts.forEach(a => out.push('  ' + a.account + ': ' + a.amount.toLocaleString()));
         out.push('  合計: ' + cash.total.toLocaleString());
-      }
-
-      var alloc = AssetSchema.readObjects(ss.getSheetByName('配置'));
-      if (alloc.length) {
-        out.push('【資產配置】');
-        alloc.forEach(r => {
-          var pairs = Object.keys(r)
-            .filter(k => r[k] !== '' && r[k] !== null && r[k] !== undefined)
-            .map(k => k + ': ' + r[k])
-            .join(' | ');
-          if (pairs) out.push('  ' + pairs);
-        });
       }
 
       return out.join('\n') || '（無資料）';

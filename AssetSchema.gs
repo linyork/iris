@@ -4,8 +4,8 @@
  *
  * 一切從交易明細推導：
  *   輸入層（人或 Iris 會寫）  帳戶 / 實體資產 / 交易
- *   計算層（程式或公式產生）  持倉 / 現金 / 配置 / 指標
- *                             （持倉的 名稱／區域／類型／目標配置% 例外：人手維護，重算時依代號保留）
+ *   計算層（程式或公式產生）  持倉 / 現金 / 指標
+ *                             （持倉的 名稱 例外：人手維護，重算時依代號保留）
  *   歷史層                   每日快照（長表）
  *   系統層                   consolelog / chat
  *
@@ -90,9 +90,10 @@ var AssetSchema = (() => {
       textColumns: ['代號'],
       note: '⚠️ 由 Position.rebuild() 覆寫，請勿手改。要修正請改「交易」。',
       // 2026-10-08 拿掉 7 欄沒有任何程式讀的（未實現損益／報酬率／淨成本／淨報酬率／
-      // 佔股票%／佔總資產%／偏離）：損益與佔比由 Snapshot 自己算，偏離看「配置」。
+      // 佔股票%／佔總資產%／偏離）：損益與佔比由 Snapshot 自己算。
+      // 2026-10-13 再拿掉 區域／類型／目標配置%：唯一的讀者是「配置」，那張表一起退役。
       headers: ['代號', '名稱', '股數', '總成本', '平均成本', '累計股利', '已實現損益',
-                '市價', '市值', '區域', '類型', '目標配置%']
+                '市價', '市值']
     },
     {
       name: '現金',
@@ -101,12 +102,6 @@ var AssetSchema = (() => {
       // 2026-10-08 拿掉「類型」：沒人讀（要帳戶類型的地方讀的是「帳戶」表）。
       // 這張表是依欄名寫的（writeBlockByName），表上多一欄或少一欄都不會寫錯位置。
       headers: ['帳戶', '幣別', '期初', '交易淨流', '餘額', '匯率', '台幣值']
-    },
-    {
-      name: '配置',
-      generated: true,
-      note: '⚠️ 由 Position.rebuild() 覆寫。三個維度：大類 / 區域 / 類型。',
-      headers: ['維度', '分組', '成本', '市值', '實際%', '目標%', '偏離%', '偏離金額']
     },
     {
       name: '指標',
@@ -525,7 +520,7 @@ var AssetSchema = (() => {
   };
 
   /**
-   * 一次性遷移：把「標的」的 區域／類型／目標配置% 搬進持倉，名稱統一成證交所簡稱，
+   * 一次性遷移：持倉的名稱統一成證交所簡稱（區域／類型／目標配置% 2026-10-13 退役，不再搬），
    * 並把「交易」的名稱公式凍結成文字。**必須在刪掉「標的」之前跑** —— 先刪的話
    * 交易表每一列的名稱公式會立刻變空白。冪等，重跑結果相同。
    * @returns {object} 摘要
@@ -541,21 +536,18 @@ var AssetSchema = (() => {
       s.str((instBy[code] || {})['名稱']) || s.str(fallback) || code;
     var out = { 持倉: 0, 交易: 0, 證交所名單: !!listed, 標的分頁: !!inst };
 
-    // 持倉：名稱、區域、類型、目標配置% 改成死值（目標配置% 原本是 VLOOKUP 到標的的公式）
+    // 持倉：名稱改成死值
     var pos = ss.getSheetByName('持倉');
     if (pos && pos.getLastRow() >= 2) {
       var pm = s.headerMap(pos);
-      var cols = ['名稱', '區域', '類型', '目標配置%'];
+      var cols = ['名稱'];
       if (cols.some(c => pm[c] === undefined)) throw new Error('持倉缺少欄位：' + cols.join('、'));
       var n = pos.getLastRow() - 1;
       var data = pos.getRange(2, 1, n, pos.getLastColumn()).getValues();
       cols.forEach(c => {
         var vals = data.map(r => {
           var code = s.str(r[pm['代號']]);
-          var src  = instBy[code] || {};
-          if (c === '名稱') return [code ? nameOf(code, r[pm['名稱']]) : ''];
-          var v = src[c] !== undefined && s.str(src[c]) !== '' ? src[c] : r[pm[c]];
-          return [c === '目標配置%' ? (s.str(v) === '' ? '' : s.num(v)) : s.str(v)];
+          return [code ? nameOf(code, r[pm['名稱']]) : ''];
         });
         pos.getRange(2, pm[c] + 1, n, 1).setValues(vals);
       });

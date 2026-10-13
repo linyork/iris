@@ -20,10 +20,6 @@
       --accent:    #3b6ef0;
       --grid:      rgba(0,0,0,.07);
       --shadow:    0 1px 2px rgba(0,0,0,.04), 0 4px 12px rgba(0,0,0,.04);
-      /* 偏離用的中性色。刻意不共用 --up / --down：紅漲綠跌是「賺賠」的語意，
-         超配一檔好標的並不是賠錢，借去表示配置會把兩件事讀成同一件。 */
-      --over:      #e8843c;
-      --under:     #3b6ef0;
       --alert-bg:  #fff4e5;
       --alert-bd:  #f0c48a;
       --alert-fg:  #8a4b00;
@@ -40,8 +36,6 @@
         --accent:   #6d92ff;
         --grid:     rgba(255,255,255,.07);
         --shadow:   none;
-        --over:     #f0a05a;
-        --under:    #6d92ff;
         --alert-bg: #2a2114;
         --alert-bd: #5c4423;
         --alert-fg: #f0c48a;
@@ -244,18 +238,6 @@
       </div>
     </div>
 
-    <div class="card" id="devCard">
-      <div class="card-head">
-        <h2>目標配置偏離</h2>
-        <span class="muted" id="devHint"></span>
-      </div>
-      <div class="chart-box auto"><canvas id="devChart"></canvas></div>
-      <div class="muted" id="devEmpty" hidden>
-        還沒有任何分組設定目標 —— 目標填在「標的」的 <b>目標配置%</b>，
-        填的是 0..1 的比例（12.5% 要寫 0.125）。
-      </div>
-    </div>
-
     <div class="card">
       <h2>持倉明細</h2>
       <div id="holdingsBox"></div>
@@ -402,8 +384,6 @@ function renderTrend(days) {
 }
 
 // ── 配置圓環：由持倉市值 + 現金總額推導 ──────────────────
-// 刻意不讀「配置」sheet——那張表的欄位結構會變，
-// 從 holdings/cash 這兩份已結構化的資料算，比較不會壞。
 function renderAlloc(d) {
   var palette = ['#3b6ef0', '#e8843c', '#35a97a', '#9b5de5', '#e05c8a',
                  '#3aa8c1', '#c9a227', '#7a8794', '#5f7adb', '#c1663a'];
@@ -645,65 +625,6 @@ function sizeBarh(canvasId, count) {
   box.style.height = Math.max(120, count * 30 + 44) + 'px';
 }
 
-// ── 目標配置偏離 ───────────────────────────────────────
-//
-// 這裡是全站唯一「看了會去做事」的一塊：偏離金額就是下一筆錢該往哪放。
-// 資料讀「配置」sheet（Position.rebuild 算好的），不是從 holdings 現推 ——
-// 目標只有那張表知道，甜甜圈那張圖跟目標完全無關。
-//
-// ⚠️ 這張圖的分母是**股票市值**，不是總資產（上面的甜甜圈才是總資產）。目標填在
-// 「標的」，那張表裡全是股票，所以目標的 100% 指的是股票這一塊。兩個比例長得
-// 一樣、意思不同，所以標題旁邊那行提示一定要把基準寫出來。
-//
-// ⚠️ 沒設目標的分組，配置表寫的是空字串而不是 0（「沒設」與「目標是 0」在
-// 畫面上長得一樣是原本就有的坑），所以這裡用「有沒有偏離% 這個 key」來濾。
-function renderDeviation(d) {
-  var rows = (d.allocation || []).filter(function (a) {
-    return (a['維度'] === '區域' || a['維度'] === '類型') &&
-           a['偏離%'] !== undefined && a['偏離%'] !== null;
-  }).sort(function (a, b) { return b['偏離%'] - a['偏離%']; });
-
-  if (charts.dev) charts.dev.destroy();
-  document.getElementById('devEmpty').hidden = rows.length > 0;
-  document.getElementById('devHint').textContent =
-    rows.length ? '佔股票市值　正 = 超配　負 = 低配' : '';
-  if (!rows.length) {
-    document.getElementById('devChart').parentNode.style.height = '0px';
-    return;
-  }
-
-  sizeBarh('devChart', rows.length);
-
-  var opts = barhOpts();
-  opts.scales.x.ticks.callback = function (v) { return (v * 100).toFixed(0) + '%'; };
-  opts.plugins.tooltip.callbacks = {
-    label: function (c) {
-      var r = rows[c.dataIndex];
-      var amt = r['偏離金額'];
-      var line = '實際 ' + ((r['實際%'] || 0) * 100).toFixed(1) + '%' +
-                 '　目標 ' + ((r['目標%'] || 0) * 100).toFixed(1) + '%';
-      if (amt === undefined || amt === null) return line;
-      return [line, (amt > 0 ? '超出 ' : '不足 ') + fmtMoney(Math.abs(amt))];
-    }
-  };
-
-  charts.dev = new Chart(document.getElementById('devChart'), {
-    type: 'bar',
-    data: {
-      labels: rows.map(function (r) { return r['維度'] + '·' + r['分組']; }),
-      datasets: [{
-        data: rows.map(function (r) { return r['偏離%']; }),
-        backgroundColor: rows.map(function (r) {
-          return r['偏離%'] >= 0 ? cssVar('--over') : cssVar('--under');
-        }),
-        borderRadius: 4,
-        maxBarThickness: 22
-      }]
-    },
-    options: opts
-  });
-}
-
 // ── 個股累計貢獻 ───────────────────────────────────────
 // 未實現 + 已實現 + 累計股利。持倉明細那張表要一列一列讀才看得出誰在拖。
 function renderContribution(d) {
@@ -770,7 +691,6 @@ function render(d) {
   renderMetrics(d);
   renderAlloc(d);
   renderCash(d);
-  renderDeviation(d);
   renderHoldings(d);
   renderContribution(d);
 

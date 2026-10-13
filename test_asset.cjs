@@ -445,7 +445,7 @@ console.log('\nT3  建表');
 const target = SpreadsheetApp.openById(AssetSchema.SHEET_ID);
 target.sheets.push(new Sheet('工作表1'));          // 模擬新試算表的預設分頁
 let r3 = AssetSchema.build();
-check('建立 10 個分頁', r3.created.length === 10, r3.created.length);
+check('建立 9 個分頁', r3.created.length === 9, r3.created.length);
 check('預設的「工作表1」被移除', !target.getSheetByName('工作表1'));
 check('交易表標題正確', target.getSheetByName('交易').raw(1, 2) === '動作', target.getSheetByName('交易').raw(1, 2));
 // 公式只填到有資料的最後一列。空表就該是空的 —— 預灌公式會讓 getLastRow()
@@ -557,26 +557,12 @@ check('持倉 8 檔（只列在持的；3 檔已出清的不留列）', reb.posi
     String((panel.find(x => x['指標'] === 'XIRR（年化）') || {})['數值']) === '', '');
 }
 {
-  const alloc = AssetSchema.readObjects(target.getSheetByName('配置'));
-  const region = alloc.filter(a => a['維度'] === '區域');
-  const tw = region.find(a => a['分組'] === '台');
-  check('區域維度有 台/美/歐/日 四組', region.length === 4, region.map(x => x['分組']).join(','));
-  check('台股市值 = 舊表配置表裡區域為台的合計', near(num(tw['市值']), EXP.twValue, 2), money(num(tw['市值'])));
-  const kinds = alloc.filter(a => a['維度'] === '類型');
-  check('類型維度有 息/指 兩組', kinds.length === 2, kinds.map(x => x['分組']).join(','));
-  const major = alloc.filter(a => a['維度'] === '大類');
-  check('大類三組相加 = 總資產', near(major.reduce((s, x) => s + num(x['市值']), 0), EXP.totalAssets, 3),
-    money(major.reduce((s, x) => s + num(x['市值']), 0)));
-
-  // ⚠️ 兩個維度、兩個分母。這兩條就是在釘那件事：區域／類型要跟「標的」的目標
-  //    比，而那張表裡全是股票，目標的 100% 是股票的 100%，所以分母是股票市值；
-  //    大類在講總資產怎麼切，分母是總資產。分母寫成一樣的話，其中一條會壞。
-  const sumPct = (rows) => rows.reduce((s, x) => s + num(x['實際%']), 0);
-  check('區域各組實際% 相加 = 1（分母是股票市值，不是總資產）',
-    near(sumPct(region), 1, 1e-3), sumPct(region));
-  check('類型各組實際% 相加 = 1（同上）', near(sumPct(kinds), 1, 1e-3), sumPct(kinds));
-  check('大類三組實際% 相加 = 1（這一維的分母才是總資產）',
-    near(sumPct(major), 1, 1e-3), sumPct(major));
+  // 「配置」2026-10-13 退役。總資產怎麼切只剩指標的三個佔比，它們相加要是 1。
+  check('不再建「配置」分頁', !target.getSheetByName('配置'));
+  const panel = AssetSchema.readObjects(target.getSheetByName('指標'));
+  const v = (k) => num((panel.find(x => x['指標'] === k) || {})['數值']);
+  check('股票／現金／實體佔比相加 = 1', near(v('股票佔比') + v('現金佔比') + v('實體佔比'), 1, 1e-3),
+    v('股票佔比') + v('現金佔比') + v('實體佔比'));
 }
 
 // ─── T6  加一筆真實賣出，驗證全鏈路 ──────────────────────────────
@@ -792,9 +778,9 @@ console.log('\nT11  recordTrade 的驗證與寫入');
   check('新標的重算後出現在持倉', posRows().length === posBefore + 1 && !!p929,
     posRows().length + ' vs ' + (posBefore + 1));
   check('新標的的代號保留前導零', !!p929, JSON.stringify(posRows().map(x => x['代號']).slice(-2)));
-  check('新標的的區域／類型／目標配置% 留空等主人填',
-    !!p929 && p929['區域'] === '' && p929['類型'] === '' && p929['目標配置%'] === '', JSON.stringify(p929));
-  check('回覆提醒去持倉補分類', /新標的/.test(r2) && /持倉/.test(r2), r2);
+  check('持倉不再有 區域／類型／目標配置% 欄（2026-10-13 退役）',
+    !!p929 && !('區域' in p929) && !('類型' in p929) && !('目標配置%' in p929), JSON.stringify(p929));
+  check('回覆點名新標的', /新標的/.test(r2) && /持倉/.test(r2), r2);
   check('沒持有過的代號不能直接記股利',
     /持倉裡沒有/.test(AssetTools.recordTrade({ action: '股利', symbol: '9999', amount: 1 })), '');
 
@@ -1127,7 +1113,7 @@ console.log('\nT19  抓不到市價時要出聲，不要靜默少算');
   const saved = String(posSheet.raw(victim, 8));
   posSheet.getRange(victim, 8).setValue('');
 
-  const r = Position._writeMetricsAndAllocation(target, [],
+  const r = Position._writeMetrics(target, [],
     { positions: Position.replay(AssetSchema.readTrades(target)).positions, warnings: [] });
   const panel = AssetSchema.readObjects(target.getSheetByName('指標'));
   const warn = panel.filter(x => /待修正/.test(String(x['指標'])));
@@ -1167,8 +1153,8 @@ console.log('\nT19  抓不到市價時要出聲，不要靜默少算');
 }
 
 // ─── T20  持倉的手填欄位重算後原樣保留 ─────────────────────────────
-// 2026-10-08「標的」退役：名稱／區域／類型／目標配置% 由主人直接在持倉填。
-// 持倉每次重算都整張重寫，沒有依代號帶回這四欄的話，主人填的東西記一筆帳就消失。
+// 2026-10-08「標的」退役：名稱由主人直接在持倉改（區域／類型／目標配置% 2026-10-13 退役）。
+// 持倉每次重算都整張重寫，沒有依代號帶回名稱的話，主人改的名稱記一筆帳就消失。
 console.log('\nT20  持倉的手填欄位重算後保留');
 {
   const posSheet = target.getSheetByName('持倉');
@@ -1178,33 +1164,14 @@ console.log('\nT20  持倉的手填欄位重算後保留');
   const objOf = (code) => AssetSchema.readObjects(posSheet).find(x => String(x['代號']) === code) || {};
   const code = String((AssetSchema.readObjects(posSheet).find(x => num(x['股數']) > 0) || {})['代號']);
   const saved = {};
-  ['名稱', '區域', '類型', '目標配置%'].forEach(k => { saved[k] = objOf(code)[k]; });
+  ['名稱'].forEach(k => { saved[k] = objOf(code)[k]; });
 
   const at = rowOf(code);
   posSheet.getRange(at, col('名稱')).setValue('我自己取的名字');
-  posSheet.getRange(at, col('區域')).setValue('測區');
-  posSheet.getRange(at, col('類型')).setValue('測型');
-  posSheet.getRange(at, col('目標配置%')).setValue(0.125);
 
   Position.rebuild();
   const after = objOf(code);
   check('名稱重算後保留', after['名稱'] === '我自己取的名字', after['名稱']);
-  check('區域／類型重算後保留', after['區域'] === '測區' && after['類型'] === '測型', after['區域'] + '/' + after['類型']);
-  check('目標配置% 重算後保留，而且是數字不是公式',
-    num(after['目標配置%']) === 0.125 && String(posSheet.raw(rowOf(code), col('目標配置%'))).charAt(0) !== '=',
-    String(posSheet.raw(rowOf(code), col('目標配置%'))));
-
-  // 配置照持倉填的分類與目標彙總
-  const alloc = AssetSchema.readObjects(target.getSheetByName('配置'));
-  check('配置出現「測區」這一組，目標% 含進這一檔',
-    alloc.some(x => x['分組'] === '測區' && Math.abs(num(x['目標%']) - 0.125) < 1e-9),
-    JSON.stringify(alloc.filter(x => x['分組'] === '測區')));
-
-  // 空白要保持空白：配置用「有沒有目標」分辨「沒設」與「設成 0」
-  posSheet.getRange(rowOf(code), col('目標配置%')).setValue('');
-  Position.rebuild();
-  check('目標配置% 留空，重算後仍是空白（不是 0）', objOf(code)['目標配置%'] === '', JSON.stringify(objOf(code)['目標配置%']));
-
   // 改名只影響顯示：記帳照代號走
   const r = AssetTools.recordTrade({ action: '股利', symbol: code, amount: 1, date: '2026-09-02' });
   check('改過名稱之後照樣能用代號記帳', /已記錄第 \d+ 列/.test(r), r.split('\n')[0]);
@@ -2532,8 +2499,6 @@ console.log('\nT47  「持倉」欄位的跨表引用');
   const mv = String(pos.raw(at, H.indexOf('市值') + 1));
   check('市值公式用的是「股數」×「市價」欄',
     mv.indexOf('$' + L('股數') + at) >= 0 && mv.indexOf('$' + L('市價') + at) >= 0, mv);
-  check('目標配置% 在 ' + L('目標配置%') + ' 欄，是手填的值不是公式（「標的」已退役）',
-    String(pos.raw(at, H.indexOf('目標配置%') + 1)).charAt(0) !== '=');
 }
 
 // ─── T48  名稱 → 代號：證交所優先、只收剛好一檔 ─────────────────────
@@ -2634,9 +2599,6 @@ console.log('\nT50  實體資產不追蹤損益');
   check('指標不再有實體資產成本／損益',
     metric.indexOf('實體資產成本') < 0 && metric.indexOf('實體資產損益') < 0, metric.join(','));
   check('指標仍有實體資產市值與佔比', metric.indexOf('實體資產') >= 0 && metric.indexOf('實體佔比') >= 0);
-  const phys = AssetSchema.readObjects(target.getSheetByName('配置')).find(x => x['維度'] === '大類' && x['分組'] === '實體') || {};
-  check('配置的「大類／實體」成本是空白，不是 0', phys['成本'] === '', JSON.stringify(phys['成本']));
-  check('配置的「大類／實體」市值照算', num(phys['市值']) > 0, phys['市值']);
 }
 
 // ─── T51  交易表刪欄之後，現金流與帳戶餘額照樣對 ─────────────────────

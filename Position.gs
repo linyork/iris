@@ -1,6 +1,6 @@
 /**
  * Position
- * @description 從「交易」重算持倉、現金、配置、指標
+ * @description 從「交易」重算持倉、現金、指標
  *
  * 把交易依日期重放，維護每檔的（股數, 總成本），賣出時按加權平均沖銷
  * （與台灣券商對帳單一致）：
@@ -9,7 +9,7 @@
  *
  * 不用試算表公式的原因：加權平均是路徑相依的，SUMIF 這類彙總函式表達不出來。
  *
- * ⚠️ 會整段覆寫「持倉」「現金」「配置」「指標」，那幾張表不可手改。
+ * ⚠️ 會整段覆寫「持倉」「現金」「指標」，那幾張表不可手改。
  */
 var Position = (() => {
   var p = {};
@@ -137,7 +137,7 @@ var Position = (() => {
    *   台幣／公克 = 美元／盎司 × 匯率 ÷ 31.1035
    *
    * 寫**數字**不寫公式：每次重算都換一個新的 GOOGLEFINANCE 公式，那一格在同一次重算
-   * 裡可能還是「Loading…」，下游讀到的就是 0 —— 黃金會在指標、配置與當天快照裡消失。
+   * 裡可能還是「Loading…」，下游讀到的就是 0 —— 黃金會在指標與當天快照裡消失。
    * 一天重算好幾次（09:00、13:00、18:00 與每次記帳），死值的時效夠用。
    *
    * ⚠️ 「實體資產」每一列都當成黃金、數量以公克計。表上若出現別種實體資產，要先在這裡分流。
@@ -350,7 +350,7 @@ var Position = (() => {
     options = options || {};
     var ss = AssetSchema.open();
 
-    var need = ['交易', '帳戶', '實體資產', '持倉', '現金', '配置', '指標'];
+    var need = ['交易', '帳戶', '實體資產', '持倉', '現金', '指標'];
     var missing = need.filter(n => !ss.getSheetByName(n));
     if (missing.length) {
       var msg = '缺少分頁：' + missing.join('、') + '，請先執行 setupAssetSheet()';
@@ -367,10 +367,10 @@ var Position = (() => {
     // ── 持倉 ──────────────────────────────────────────────────
     // A~G 由程式算；H、I 是公式，讓市價/市值跟著 GOOGLEFINANCE 即時變動。
     //
-    // ⚠️ 名稱／區域／類型／目標配置% 是**主人手填的**（2026-10-08「標的」分頁退役後
-    //    就住在這裡）。這張表每次重算都整張重寫，所以先依代號把這四欄讀出來、原樣寫回 ——
-    //    漏了這一步，主人填的東西每記一筆帳就被洗掉一次，而且不會報錯。
-    var KEEP = ['名稱', '區域', '類型', '目標配置%'];
+    // ⚠️ 名稱是**主人可以手改的**（2026-10-08「標的」分頁退役後就住在這裡）。這張表
+    //    每次重算都整張重寫，所以先依代號把它讀出來、原樣寫回 —— 漏了這一步，主人改的
+    //    名稱每記一筆帳就被洗掉一次，而且不會報錯。
+    var KEEP = ['名稱'];
     var kept = {};
     AssetSchema.readObjects(ss.getSheetByName('持倉')).forEach(x => {
       var c = _str(x['代號']);
@@ -386,7 +386,7 @@ var Position = (() => {
     // 持倉只列**現在有股數**的標的。股數歸零（出清）的那一列在重算時直接拿掉，
     // 它的已實現損益與股利仍在「交易」裡，指標的合計從 replay 算，不靠這張表（T55）。
     // 例外：交易裡從沒出現過的代號（主人先建好一列等著買）照樣保留。
-    // ⚠️ 出清的列連同手填的區域／類型／目標配置% 一起消失；之後再買進要重填。
+    // ⚠️ 出清的列連同手改的名稱一起消失；之後再買進會回到證交所簡稱。
     var codeSet = {};
     Object.keys(replayed.positions).forEach(c => {
       if (replayed.positions[c].shares > 0) codeSet[c] = true;
@@ -400,7 +400,6 @@ var Position = (() => {
       var r   = n + 2;                                  // 實際列號
       var avg = st.shares > 0 ? st.cost / st.shares : 0;
       var name = _str(k['名稱']) || tradeName[code] || AssetSchema.nameFor(ss, code);
-      var target = _str(k['目標配置%']) === '' ? '' : _num(k['目標配置%']);
 
       return [
         code,
@@ -412,11 +411,7 @@ var Position = (() => {
         _round(st.realized, 2),
         // 市價：出清的標的不抓價，省 GOOGLEFINANCE 配額也避免 #N/A
         st.shares > 0 ? _priceFormula(r) : '',
-        '=IF(OR($C' + r + '=0,$H' + r + '=""),0,$C' + r + '*$H' + r + ')',
-        _str(k['區域']),
-        _str(k['類型']),
-        // 偏離不在這張表算 —— 看「配置」（分母是股票市值，見 _writeMetricsAndAllocation）
-        target
+        '=IF(OR($C' + r + '=0,$H' + r + '=""),0,$C' + r + '*$H' + r + ')'
       ];
     });
 
@@ -468,7 +463,7 @@ var Position = (() => {
     // 下面的指標才讀得到更新後的市值
     var priceFix = p._fillMissingPrices(ss);
 
-    // ⚠️ 這一句一定要在 _writeMetricsAndAllocation 之前 —— 「指標」最上面的
+    // ⚠️ 這一句一定要在 _writeMetrics 之前 —— 「指標」最上面的
     // 「⚠️ 待修正」列就是從 replayed.warnings 生出來的，寫完之後才 push 就只剩
     // 回覆看得到，儀表板的警示條完全不知情
     if (priceFix.filled.length) {
@@ -483,7 +478,7 @@ var Position = (() => {
     var gold = p._refreshGoldPrice(ss);
     if (!gold.ok && gold.reason) replayed.warnings.push(gold.reason);
 
-    var summary = p._writeMetricsAndAllocation(ss, trades, replayed);
+    var summary = p._writeMetrics(ss, trades, replayed);
 
     // 資料剛動過，儀表板與 Mini App 的快取就過期了。不清的話，記完一筆交易
     // 最久要等 15 分鐘才看得到 —— 而使用者記完通常馬上就會去看。
@@ -504,10 +499,10 @@ var Position = (() => {
   };
 
   /**
-   * 產生「指標」與「配置」。
-   * 這兩張要等持倉的公式算完（市值），所以獨立成一段、在 flush 之後跑。
+   * 產生「指標」。
+   * 要等持倉的公式算完（市值），所以獨立成一段、在 flush 之後跑。
    */
-  p._writeMetricsAndAllocation = (ss, trades, replayed) => {
+  p._writeMetrics = (ss, trades, replayed) => {
     var posSheet = ss.getSheetByName('持倉');
     var positions = AssetSchema.readObjects(posSheet);
     var cash      = AssetSchema.readObjects(ss.getSheetByName('現金'));
@@ -533,12 +528,12 @@ var Position = (() => {
     // 這樣把 009826 的 302 萬市值當成 0 寫進指標，儀表板顯示單日 −20%。
     //
     // 頭四個數字改用公式（見下）之後會自己修正，但 JS 這邊算出來的
-    // 未實現損益／報酬率／XIRR／配置仍然是死值，所以要把這件事講出來。
+    // 未實現損益／報酬率／XIRR／佔比仍然是死值，所以要把這件事講出來。
     var noPrice = positions.filter(x => _num(x['股數']) > 0 && _num(x['市值']) <= 0);
     if (noPrice.length) {
       var codes = noPrice.map(x => _str(x['代號'])).join('、');
       replayed.warnings.push(
-        codes + ' 有持股但抓不到市價，本次的未實現損益／報酬率／配置都少算了這幾檔。' +
+        codes + ' 有持股但抓不到市價，本次的未實現損益／報酬率／佔比都少算了這幾檔。' +
         '總資產與股票市值是公式、報價回來會自己更正；其餘數字請等下一次重算'
       );
       Logger.error('Position.rebuild', '有持股讀不到市價', { codes: codes });
@@ -712,55 +707,9 @@ var Position = (() => {
       metricSheet.getRange(2, 2, Math.max(metricSheet.getMaxRows() - 1, 1), 1)
         .setNumberFormat('General');
     } catch (e) {
-      Logger.warning('Position._writeMetricsAndAllocation', '重設指標數值欄格式失敗', e.message);
+      Logger.warning('Position._writeMetrics', '重設指標數值欄格式失敗', e.message);
     }
     AssetSchema.writeBlock(metricSheet, metricRows, 3);
-
-    // ── 配置：大類 / 區域 / 類型 三個維度 ──
-    var held = positions.filter(x => _num(x['股數']) > 0);
-    var allocRows = [];
-
-    // ⚠️ 兩種維度、兩個分母，這是刻意的，不是漏改。
-    //
-    // 大類（股票／現金／實體）講的是總資產怎麼切，分母就是總資產。
-    // 區域／類型的分母是**股票市值**，因為它們要跟目標比，而目標只存在於「標的」，
-    // 「標的」裡全部都是股票 —— 現金與實體資產沒有目標配置% 那一欄，也不可能有。
-    // 那些目標加起來的 100% 指的是股票這一塊的 100%。
-    //
-    // 用總資產當分母去減目標，每一組都會固定低配 目標×(1−股票佔比)，全部加起來
-    // 剛好是 −(現金＋實體佔比)：一筆憑空的低配。而且每組偏的方向一樣，圖上看起來
-    // 只是「都買太少」，不會有任何一根 bar 站出來說分母錯了。
-    var pushGroup = (dim, label, cost, value, target, base) => {
-      var actual = pct(value, base);
-      allocRows.push([
-        dim, label, cost === null ? '' : _round(cost), _round(value), _round(actual, 4),
-        target === null ? '' : _round(target, 4),
-        target === null ? '' : _round(actual - target, 4),
-        target === null ? '' : _round((actual - target) * base)
-      ]);
-    };
-
-    pushGroup('大類', '股票', stockCost, stockValue, null, totalAssets);
-    pushGroup('大類', '現金', cashValue, cashValue, null, totalAssets);
-    // 實體資產不記成本（2026-10-08 起不追蹤它的損益），成本欄留空而不是寫 0
-    pushGroup('大類', '實體', null, physicalValue, null, totalAssets);
-
-    [['區域', '區域'], ['類型', '類型']].forEach(([dim, key]) => {
-      var groups = {};
-      held.forEach(x => {
-        var g = _str(x[key]) || '未分類';
-        if (!groups[g]) groups[g] = { cost: 0, value: 0, target: 0 };
-        groups[g].cost   += _num(x['總成本']);
-        groups[g].value  += _num(x['市值']);
-        groups[g].target += _num(x['目標配置%']);
-      });
-      Object.keys(groups).sort().forEach(g => {
-        pushGroup(dim, g, groups[g].cost, groups[g].value,
-          groups[g].target > 0 ? groups[g].target : null, stockValue);
-      });
-    });
-
-    AssetSchema.writeBlock(ss.getSheetByName('配置'), allocRows, 8);
 
     return { totalAssets: _round(totalAssets), xirr: xirr };
   };

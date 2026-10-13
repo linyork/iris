@@ -32,7 +32,7 @@ function _generateReport(spec) {
       Utilities.formatDate(new Date(), 'GMT+8', 'yyyy/MM/dd HH:mm'));
 
     // 排程的先後順序不保證（atHour 是一小時的窗口），所以自己先重算一次 ——
-    // 指標與配置是重算當下寫死的值，不重算就會拿上一次寫交易時的舊數字當今天。
+    // 指標是重算當下寫死的值，不重算就會拿上一次寫交易時的舊數字當今天。
     Position.rebuild();
 
     var data = spec.gather();
@@ -275,7 +275,7 @@ function monthlyReport() {
         '內容請包含：\n' +
         '1. 上月整體績效（資產增減、收益率變化）\n' +
         '2. 上月股利收入\n' +
-        '3. 配置與目標的偏差\n' +
+        '3. 股票／現金／實體佔比的變化\n' +
         '4. 上月重大事件回顧\n' +
         '5. 本月操作建議'
     });

@@ -266,44 +266,6 @@ var Snapshot = (() => {
   };
 
   /**
-   * 資產配置：目前實際 vs 目標（配置 sheet）
-   * 配置 sheet 結構不一定固定，盡量泛用：讀 headers + rows，過濾空列
-   */
-  snap._allocation = (ss) => {
-    var sheet = ss.getSheetByName('配置');
-    if (!sheet) return [];
-    try {
-      var lastRow = sheet.getLastRow();
-      var lastCol = sheet.getLastColumn();
-      if (lastRow < 2) return [];
-      var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0]
-        .map(h => String(h || '').trim());
-      var data = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
-
-      return data
-        .filter(r => r.some(v => v !== '' && v !== null))
-        .map(row => {
-          var obj = {};
-          headers.forEach((h, i) => {
-            if (h && row[i] !== '' && row[i] !== null) {
-              obj[h] = (typeof row[i] === 'number') ? _round(row[i], 4) : row[i];
-            }
-          });
-          // ⚠️ 分母要跟著比例一起送出去。這張表的「實際%」有兩種基準（大類是
-          // 總資產、區域／類型是股票市值，見 Position 的 pushGroup），兩個 0..1
-          // 的數字擺在一起，模型分不出來就會拿去跟「股票佔總資產」互相比較 ——
-          // 2026-08-09 就發生過同一種事（把佔股票市值的 32.22% 當成佔總資產）。
-          // 表上不加欄位是刻意的：這是給讀的人用的標籤，不是要存的資料。
-          if (obj['維度']) obj['基準'] = obj['維度'] === '大類' ? '佔總資產' : '佔股票市值';
-          return obj;
-        });
-    } catch (e) {
-      Logger.warning('Snapshot._allocation', '讀取配置失敗', e.message);
-      return [];
-    }
-  };
-
-  /**
    * 股利聚合（交易表裡動作＝股利的列）
    *   本月、今年、去年同期、最近 3 筆
    */

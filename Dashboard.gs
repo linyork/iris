@@ -2,7 +2,7 @@
  * Dashboard
  * @description 網頁儀表板的資料層與存取控制
  *
- * 資料完全重用 Snapshot 既有的結構化讀取器（_holdings / _cash / _allocation …），
+ * 資料完全重用 Snapshot 既有的結構化讀取器（_holdings / _cash / _metrics …），
  * 只補上圖表需要的時間序列，再包一層快取。這裡不做任何 LLM 呼叫。
  *
  * 存取控制見 isAuthorized()：webhook 用的那個 deployment 是「任何人、匿名」，
@@ -78,7 +78,6 @@ var Dashboard = (() => {
       holdings:    holdings,
       cash:        cash,
       dividends:   Snapshot._dividends(ss),
-      allocation:  Snapshot._allocation(ss),
       fromCache:   false
     };
 
