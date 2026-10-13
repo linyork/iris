@@ -183,7 +183,11 @@ var StockPrice = (() => {
 
   /**
    * 台股「代號 ↔ 簡稱」對照：證交所上市（STOCK_DAY_ALL）＋ 櫃買中心上櫃
-   * （tpex_mainboard_daily_close_quotes），合計約兩千檔。
+   * （tpex_mainboard_quotes），合計約兩千四百檔。
+   *
+   * ⚠️ 櫃買中心不要用 tpex_mainboard_daily_close_quotes。那份連權證一起約一萬兩千筆、4.8MB，
+   *    2026-10-13 在 GAS 裡收到的回應在約 2.2MB 處被截斷，JSON.parse 直接失敗。
+   *    tpex_mainboard_quotes 只有股票與 ETF，約一千檔、三百多 KB。
    *
    * 2026-10-08 起名稱一律用這份簡稱（「富邦台50」不是「富邦台灣50」）：券商對帳單用的
    * 就是它，CSV 匯入因此能直接對上，新標的也不必有人手打名稱。
@@ -226,7 +230,7 @@ var StockPrice = (() => {
     if (!pairs) {
       var twse = _namePairs('證交所', 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL',
         'Code', 'Name');
-      var tpex = _namePairs('櫃買中心', 'https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes',
+      var tpex = _namePairs('櫃買中心', 'https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes',
         'SecuritiesCompanyCode', 'CompanyName');
       if (!twse && !tpex) return null;
       pairs = (twse || []).concat(tpex || []);

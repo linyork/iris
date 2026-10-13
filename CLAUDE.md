@@ -1043,7 +1043,8 @@ is turned into a code. `AssetSchema.codeForName` looks it up in **the exchange n
 first** (`StockPrice.listedNames` — TWSE 上市 *and* TPEx 上櫃, the same 簡稱 the broker prints), and
 only falls back to 持倉's names when the lists can't be fetched. ⚠️ The TPEx half is not optional:
 on 2026-10-12 the first 上櫃 buy (00679B) failed to import with 「對不到名稱」 — only TWSE was
-fetched, and 持倉 had no row for a code being bought for the first time. Exactly one match or nothing — never fuzzy, since
+fetched, and 持倉 had no row for a code being bought for the first time. Use TPEx's `tpex_mainboard_quotes`, not
+`tpex_mainboard_daily_close_quotes` — the latter includes warrants (4.8MB) and arrived truncated in GAS. Exactly one match or nothing — never fuzzy, since
 a wrong guess files the trade against the wrong instrument. A code 持倉 doesn't have yet is
 named in the reply so its classification gets filled in. `doPost` routes `message.type === 'document'` straight to `AssetImport.fromUpload()` —
 no ChatBot, no LLM. The file is already structured; handing it to a model only adds a place
