@@ -510,7 +510,7 @@ check('重跑遷移不會產生重複交易列',
 console.log('\nT5  重算持倉並與舊表對帳');
 const reb = Position.rebuild();
 check('重算成功', reb.ok === true, JSON.stringify(reb));
-check('持倉 11 檔（8 檔在持 + 3 檔已出清但領過息）', reb.positions === 11, reb.positions);
+check('持倉 8 檔（只列在持的；3 檔已出清的不留列）', reb.positions === 8, reb.positions);
 {
   const pos = AssetSchema.readObjects(target.getSheetByName('持倉'));
   const legacyStocks = LEGACY['所有股票'].slice(2);
@@ -1127,7 +1127,8 @@ console.log('\nT19  抓不到市價時要出聲，不要靜默少算');
   const saved = String(posSheet.raw(victim, 8));
   posSheet.getRange(victim, 8).setValue('');
 
-  const r = Position._writeMetricsAndAllocation(target, [], { warnings: [] });
+  const r = Position._writeMetricsAndAllocation(target, [],
+    { positions: Position.replay(AssetSchema.readTrades(target)).positions, warnings: [] });
   const panel = AssetSchema.readObjects(target.getSheetByName('指標'));
   const warn = panel.filter(x => /待修正/.test(String(x['指標'])));
 
@@ -2792,6 +2793,28 @@ console.log('\nT54  上櫃標的的名稱與報價');
   const q = StockPrice.getRawPrices(['2222B']);
   check('MIS 的空殼被濾掉，上櫃報價拿得到', q.length === 1 && q[0].code === '2222B' && q[0].current === 24.8, JSON.stringify(q));
   global.StockPrice = savedSP; global.UrlFetchApp = savedFetch;
+}
+
+// 出清的標的不留在持倉。但它們的已實現損益與股利是真的錢，指標的合計不能跟著少；
+// 出清後才入帳的股利也還要記得進來。
+console.log('\nT55  出清的標的不留在持倉');
+{
+  Position.rebuild();
+  const replayed = Position.replay(AssetSchema.readTrades(target)).positions;
+  const cleared = Object.keys(replayed).filter(c => replayed[c].shares <= 0);
+  const pos = AssetSchema.readObjects(target.getSheetByName('持倉'));
+  check('夾具裡確實有出清的標的（否則這組測試沒有意義）', cleared.length > 0, cleared.join(','));
+  check('持倉沒有任何出清標的的列', !pos.some(x => cleared.indexOf(String(x['代號'])) >= 0),
+    pos.filter(x => cleared.indexOf(String(x['代號'])) >= 0).map(x => x['代號']).join(','));
+  const panel = AssetSchema.readObjects(target.getSheetByName('指標'));
+  const val = (k) => num((panel.find(x => x['指標'] === k) || {})['數值']);
+  const sumOf = (f) => Object.keys(replayed).reduce((a, c) => a + Math.round(replayed[c][f] * 100) / 100, 0);
+  check('指標的已實現損益仍含出清標的', Math.abs(val('已實現損益') - Math.round(sumOf('realized'))) <= 1,
+    val('已實現損益') + ' vs ' + sumOf('realized'));
+  check('指標的累計股利仍含出清標的', Math.abs(val('累計股利') - Math.round(sumOf('dividend'))) <= 1,
+    val('累計股利') + ' vs ' + sumOf('dividend'));
+  const out = AssetTools.recordTrade({ action: '股利', symbol: cleared[0], amount: 10, account: '國泰證券戶' });
+  check('出清後才入帳的股利照樣記得進來', /已記錄/.test(out) && !/持倉裡沒有/.test(out), out);
 }
 
 console.log('\n' + (fail === 0 ? '全部通過' : fail + ' 項失敗') + '（' + pass + '/' + (pass + fail) + '）');

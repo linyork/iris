@@ -383,13 +383,15 @@ var Position = (() => {
     var tradeName = {};
     trades.forEach(t => { var c = _str(t['代號']); if (c && _str(t['名稱'])) tradeName[c] = _str(t['名稱']); });
 
-    // 持倉裡原本就有的代號一律保留（主人可能先建好一列等著買），即使交易裡還沒有它
+    // 持倉只列**現在有股數**的標的。股數歸零（出清）的那一列在重算時直接拿掉，
+    // 它的已實現損益與股利仍在「交易」裡，指標的合計從 replay 算，不靠這張表（T55）。
+    // 例外：交易裡從沒出現過的代號（主人先建好一列等著買）照樣保留。
+    // ⚠️ 出清的列連同手填的區域／類型／目標配置% 一起消失；之後再買進要重填。
     var codeSet = {};
     Object.keys(replayed.positions).forEach(c => {
-      var st = replayed.positions[c];
-      if (st.shares > 0 || st.realized !== 0 || st.dividend !== 0) codeSet[c] = true;
+      if (replayed.positions[c].shares > 0) codeSet[c] = true;
     });
-    Object.keys(kept).forEach(c => { codeSet[c] = true; });
+    Object.keys(kept).forEach(c => { if (!replayed.positions[c]) codeSet[c] = true; });
     var codes = Object.keys(codeSet).sort();
 
     var posRows = codes.map((code, n) => {
@@ -517,8 +519,10 @@ var Position = (() => {
     var stockCost     = positions.reduce((a, x) => a + (_num(x['股數']) > 0 ? _num(x['總成本']) : 0), 0);
     var cashValue     = sum(cash, '台幣值');
     var physicalValue = sum(physical, '市值');
-    var totalDividend = sum(positions, '累計股利');
-    var totalRealized = sum(positions, '已實現損益');
+    // 已實現與股利從 replay 加總，不從持倉：出清的標的不在持倉裡了，但它們賺賠的錢是真的
+    var replayedPos   = Object.keys(replayed.positions).map(c => replayed.positions[c]);
+    var totalDividend = replayedPos.reduce((a, x) => a + _round(x.dividend, 2), 0);
+    var totalRealized = replayedPos.reduce((a, x) => a + _round(x.realized, 2), 0);
     var totalAssets   = stockValue + cashValue + physicalValue;
 
     // ── 缺價守門 ──────────────────────────────────────────────

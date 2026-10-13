@@ -157,9 +157,14 @@ var AssetTools = (() => {
 
       // ── 代號 ──
       // 代號一律當文字處理，台股的前導零不能掉（0056 變成 56 就查不到報價了）。
-      // 已知的代號 = 持倉裡有的。新代號只有「買進」能帶進來 —— 重算時持倉會自己長出
-      // 那一列（名稱用證交所簡稱，區域／類型／目標配置% 留空等主人在持倉填）。
+      // 已知的代號 = 持倉裡有的，加上交易裡出現過的（出清後持倉不留那一列，但除息日在
+      // 出清前的股利可能晚幾週才入帳，那一筆還是要記得進來）。新代號只有「買進」能帶進來
+      // —— 重算時持倉會自己長出那一列（區域／類型／目標配置% 留空等主人在持倉填）。
       var known = AssetSchema.readObjects(ss.getSheetByName('持倉')).map(x => _str(x['代號']));
+      AssetSchema.readTrades(ss).forEach(t => {
+        var c = _str(t['代號']);
+        if (c && known.indexOf(c) < 0) known.push(c);
+      });
       var isNew = false;
 
       if (val.symbol && known.indexOf(val.symbol) < 0) {
