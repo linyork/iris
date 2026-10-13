@@ -1164,14 +1164,21 @@ console.log('\nT20  持倉的手填欄位重算後保留');
   const objOf = (code) => AssetSchema.readObjects(posSheet).find(x => String(x['代號']) === code) || {};
   const code = String((AssetSchema.readObjects(posSheet).find(x => num(x['股數']) > 0) || {})['代號']);
   const saved = {};
-  ['名稱'].forEach(k => { saved[k] = objOf(code)[k]; });
+  ['名稱', '股利近3年'].forEach(k => { saved[k] = objOf(code)[k]; });
 
   const at = rowOf(code);
   posSheet.getRange(at, col('名稱')).setValue('我自己取的名字');
+  posSheet.getRange(at, col('股利近3年')).setValue(1.5);
 
   Position.rebuild();
   const after = objOf(code);
   check('名稱重算後保留', after['名稱'] === '我自己取的名字', after['名稱']);
+  check('股利近3年重算後保留', num(after['股利近3年']) === 1.5, after['股利近3年']);
+  const at1 = rowOf(code);
+  const L = (k) => AssetSchema.colLetter(col(k));
+  const annual = String(posSheet.raw(at1, col('每年股利')));
+  check('每年股利是 股數 × 股利近3年 的公式',
+    annual.indexOf('$' + L('股數') + at1) >= 0 && annual.indexOf('$' + L('股利近3年') + at1) >= 0, annual);
   // 改名只影響顯示：記帳照代號走
   const r = AssetTools.recordTrade({ action: '股利', symbol: code, amount: 1, date: '2026-09-02' });
   check('改過名稱之後照樣能用代號記帳', /已記錄第 \d+ 列/.test(r), r.split('\n')[0]);

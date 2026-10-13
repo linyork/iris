@@ -370,7 +370,8 @@ var Position = (() => {
     // ⚠️ 名稱是**主人可以手改的**（2026-10-08「標的」分頁退役後就住在這裡）。這張表
     //    每次重算都整張重寫，所以先依代號把它讀出來、原樣寫回 —— 漏了這一步，主人改的
     //    名稱每記一筆帳就被洗掉一次，而且不會報錯。
-    var KEEP = ['名稱'];
+    //    「股利近3年」同理：主人手填的每股年股利。
+    var KEEP = ['名稱', '股利近3年'];
     var kept = {};
     AssetSchema.readObjects(ss.getSheetByName('持倉')).forEach(x => {
       var c = _str(x['代號']);
@@ -411,7 +412,9 @@ var Position = (() => {
         _round(st.realized, 2),
         // 市價：出清的標的不抓價，省 GOOGLEFINANCE 配額也避免 #N/A
         st.shares > 0 ? _priceFormula(r) : '',
-        '=IF(OR($C' + r + '=0,$H' + r + '=""),0,$C' + r + '*$H' + r + ')'
+        '=IF(OR($C' + r + '=0,$H' + r + '=""),0,$C' + r + '*$H' + r + ')',
+        k['股利近3年'] === undefined ? '' : k['股利近3年'],
+        '=$C' + r + '*$J' + r                           // 每年股利 = 股數 × 股利近3年
       ];
     });
 
