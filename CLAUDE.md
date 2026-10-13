@@ -388,8 +388,13 @@ and immune to that quota.
   "抓不到市價" warning is the correct outcome.
 - MIS is asked for every code as both `tse_` and `otc_` (it returns an empty-`c` stub for the
   side that doesn't exist), so a 上櫃 holding still gets a price here. This layer is the only one
-  that covers 上櫃 — `STOCK_DAY_AVG` is TWSE-only, so such a row raises the fallback warning
-  whenever GOOGLEFINANCE misses it.
+  that covers 上櫃 — `STOCK_DAY_AVG` is TWSE-only, and Google Finance has no 00679B under `TPE:`,
+  `TPEX:` or `TWO:` — so a 上櫃 row **always** lands here and always raises the fallback warning.
+- **When MIS comes back empty, `StockPrice.lastClose` asks the daily-close JSON endpoints**
+  (TWSE `STOCK_DAY_AVG`, then TPEx `tradingStock`; previous month if this one has no rows yet).
+  On 2026-10-13 MIS threw `Address unavailable` for most of the day and 00679B's H stayed blank,
+  because for a 上櫃 holding MIS was the only layer. Those endpoints live on different hosts.
+  It returns the last *close*, so mid-session it is yesterday's — still better than blank.
 
 ### 配置退役
 

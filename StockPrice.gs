@@ -176,6 +176,64 @@ var StockPrice = (() => {
     }
   };
 
+  /**
+   * 最近一個交易日的收盤價，走證交所（STOCK_DAY_AVG）與櫃買中心（tradingStock）的日成交 JSON。
+   * 抓不到回 null。
+   *
+   * 這是 MIS 之外的第二條伺服器端路徑。2026-10-13 上櫃的 00679B 市價整天空白：試算表公式
+   * 兩層對上櫃本來就無效（`TPE:` 與 STOCK_DAY_AVG 只認上市；Google Finance 查不到 00679B，
+   * `TPEX:`／`TWO:` 都試過），唯一能補的 MIS 又一直丟 `Address unavailable`。
+   * 兩個日成交端點跟 MIS 不同主機，MIS 掛掉時通常還在。
+   *
+   * 不知道是上市還是上櫃，兩邊依序問。月初還沒有本月資料時再問上個月。
+   * 回的是收盤價，盤中呼叫會拿到昨收 —— 比留白好，留白會讓總資產少掉整檔。
+   *
+   * @returns {{price: number, date: string}|null}  date 是民國年字串，如 115/10/12
+   */
+  sp.lastClose = (code) => {
+    var tw  = new Date(Date.now() + 8 * 3600 * 1000);   // 台北日期，不經時區設定
+    var ym  = [[tw.getUTCFullYear(), tw.getUTCMonth() + 1]];
+    ym.push(ym[0][1] === 1 ? [ym[0][0] - 1, 12] : [ym[0][0], ym[0][1] - 1]);
+    var pad = (n) => (n < 10 ? '0' : '') + n;
+    var isDay = (s) => /^\d{3}\/\d{2}\/\d{2}$/.test(String(s).trim());
+    var last = (rows, col) => {
+      var hit = (rows || []).filter(r => r && isDay(r[0]))
+        .map(r => ({ date: String(r[0]).trim(), price: parseFloat(String(r[col]).replace(/,/g, '')) }))
+        .filter(x => x.price > 0);
+      return hit.length ? hit[hit.length - 1] : null;
+    };
+    var get = (url) => {
+      try {
+        var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true,
+          headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } });
+        if (resp.getResponseCode() !== 200) {
+          Logger.warning('StockPrice.lastClose', 'HTTP ' + resp.getResponseCode(), url);
+          return null;
+        }
+        return JSON.parse(resp.getContentText());
+      } catch (ex) {
+        Logger.warning('StockPrice.lastClose', '請求失敗', url + ' ' + (ex && ex.message));
+        return null;
+      }
+    };
+    for (var i = 0; i < ym.length; i++) {
+      var y = ym[i][0], m = pad(ym[i][1]);
+      var twse = get('https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_AVG?response=json' +
+        '&date=' + y + m + '01&stockNo=' + encodeURIComponent(code));
+      var hit = twse && twse.stat === 'OK' ? last(twse.data, 1) : null;
+      if (hit) return hit;
+      var tpex = get('https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock?response=json' +
+        '&date=' + y + '/' + m + '/01&code=' + encodeURIComponent(code));
+      var t = tpex && tpex.tables && tpex.tables[0];
+      if (t) {
+        var col = (t.fields || []).indexOf('收盤');
+        hit = last(t.data, col >= 0 ? col : 6);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+
   /** 美元兌台幣（Yahoo TWD=X）。抓不到回 null，呼叫端自己退回。 */
   sp.usdTwd = () =>
     _json('https://query1.finance.yahoo.com/v8/finance/chart/TWD=X?range=1d&interval=1d',

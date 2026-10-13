@@ -109,11 +109,18 @@ var Position = (() => {
       var byCode = {};
       quotes.forEach(q => { if (q && q.code) byCode[String(q.code)] = q; });
 
+      // MIS 也空手時，再問證交所／櫃買中心的日成交（不同主機）。上櫃標的的公式兩層
+      // 本來就無效，MIS 一掛它就只剩這條路 —— 2026-10-13 的 00679B
       want.forEach(w => {
         var q = byCode[w.code];
-        if (q && q.current > 0) {
-          sheet.getRange(w.row, AssetSchema.expected('持倉').indexOf('市價') + 1).setValue(q.current);
-          out.filled.push({ code: w.code, price: q.current });
+        var price = q && q.current > 0 ? q.current : 0;
+        if (!price && typeof StockPrice.lastClose === 'function') {
+          var c = StockPrice.lastClose(w.code);
+          if (c) price = c.price;
+        }
+        if (price > 0) {
+          sheet.getRange(w.row, AssetSchema.expected('持倉').indexOf('市價') + 1).setValue(price);
+          out.filled.push({ code: w.code, price: price });
         } else {
           out.stillMissing.push(w.code);
         }
@@ -472,7 +479,7 @@ var Position = (() => {
     if (priceFix.filled.length) {
       replayed.warnings.push(
         priceFix.filled.map(x => x.code).join('、') +
-        ' 的市價 GOOGLEFINANCE 抓不到，已改用 TWSE 即時 API 補上（寫進去的是死值，' +
+        ' 的市價公式抓不到，已改用證交所／櫃買中心 API 補上（寫進去的是死值，' +
         '不會自己更新；下次重算會再試一次公式）');
     }
 

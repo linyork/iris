@@ -2761,6 +2761,42 @@ console.log('\nT54  上櫃標的的名稱與報價');
   check('櫃買中心抓不到時仍回證交所那一份', L2 && L2.byCode['1111'] === '上市甲' && !L2.byCode['2222B'], JSON.stringify(L2));
   const q = StockPrice.getRawPrices(['2222B']);
   check('MIS 的空殼被濾掉，上櫃報價拿得到', q.length === 1 && q[0].code === '2222B' && q[0].current === 24.8, JSON.stringify(q));
+
+  // 2026-10-13：上櫃的公式兩層本來就無效，MIS 又丟 Address unavailable，00679B 整天空白。
+  // 再問證交所（上市才有）→ 櫃買中心的日成交；本月沒資料時問上個月。
+  let monthsAsked = [];
+  global.UrlFetchApp = { fetch: (url) => {
+    if (/mis\.twse/.test(url)) throw new Error('Address unavailable');
+    if (/STOCK_DAY_AVG/.test(url)) return reply(200, { stat: '很抱歉，沒有符合條件的資料!' });
+    if (/tradingStock/.test(url)) {
+      monthsAsked.push(url);
+      const first = monthsAsked.length === 1;   // 本月：月初還沒資料
+      return reply(200, { tables: [{ fields: ['日 期', '成交張數', '成交仟元', '開盤', '最高', '最低', '收盤'],
+        data: first ? [] : [['115/09/29', '1,000', '1', '1', '1', '1', '24.10'],
+                            ['115/09/30', '22,185', '548,850', '24.70', '24.78', '24.69', '1,024.73']] }] });
+    }
+    return reply(404, {});
+  } };
+  const c = StockPrice.lastClose('2222B');
+  check('MIS 掛掉時從櫃買中心拿最後一個交易日的收盤（含千分位）',
+    c && c.price === 1024.73 && c.date === '115/09/30', JSON.stringify(c));
+  check('本月沒資料時往前問上個月', monthsAsked.length === 2, JSON.stringify(monthsAsked));
+  global.UrlFetchApp = { fetch: () => reply(200, { stat: 'x', tables: [{ fields: [], data: [] }] }) };
+  check('兩邊都沒有就回 null，不編價', StockPrice.lastClose('2222B') === null);
+
+  // _fillMissingPrices 在 MIS 空手時要接到這條路
+  {
+    const posSheet = target.getSheetByName('持倉');
+    const rows = AssetSchema.readObjects(posSheet);
+    const victim = rows.findIndex(x => num(x['股數']) > 0) + 2;
+    const code = String(posSheet.getRange(victim, 1).getValue());
+    posSheet.getRange(victim, 8).setValue('');
+    global.StockPrice = { getRawPrices: () => [], lastClose: (cd) => cd === code ? { price: 55.5, date: 'x' } : null };
+    const fix = Position._fillMissingPrices(target);
+    check('MIS 空手時改用日收盤補上', num(posSheet.getRange(victim, 8).getValue()) === 55.5 &&
+      fix.filled.some(x => x.code === code), JSON.stringify(fix));
+    Position.rebuild();
+  }
   global.StockPrice = savedSP; global.UrlFetchApp = savedFetch;
 }
 
