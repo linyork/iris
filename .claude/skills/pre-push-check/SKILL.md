@@ -94,6 +94,14 @@ Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），
       改動版面時記得墊片要留在捲動容器的最後面
 - [ ] 前端配色用 `--tg-theme-*`，但漲跌色維持紅漲綠跌（語意，不隨主題）
 
+### 如果 `ExpenseImport.gs` 或 `消費` / `分類對照` / `匯入紀錄` 的定義有變動
+- [ ] **不入帳**：不可以寫 `交易`、不可以呼叫 `Utils.noteLedgerWrite()` —— `消費` 只用來分析
+- [ ] **新增的文字欄要進 `textColumns`**，不然「7-11」「3/4」會被 Sheets 轉成日期
+- [ ] **改 `SCHEMA_VERSION` 之前先拿一份新版的真實匯出檔**換掉 `budget_fixture.data` 跑 T56，
+      不要只看 App 的更新說明就放行
+- [ ] **改 `分類對照` 的 `seed` 只影響新建的分頁**：線上那張已經是人維護的，要主人自己補
+- [ ] 不要改成 Drive 轉檔：會新增 oauthScope（見下一節）
+
 ### 如果 `appsscript.json` 有變動
 - [ ] **新增 oauthScopes 會讓既有授權失效**，排程 trigger 會開始噴 "Authorization required"。
       push 後必須進 GAS 編輯器手動執行任一函式重新授權

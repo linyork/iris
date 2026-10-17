@@ -153,6 +153,7 @@ class Sheet {
   setFrozenColumns() { }
   clear() { this.rows = []; this.width = 1; this.formats = {}; EVAL.reset(); }
   clearNotes() { }
+  insertRowsAfter(after, n) { this._grow(after + n, this.width); }
   deleteRow(r) { this.rows.splice(r - 1, 1); EVAL.reset(); }
   deleteRows(r, n) { this.rows.splice(r - 1, n); EVAL.reset(); }
   /** 取原始儲存格內容（不求值） */
@@ -445,7 +446,8 @@ console.log('\nT3  建表');
 const target = SpreadsheetApp.openById(AssetSchema.SHEET_ID);
 target.sheets.push(new Sheet('工作表1'));          // 模擬新試算表的預設分頁
 let r3 = AssetSchema.build();
-check('建立 9 個分頁', r3.created.length === 9, r3.created.length);
+check('建立 TABS 定義的每一個分頁', r3.created.length === AssetSchema.TABS.length, r3.created.length);
+check('分類對照建表時就有預設值', AssetSchema.readObjects(target.getSheetByName('分類對照')).length > 0);
 check('預設的「工作表1」被移除', !target.getSheetByName('工作表1'));
 check('交易表標題正確', target.getSheetByName('交易').raw(1, 2) === '動作', target.getSheetByName('交易').raw(1, 2));
 // 公式只填到有資料的最後一列。空表就該是空的 —— 預灌公式會讓 getLastRow()
@@ -858,7 +860,7 @@ console.log('\nT12  券商 CSV 匯入');
     message: { type: 'document', text: caption || '', document: { fileId: 'f1', fileName: fileName, fileSize: size || 500 } }
   });
 
-  check('非 csv 檔名被拒絕', /只看得懂 \.csv/.test(upload('報表.pdf')), '');
+  check('非 csv 檔名被拒絕，並說出認得哪兩種', /看不懂/.test(upload('報表.pdf')) && /\.xlsx/.test(upload('報表.pdf')), '');
   check('過大的檔案被拒絕', /檔案太大/.test(upload('a.csv', 5 * 1024 * 1024)), '');
 
   const n1 = countTrades();
@@ -2820,6 +2822,243 @@ console.log('\nT55  出清的標的不留在持倉');
     val('累計股利') + ' vs ' + sumOf('dividend'));
   const out = AssetTools.recordTrade({ action: '股利', symbol: cleared[0], amount: 10, account: '國泰證券戶' });
   check('出清後才入帳的股利照樣記得進來', /已記錄/.test(out) && !/持倉裡沒有/.test(out), out);
+}
+
+// 記帳 App 的匯出檔是 App 資料的鏡像：整張覆寫「消費」，只分析、不入帳。
+// 合成的匯出檔測每一條規則；真的匯出檔（budget_fixture.data，不進版控）測解析與規模。
+console.log('\nT56  記帳 App 匯出檔 → 消費');
+{
+  const zlib = require('zlib');
+  // ── Utilities.unzip：合成的檔案直接給內容，真的 xlsx 照 zip 格式解 ──
+  const fakeBlob = (name, buf) => ({ getName: () => name, getDataAsString: () => buf.toString('utf8'),
+    getBytes: () => buf, setContentType() { return this; } });
+  const unzipBytes = (buf) => {
+    let eocd = -1;
+    for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) {
+      if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error('Could not unzip: not a zip file');
+    const out = [];
+    for (let k = 0, p = buf.readUInt32LE(eocd + 16); k < buf.readUInt16LE(eocd + 10); k++) {
+      const method = buf.readUInt16LE(p + 10), size = buf.readUInt32LE(p + 20);
+      const nlen = buf.readUInt16LE(p + 28), xlen = buf.readUInt16LE(p + 30), clen = buf.readUInt16LE(p + 32);
+      const local = buf.readUInt32LE(p + 42);
+      const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+      const data = buf.subarray(start, start + size);
+      out.push(fakeBlob(buf.toString('utf8', p + 46, p + 46 + nlen), method === 8 ? zlib.inflateRawSync(data) : data));
+      p += 46 + nlen + xlen + clen;
+    }
+    return out;
+  };
+  global.Utilities.unzip = (blob) => blob.__entries
+    ? Object.keys(blob.__entries).map(k => fakeBlob(k, Buffer.from(blob.__entries[k], 'utf8')))
+    : unzipBytes(Buffer.from(blob.getBytes()));
+  const savedNow = NOW;
+  NOW = new RealDate('2026-08-03T18:00:00+08:00');    // 「本月」是八月
+  let lockFree = true, released = 0;
+  global.LockService = { getScriptLock: () => ({ tryLock: () => lockFree, releaseLock: () => { released++; } }) };
+  load('ExpenseImport.gs');
+
+  // ── 合成的匯出檔：跟 App 一樣用 inlineStr／n／b 三種儲存格 ──
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const cellXml = (v, ref) => v === '' || v === null || v === undefined ? ''
+    : typeof v === 'number' ? `<c r="${ref}"><v>${v}</v></c>`
+    : typeof v === 'boolean' ? `<c r="${ref}" t="b"><v>${v ? 1 : 0}</v></c>`
+    : `<c r="${ref}" t="inlineStr"><is><t>${esc(v)}</t></is></c>`;
+  const xlsx = (sheets) => {
+    const names = Object.keys(sheets);
+    const e = {
+      'xl/workbook.xml': '<workbook><sheets>' + names.map((n, i) =>
+        `<sheet name="${esc(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('') + '</sheets></workbook>',
+      'xl/_rels/workbook.xml.rels': '<Relationships>' + names.map((n, i) =>
+        `<Relationship Id="rId${i + 1}" Type="worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('') + '</Relationships>'
+    };
+    names.forEach((n, i) => {
+      e[`xl/worksheets/sheet${i + 1}.xml`] = '<worksheet><sheetData>' + sheets[n].map((r, ri) =>
+        `<row r="${ri + 1}">` + r.map((v, ci) => cellXml(v, L1(ci + 1) + (ri + 1))).join('') + '</row>').join('') +
+        '</sheetData></worksheet>';
+    });
+    return { __entries: e, setContentType() { return this; } };
+  };
+  const HDR = ['帳本', '分類', '子分類', '金額', '帳戶', '日期', '時間', '備注', '收支', 'source_uid',
+               'system_currency', 'system_amount', 'ignore', 'status', 'modified_at_utc'];
+  const rec = (uid, date, time, io, cat, amt, mod, extra) => {
+    const o = Object.assign({ 帳本: '測試', 分類: cat, 子分類: '', 金額: amt.toLocaleString(), 帳戶: '現金', 日期: date,
+      時間: time, 備注: '', 收支: io, source_uid: uid, system_currency: 'TWD', system_amount: amt,
+      ignore: false, status: 0, modified_at_utc: mod }, extra || {});
+    return HDR.map(h => o[h]);
+  };
+  const book = (records, man, header) => xlsx({
+    _Manifest: [['key', 'value']].concat(Object.entries(Object.assign({
+      format_id: 'com.budget.portable-xlsx', schema_version: 7, export_id: 'e1',
+      exported_at_utc: '2026-08-01T00:00:00.000Z', timezone: 'Asia/Taipei',
+      scope: 'selected_ledgers_full_history', records_count: records.length }, man || {}))),
+    Records: [header || HDR].concat(records.slice().reverse())        // App 是新的在前
+  });
+  const R = [
+    rec('u1', '2026-07-30', '08:00', '支出', '食', 120, 'm1'),
+    rec('u2', '2026-08-01', '12:30', '支出', '代付', 500, 'm1'),
+    rec('u3', '2026-08-02', '09:15', '收入', '應收', 300, 'm1'),
+    rec('u4', '2026-08-02', '09:15', '收入', '其他', 1000, 'm1'),     // 跟 u3 同一分鐘
+    rec('u5', '2026-08-02', '18:00', '支出', '其他', 80, 'm1', { 子分類: '711', 備注: '=1+1' }),
+    rec('u6', '2026-08-03', '07:00', '退款', '其他', 30, 'm1'),
+    rec('u7', '2026-08-03', '07:30', '支出', '寵物', 250, 'm1'),      // 分類對照沒有
+    rec('u8', '2026-08-03', '08:00', '支出', '食', 999, 'm1', { ignore: true }),
+    rec('u9', '2026-08-03', '08:10', '支出', '食', 999, 'm1', { status: 1 })
+  ];
+
+  const sheetOf = (n) => target.getSheetByName(n);
+  const rowsOf = () => AssetSchema.readObjects(sheetOf('消費'));
+  const snap = () => JSON.stringify(sheetOf('消費').rows);
+  const ledger0 = JSON.stringify(sheetOf('交易').rows) + JSON.stringify(sheetOf('現金').rows);
+  const run = (blob, name) => ExpenseImport.run({ blob: blob, fileName: name || 'Budget.xlsx' });
+
+  // ── 第一次匯入 ──
+  const r1 = run(book(R));
+  const reply1 = ExpenseImport.formatReply(r1);
+  check('匯入成功，忽略與停用的不算', r1.ok && r1.total === 7 && r1.added === 7 && r1.excluded === 2, JSON.stringify(r1));
+  check('第 1 列是標題、資料從第 2 列開始', sheetOf('消費').raw(1, 1) === '日期' && sheetOf('消費').raw(2, 1) !== '',
+    sheetOf('消費').raw(1, 1));
+  const rows1 = rowsOf();
+  check('由舊到新排序，同一分鐘維持 App 裡的先後',
+    rows1.map(x => x.source_uid).join() === 'u1,u2,u3,u4,u5,u6,u7', rows1.map(x => x.source_uid).join());
+  check('金額是數字，用的是 system_amount', rows1.every(x => typeof x['金額'] === 'number') && rows1[0]['金額'] === 120);
+  const H = AssetSchema.expected('消費');
+  check('日期欄不是純文字（由 Sheets 轉成日期值）', sheetOf('消費').formats[H.indexOf('日期') + 1] !== '@');
+  const u5 = rows1.find(x => x.source_uid === 'u5');
+  check('全是數字的子分類維持文字（純文字格式）', u5['子分類'] === '711', typeof u5['子分類'] + ' ' + u5['子分類']);
+  check('「=」開頭的備註不會變成公式', u5['備註'] === "'=1+1", u5['備註']);
+  const by = (u) => rows1.find(x => x.source_uid === u);
+  check('收入／其他 與 支出／其他 對到不同的分析類型',
+    by('u4')['分析類型'] === '其他收入' && by('u5')['分析類型'] === '生活支出', by('u4')['分析類型'] + ' / ' + by('u5')['分析類型']);
+  check('代付、應收是代墊往來且不計入支出',
+    by('u2')['分析類型'] === '代墊往來' && by('u2')['計入支出'] === false && by('u3')['計入支出'] === false);
+  check('沒有對照的分類 → 未分類、計入支出', by('u7')['分析類型'] === '未分類' && by('u7')['計入支出'] === true);
+  check('回覆列出沒有對照的分類', /支出／寵物（1 筆）/.test(reply1), reply1);
+  // 八月：80（其他）+ 250（未分類）− 30（退款）；代墊 500 − 300
+  check('本月生活支出：退款是負的，代墊不算', /生活支出 300｜代墊往來淨額 200/.test(reply1), reply1);
+  check('回覆有總數與增減', /共 7 筆｜新增 7｜更新 0｜刪除 0/.test(reply1) && /期間：2026\/07\/30 – 2026\/08\/03/.test(reply1), reply1);
+  check('匯入紀錄寫了一列', AssetSchema.readObjects(sheetOf('匯入紀錄')).filter(x => x['狀態'] === '成功').length === 1);
+  check('鎖有放掉', released === 1, released);
+
+  // ── 同一份再傳一次 ──
+  let s0 = snap();
+  const dup = run(book(R));
+  check('同一份匯出檔再傳 → 已經匯入過了，資料不變', !dup.ok && dup.duplicate && /已經匯入過了/.test(dup.reason) && snap() === s0,
+    JSON.stringify(dup));
+
+  // ── App 新增 1、修改 1、刪除 1 之後重新匯出 ──
+  const batch1 = by('u4')['批次'];
+  NOW = new RealDate('2026-08-03T19:00:00+08:00');
+  const R2 = R.filter(r => r[HDR.indexOf('source_uid')] !== 'u1')
+    .map(r => r[HDR.indexOf('source_uid')] === 'u2' ? rec('u2', '2026-08-01', '12:30', '支出', '代付', 600, 'm2') : r)
+    .concat([rec('u10', '2026-08-03', '12:00', '支出', '食', 90, 'm1')]);
+  const r2 = run(book(R2, { export_id: 'e2', exported_at_utc: '2026-08-03T10:00:00.000Z' }));
+  const rows2 = rowsOf();
+  check('新增 1｜更新 1｜刪除 1', /新增 1｜更新 1｜刪除 1/.test(ExpenseImport.formatReply(r2)), ExpenseImport.formatReply(r2));
+  check('消費與 App 一致', !rows2.some(x => x.source_uid === 'u1') && rows2.some(x => x.source_uid === 'u10') &&
+    rows2.find(x => x.source_uid === 'u2')['金額'] === 600, rows2.map(x => x.source_uid).join());
+  check('沒變的列留著原本的批次，改過的換成這一批',
+    rows2.find(x => x.source_uid === 'u4')['批次'] === batch1 && rows2.find(x => x.source_uid === 'u2')['批次'] !== batch1,
+    batch1 + ' / ' + rows2.find(x => x.source_uid === 'u2')['批次']);
+
+  // ── 舊的匯出檔 ──
+  s0 = snap();
+  const old = run(book(R, { export_id: 'e0', exported_at_utc: '2026-08-02T00:00:00.000Z' }));
+  check('比上次還舊的匯出檔被拒絕，資料不變', !old.ok && /還舊/.test(old.reason) && snap() === s0, JSON.stringify(old));
+
+  // ── 格式驗證：一筆都不寫 ──
+  const v8 = run(book(R2, { export_id: 'e9', exported_at_utc: '2026-09-01T00:00:00.000Z', schema_version: 8 }));
+  check('schema_version 8 → 整批拒絕並說出版本', !v8.ok && /v8/.test(v8.reason) && snap() === s0, v8.reason);
+  const noAmt = run(book(R2.map(r => r.filter((_, i) => i !== HDR.indexOf('system_amount'))),
+    { export_id: 'e9', exported_at_utc: '2026-09-01T00:00:00.000Z' }, HDR.filter(h => h !== 'system_amount')));
+  check('少了 system_amount 欄 → 拒絕並列出缺的欄位', !noAmt.ok && /system_amount/.test(noAmt.reason) && snap() === s0, noAmt.reason);
+  const short = run(book(R2, { export_id: 'e9', exported_at_utc: '2026-09-01T00:00:00.000Z', records_count: 99 }));
+  check('筆數跟 _Manifest 對不上 → 拒絕', !short.ok && /筆數對不上/.test(short.reason) && snap() === s0, short.reason);
+  const badFmt = run(book(R2, { export_id: 'e9', exported_at_utc: '2026-09-01T00:00:00.000Z', format_id: 'x' }));
+  check('format_id 不對 → 拒絕並回覆實際值', !badFmt.ok && /「x」/.test(badFmt.reason) && snap() === s0, badFmt.reason);
+  const badRow = run(book(R2.concat([rec('u11', '2026/08/03', '12:00', '支出', '食', -5, 'm1')]),
+    { export_id: 'e9', exported_at_utc: '2026-09-01T00:00:00.000Z' }));
+  check('有一列讀不懂 → 整批拒絕並指出哪一列', !badRow.ok && /日期讀不懂/.test(badRow.reason) &&
+    /不是正數/.test(badRow.reason) && snap() === s0, badRow.reason);
+
+  // ── 不是全量的匯出：只新增和更新 ──
+  const part = run(book([rec('u3', '2026-08-02', '09:15', '收入', '應收', 350, 'm2')],
+    { export_id: 'e3', exported_at_utc: '2026-08-04T00:00:00.000Z', scope: 'date_range' }));
+  check('不是全量 → 不刪除，只更新', part.ok && part.deleted === 0 && part.updated === 1 &&
+    rowsOf().length === rows2.length && rowsOf().find(x => x.source_uid === 'u3')['金額'] === 350, JSON.stringify(part));
+  check('而且回覆講明沒有刪除', /不是完整匯出/.test(ExpenseImport.formatReply(part)));
+
+  // ── 改了分類對照，重新匯出一份就套上 ──
+  sheetOf('分類對照').appendRow(['支出', '寵物', '生活支出', true]);
+  const remap = run(book(R2, { export_id: 'e4', exported_at_utc: '2026-08-05T00:00:00.000Z' }));
+  check('補上分類對照後重匯，未分類消失', remap.ok && remap.unmapped.length === 0 &&
+    rowsOf().find(x => x.source_uid === 'u7')['分析類型'] === '生活支出', JSON.stringify(remap.unmapped));
+
+  // ── 鎖拿不到 ──
+  lockFree = false;
+  s0 = snap();
+  const busy = run(book(R2, { export_id: 'e5', exported_at_utc: '2026-08-06T00:00:00.000Z' }));
+  check('另一份匯入還在跑 → 不寫、請他再傳', !busy.ok && /還在處理中/.test(busy.reason) && snap() === s0, busy.reason);
+  lockFree = true;
+
+  check('交易、現金完全沒有被改動', JSON.stringify(sheetOf('交易').rows) + JSON.stringify(sheetOf('現金').rows) === ledger0);
+
+  // ── 從 Telegram 收檔案 ──
+  const savedTg = global.Telegram;
+  let served = book(R2, { export_id: 'e6', exported_at_utc: '2026-08-07T00:00:00.000Z' });
+  global.Telegram = { fetchFileBlob: () => served };
+  const upload = (fileName, size) => ExpenseImport.fromUpload({ platform: 'TELEGRAM',
+    message: { type: 'document', text: '', document: { fileId: 'f', fileName: fileName, fileSize: size || 1000 } } });
+  check('只認 .xlsx', ExpenseImport.isExportFile('Budget.xlsx') && !ExpenseImport.isExportFile('a.csv'));
+  check('Telegram 傳上來會匯入', /^✅ 已同步記帳資料/.test(upload('Budget.xlsx')));
+  check('超過 20MB 被拒絕', /檔案太大/.test(upload('Budget.xlsx', 21 * 1024 * 1024)));
+  served = { getBytes: () => Buffer.from('not a zip at all'), setContentType() { return this; } };
+  s0 = snap();
+  const junk = upload('Budget.xlsx');
+  check('不是 xlsx 的檔案 → 講清楚，不丟例外，資料不變', /解不開這個檔案/.test(junk) && snap() === s0, junk);
+  global.Telegram = savedTg;
+
+  // ── 新的試算表：第一次匯入自己建表 ──
+  const savedId = Config.SHEET_ID;
+  Config.SHEET_ID = 'expense-fresh';
+  const fresh = run(book(R));
+  const fss = SpreadsheetApp.openById('expense-fresh');
+  check('第一次匯入自己建好三張分頁，分類對照帶預設值', fresh.ok &&
+    ['消費', '分類對照', '匯入紀錄'].every(n => fss.getSheetByName(n)) &&
+    AssetSchema.readObjects(fss.getSheetByName('分類對照')).length === AssetSchema.TABS.find(t => t.name === '分類對照').seed.length,
+    JSON.stringify(fresh));
+
+  // ── 真的匯出檔（budget_fixture.data，不進版控）──
+  const FIX = path.join(__dirname, 'budget_fixture.data');
+  if (fs.existsSync(FIX)) {
+    Config.SHEET_ID = 'expense-real';
+    const blob = { getBytes: () => fs.readFileSync(FIX), setContentType() { return this; } };
+    const t0 = Date.now();
+    const man = ExpenseImport.readXlsx(blob, ['_Manifest'])['_Manifest'];
+    const count = Number((man.find(r => r[0] === 'records_count') || [])[1]);
+    const real = run(blob, 'budget_fixture.data');
+    const ms = Date.now() - t0;
+    const rss = SpreadsheetApp.openById('expense-real');
+    const rows = AssetSchema.readObjects(rss.getSheetByName('消費'));
+    check('真的匯出檔：筆數 = _Manifest 的 records_count', real.ok && rows.length === count && real.total === count,
+      real.ok ? rows.length + ' vs ' + count : real.reason);
+    check('真的匯出檔：金額全是數字、日期全是 yyyy-MM-dd',
+      rows.every(x => typeof x['金額'] === 'number') && rows.every(x => /^\d{4}-\d{2}-\d{2}$/.test(x['日期'])));
+    check('真的匯出檔：每一筆都有 source_uid 與修改時間', rows.every(x => x['source_uid'] && x['修改時間']));
+    const types = (io) => [...new Set(rows.filter(x => x['收支'] === io && x['分類'] === '其他').map(x => x['分析類型']))];
+    if (types('收入').length && types('支出').length) {
+      check('真的匯出檔：收入／其他 與 支出／其他 分開', types('收入').join() !== types('支出').join(),
+        types('收入') + ' / ' + types('支出'));
+    }
+    check('真的匯出檔：同一份再傳是重複', run(blob).duplicate === true);
+    console.log('  （' + rows.length + ' 筆，未對照 ' + real.unmapped.length + ' 類，解析加寫入 ' + ms + ' ms）');
+  } else {
+    console.log('  （沒有 budget_fixture.data，略過真實匯出檔）');
+  }
+  Config.SHEET_ID = savedId;
+  SpreadsheetApp.openById(Config.SHEET_ID);    // CURRENT_SS 指回主表，後面的公式求值才讀得到
+  NOW = savedNow;
 }
 
 console.log('\n' + (fail === 0 ? '全部通過' : fail + ' 項失敗') + '（' + pass + '/' + (pass + fail) + '）');

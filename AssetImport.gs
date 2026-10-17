@@ -564,9 +564,11 @@ var AssetImport = (() => {
       if (event.platform !== 'TELEGRAM') {
         return '目前只有 Telegram 收得到檔案。';
       }
+      // .xlsx 在 doPost 就分給 ExpenseImport 了，走到這裡的只該是券商的 CSV
       if (!/\.csv$/i.test(_str(doc.fileName))) {
-        return '我只看得懂 .csv：收到的是「' + _str(doc.fileName) + '」。' +
-               '券商的已實現損益報表請用 CSV 格式匯出。';
+        return '這個檔案我看不懂：收到的是「' + _str(doc.fileName) + '」。我認得兩種：\n' +
+               '▸ 券商匯出的 .csv（對帳單、已實現損益）\n' +
+               '▸ 記帳 App 匯出的 .xlsx';
       }
       if (doc.fileSize > MAX_BYTES) {
         return '檔案太大了（' + Math.round(doc.fileSize / 1024) + ' KB）。' +

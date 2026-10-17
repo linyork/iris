@@ -73,9 +73,12 @@ function doPost(e) {
       MessagingServiceFactory.indicateTyping(event);
 
       // 上傳檔案走自己的路：不進 ChatBot，也不花 LLM 配額。
-      // 券商匯出的 CSV 是結構化資料，交給模型改寫只會多一層出錯的機會。
+      // 券商匯出的 CSV、記帳 App 的 .xlsx 都是結構化資料，交給模型改寫只會多一層出錯的機會。
+      // .xlsx 寫進「消費」（只分析、不入帳），其餘交給 AssetImport 認券商的格式。
       if (event.message.type === 'document') {
-        var fileReply = AssetImport.fromUpload(event);
+        var fileReply = ExpenseImport.isExportFile((event.message.document || {}).fileName)
+          ? ExpenseImport.fromUpload(event)
+          : AssetImport.fromUpload(event);
         if (fileReply) MessagingServiceFactory.push(event.source.userId, fileReply);
         continue;
       }

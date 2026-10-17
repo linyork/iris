@@ -17,6 +17,14 @@
       轉出／轉入是兩列、彼此沒有欄位綁定，作廢其中一列不會被任何檢查擋下，
       而轉帳不碰持倉，`Position.replay` 也不會警告。目前只在 `voidTrade` 印警告，配對仍靠人工。
 
+## 記帳匯入的下一步（規格書 Phase 2，v1 刻意沒做）
+
+- [ ] **`消費` 還沒有讀者**：儀表板、Mini App 都還不讀它，匯入之後畫面上不會多東西
+- [ ] **`getSpending` 工具**：依月份、分析類型、分類查詢（「這個月外食花多少」）。
+      加的時候 `Tools.gs` 的 definitions 與 switch 要一起改；查詢結果不要整張塞進 prompt
+- [ ] **Drive 資料夾入口**：時間觸發器掃資料夾，有新檔就呼叫 `ExpenseImport.run({blob, fileName})`。
+      ⚠️ 這會需要 Drive 權限，也就是新的 oauthScope —— 先授權再 deploy（見 pre-push-check）
+
 ## 未盤點的區域
 
 - [ ] **`AssetImport` / `Position` / `DataSync` 這條記帳與重算的資料流**

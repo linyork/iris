@@ -75,10 +75,29 @@ var Telegram = (() => {
   };
 
   /**
-   * 下載使用者上傳的檔案並轉成文字。
+   * 下載使用者上傳的檔案（原始位元組）。
    *
    * 兩段式：getFile 拿到 file_path，再打 /file/bot<token>/<path> 取內容。
    * ⚠️ 那個下載網址帶著 bot token，**不可以外流或寫進紀錄**。
+   *
+   * @param {string} fileId
+   * @returns {Blob}
+   */
+  telegram.fetchFileBlob = (fileId) => {
+    var meta = JSON.parse(UrlFetchApp.fetch(
+      Config.TELEGRAM_API_BASE + '/getFile?file_id=' + encodeURIComponent(fileId)
+    ).getContentText());
+    if (!meta.ok || !meta.result || !meta.result.file_path) {
+      throw new Error('Telegram getFile 失敗：' + JSON.stringify(meta).slice(0, 200));
+    }
+
+    return UrlFetchApp.fetch(
+      'https://api.telegram.org/file/bot' + Config.TELEGRAM_API_KEY + '/' + meta.result.file_path
+    ).getBlob();
+  };
+
+  /**
+   * 下載使用者上傳的檔案並轉成文字。
    *
    * 券商匯出的 CSV 可能是 UTF-8（含 BOM）也可能是 Big5，先試 UTF-8，
    * 解不出中文欄名就改用 Big5 再解一次。
@@ -87,16 +106,7 @@ var Telegram = (() => {
    * @returns {string} 檔案文字內容
    */
   telegram.fetchFileText = (fileId) => {
-    var meta = JSON.parse(UrlFetchApp.fetch(
-      Config.TELEGRAM_API_BASE + '/getFile?file_id=' + encodeURIComponent(fileId)
-    ).getContentText());
-    if (!meta.ok || !meta.result || !meta.result.file_path) {
-      throw new Error('Telegram getFile 失敗：' + JSON.stringify(meta).slice(0, 200));
-    }
-
-    var blob = UrlFetchApp.fetch(
-      'https://api.telegram.org/file/bot' + Config.TELEGRAM_API_KEY + '/' + meta.result.file_path
-    ).getBlob();
+    var blob = telegram.fetchFileBlob(fileId);
 
     var text = blob.getDataAsString('UTF-8');
     if (text.indexOf('股票名稱') < 0 && text.indexOf('日期') < 0) {

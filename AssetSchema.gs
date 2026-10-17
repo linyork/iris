@@ -57,7 +57,10 @@ var AssetSchema = (() => {
 
   // ─── 分頁定義 ──────────────────────────────────────────────────
   //
-  // generated: true 代表整張表由 Position.rebuild() 覆寫，人不要手改。
+  // generated: true 代表整張表由程式覆寫（Position.rebuild()，或「消費」的 ExpenseImport），
+  // 人不要手改。
+  // textColumns 的欄位寫入前設成純文字，Sheets 才不會把字串自作主張轉成數字或日期。
+  // seed 是分頁**剛建立時**寫入的預設資料；之後由人維護，建表不會再寫第二次。
   // 每個分頁都凍結第一列。
 
   s.TABS = [
@@ -117,7 +120,58 @@ var AssetSchema = (() => {
       // 2026-10-08 拿掉名稱／數量／幣別：只寫不讀。讀寫這張表一律依欄名。
       headers: ['日期', '類型', '鍵', '單價', '市值', '狀態']
     },
-    { name: 'consolelog',        headers: ['timestamp', 'level', 'tag', 'message', 'details'] },
+    {
+      name: '消費',
+      generated: true,
+      // 只有日期、金額、計入支出不是文字。其餘一律純文字：子分類「7-11」、備註「3/4」
+      // 寫進「自動」格式的欄會被 Sheets 當成日期，時間「11:54」會變成時刻值。
+      textColumns: ['時間', '收支', '幣別', '分類', '子分類', '帳戶', '備註', '分析類型',
+                    'source_uid', '修改時間', '批次'],
+      note: '⚠️ 記帳 App 匯出檔的鏡像，每次匯入整張覆寫，請勿手改。' +
+            '要調整分析類型改「分類對照」，再從 App 重新匯出一份傳給 iris。' +
+            '只用來分析，不入帳：跟「交易」與帳戶餘額無關。',
+      headers: ['日期', '時間', '收支', '金額', '幣別', '分類', '子分類', '帳戶', '備註',
+                '分析類型', '計入支出', 'source_uid', '修改時間', '批次']
+    },
+    {
+      name: '分類對照',
+      note: '記帳 App 的「收支＋分類」→ 分析類型。人手維護，iris 只讀。' +
+            '同一個分類名稱在收入與支出可以對到不同類型（例如「其他」）。',
+      headers: ['收支', '分類', '分析類型', '計入支出'],
+      // 配息、買股：「交易」已經記了，再算會重複。代付／應收：替別人先墊，不是自己的
+      // 生活費。自動加值：錢在帳戶之間搬家，儲值後的消費才是支出。
+      // 退款計入支出，但統計時是負數（抵銷支出）。
+      seed: [
+        ['支出', '食', '生活支出', true],
+        ['支出', '購物', '生活支出', true],
+        ['支出', '住', '生活支出', true],
+        ['支出', '行', '生活支出', true],
+        ['支出', '樂', '生活支出', true],
+        ['支出', '醫療', '生活支出', true],
+        ['支出', '佈施', '生活支出', true],
+        ['支出', '其他', '生活支出', true],
+        ['支出', '訂閱', '生活支出', true],
+        ['退款', '其他', '退款', true],
+        ['收入', '工資', '薪資收入', false],
+        ['收入', '其他', '其他收入', false],
+        ['收入', '配息', '投資相關', false],
+        ['支出', '買股', '投資相關', false],
+        ['支出', '代付', '代墊往來', false],
+        ['支出', '應付', '代墊往來', false],
+        ['收入', '應收', '代墊往來', false],
+        ['收入', '代收', '代墊往來', false],
+        ['收入', '自動加值', '內部轉帳', false]
+      ]
+    },
+    {
+      name: '匯入紀錄',
+      textColumns: ['export_id', 'exported_at', '檔名', '批次'],
+      note: '每次成功匯入記帳 App 匯出檔的一列。同一份匯出（export_id）不會匯入第二次；' +
+            '比最後一次成功匯入還舊的匯出檔會被拒絕。',
+      headers: ['時間', 'export_id', 'exported_at', '檔名', '總筆數', '新增', '更新', '刪除',
+                '未對照', '批次', '狀態']
+    },
+    { name: 'consolelog',       headers: ['timestamp', 'level', 'tag', 'message', 'details'] },
     { name: 'chat',              headers: ['userId', 'role', 'message', 'timestamp'] }
   ];
 
@@ -327,6 +381,10 @@ var AssetSchema = (() => {
    * 欄位字母也用 L() 組，所以整列都跟著試算表實際的欄序走。
    * 標題列只要求 TABS 定義的欄位**都在**，不管順序、也容許多出來的欄（寫空白）——
    * 主人在表上刪掉一欄沒人讀的欄，不必等程式先改。
+   *
+   * 先寫新資料、再清掉舊資料多出來的尾巴，所以寫到一半失敗時表上不會是空的。
+   * 列數不夠會先補（getRange 超出表格大小會丟例外，setValues 不會自己長列），
+   * textColumns 只對這次寫入的範圍設純文字 —— 建表時設的格式蓋不到後來補的列。
    */
   s.writeBlockByName = (sheet, rowsFn) => {
     var map = s.headerMap(sheet);
@@ -339,10 +397,20 @@ var AssetSchema = (() => {
     var width = header.length;
     var objs = rowsFn((name) => s.colLetter(map[name] + 1));
     var lastRow = sheet.getLastRow();
-    if (lastRow >= 2) sheet.getRange(2, 1, lastRow - 1, Math.max(sheet.getLastColumn(), width)).clearContent();
-    if (!objs.length) return;
-    var rows = objs.map(o => header.map(h => (h && o[h] !== undefined) ? o[h] : ''));
-    sheet.getRange(2, 1, rows.length, width).setValues(rows);
+    var n = objs.length;
+    if (n) {
+      var need = n + 1;
+      if (sheet.getMaxRows() < need) sheet.insertRowsAfter(sheet.getMaxRows(), need - sheet.getMaxRows());
+      var tab = s.TABS.filter(t => t.name === sheet.getName())[0];
+      ((tab && tab.textColumns) || []).forEach(name => {
+        if (map[name] !== undefined) sheet.getRange(2, map[name] + 1, n, 1).setNumberFormat('@');
+      });
+      var rows = objs.map(o => header.map(h => (h && o[h] !== undefined) ? o[h] : ''));
+      sheet.getRange(2, 1, n, width).setValues(rows);
+    }
+    if (lastRow > n + 1) {
+      sheet.getRange(n + 2, 1, lastRow - n - 1, Math.max(sheet.getLastColumn(), width)).clearContent();
+    }
   };
 
   /**
@@ -371,51 +439,9 @@ var AssetSchema = (() => {
     var created = [], patched = [];
 
     s.TABS.forEach(tab => {
-      var sheet = ss.getSheetByName(tab.name);
-      if (!sheet) {
-        sheet = ss.insertSheet(tab.name);
-        created.push(tab.name);
-      }
-
-      // 標題列必須與 TABS 逐格對齊 —— 補欄一律補在「它該在的位置」，
-      // 不是補在最後面。補在最後面而寫入又照 TABS 順序，兩者就會錯開。
-      var chk = s.checkHeader(sheet, tab.headers);
-      if (!chk.ok) {
-        if (chk.found === '') {
-          // 尾端缺欄（含全新空表）：直接補上，既有資料的欄位位置不受影響
-          var tail = tab.headers.slice(chk.at - 1);
-          sheet.getRange(1, chk.at, 1, tail.length).setValues([tail]);
-          patched.push(tab.name + '：+' + tail.join('、'));
-        } else if (tab.generated) {
-          // 計算層本來就整段覆寫，標題列重寫最安全
-          sheet.getRange(1, 1, 1, tab.headers.length).setValues([tab.headers]);
-          patched.push(tab.name + '：標題列重寫（原第 ' + chk.at + ' 欄為「' + chk.found + '」）');
-        } else {
-          // 輸入層有人工資料，不能自作主張搬欄位
-          throw new Error(
-            '「' + tab.name + '」第 ' + chk.at + ' 欄應該是「' + chk.want + '」，' +
-            '實際是「' + chk.found + '」。這張是輸入層分頁，程式不會自動搬動既有資料的欄位，' +
-            '請手動把標題列調整成：' + tab.headers.join(' | ')
-          );
-        }
-      }
-
-      // ⚠️ 代號欄一定要設成純文字。台股代號有前導零（0056、00878），
-      //    用 setValues 寫字串進「自動」格式的欄位，Sheets 會判定它像數字而
-      //    轉成 56、878 —— 於是 GOOGLEFINANCE("TPE:"&代號) 查無此股，
-      //    市值整欄變 0，而且完全不報錯。只有含字母的代號（00687B）會倖存。
-      (tab.textColumns || []).forEach(name => {
-        var at = tab.headers.indexOf(name);
-        if (at < 0) return;
-        try {
-          sheet.getRange(1, at + 1, sheet.getMaxRows(), 1).setNumberFormat('@');
-        } catch (e) { /* 舊版 API 沒有就算了，資料仍會寫進去 */ }
-      });
-
-      try {
-        sheet.setFrozenRows(1);
-        sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).setFontWeight('bold');
-      } catch (e) { /* 格式失敗不影響資料 */ }
+      var r = s.ensureTab(ss, tab.name);
+      if (r.created) created.push(tab.name);
+      if (r.patched) patched.push(r.patched);
     });
 
     s.applyTradeFormulas(ss);
@@ -424,6 +450,72 @@ var AssetSchema = (() => {
     var result = { created: created, patched: patched, tabs: s.TABS.length };
     Logger.info('AssetSchema.build', '建表完成', result);
     return result;
+  };
+
+  /**
+   * 建立或補齊**一張**分頁（build() 對每張都跑這個）。
+   *
+   * 單獨拿出來是給第一次寫入某張表的模組自己建表用（例如 ExpenseImport 的三張），
+   * 不必先叫主人跑 setupAssetSheet() —— build() 還會重填整張交易表的公式，那不是
+   * 匯入一份記帳檔該附帶做的事。
+   *
+   * @returns {{sheet: object, created: boolean, patched: (string|null)}}
+   */
+  s.ensureTab = (ss, name) => {
+    var tab = s.TABS.filter(t => t.name === name)[0];
+    if (!tab) throw new Error('TABS 沒有定義「' + name + '」');
+    var out = { sheet: ss.getSheetByName(tab.name), created: false, patched: null };
+    var sheet = out.sheet;
+    if (!sheet) {
+      sheet = out.sheet = ss.insertSheet(tab.name);
+      out.created = true;
+    }
+
+    // 標題列必須與 TABS 逐格對齊 —— 補欄一律補在「它該在的位置」，
+    // 不是補在最後面。補在最後面而寫入又照 TABS 順序，兩者就會錯開。
+    var chk = s.checkHeader(sheet, tab.headers);
+    if (!chk.ok) {
+      if (chk.found === '') {
+        // 尾端缺欄（含全新空表）：直接補上，既有資料的欄位位置不受影響
+        var tail = tab.headers.slice(chk.at - 1);
+        sheet.getRange(1, chk.at, 1, tail.length).setValues([tail]);
+        out.patched = tab.name + '：+' + tail.join('、');
+      } else if (tab.generated) {
+        // 計算層本來就整段覆寫，標題列重寫最安全
+        sheet.getRange(1, 1, 1, tab.headers.length).setValues([tab.headers]);
+        out.patched = tab.name + '：標題列重寫（原第 ' + chk.at + ' 欄為「' + chk.found + '」）';
+      } else {
+        // 輸入層有人工資料，不能自作主張搬欄位
+        throw new Error(
+          '「' + tab.name + '」第 ' + chk.at + ' 欄應該是「' + chk.want + '」，' +
+          '實際是「' + chk.found + '」。這張是輸入層分頁，程式不會自動搬動既有資料的欄位，' +
+          '請手動把標題列調整成：' + tab.headers.join(' | ')
+        );
+      }
+    }
+
+    // ⚠️ 代號欄一定要設成純文字。台股代號有前導零（0056、00878），
+    //    用 setValues 寫字串進「自動」格式的欄位，Sheets 會判定它像數字而
+    //    轉成 56、878 —— 於是 GOOGLEFINANCE("TPE:"&代號) 查無此股，
+    //    市值整欄變 0，而且完全不報錯。只有含字母的代號（00687B）會倖存。
+    (tab.textColumns || []).forEach(col => {
+      var at = tab.headers.indexOf(col);
+      if (at < 0) return;
+      try {
+        sheet.getRange(1, at + 1, sheet.getMaxRows(), 1).setNumberFormat('@');
+      } catch (e) { /* 舊版 API 沒有就算了，資料仍會寫進去 */ }
+    });
+
+    // 預設資料只在剛建立時寫：之後是人維護的，主人刪光了也不該被補回來
+    if (out.created && tab.seed && tab.seed.length) {
+      sheet.getRange(2, 1, tab.seed.length, tab.headers.length).setValues(tab.seed);
+    }
+
+    try {
+      sheet.setFrozenRows(1);
+      sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).setFontWeight('bold');
+    } catch (e) { /* 格式失敗不影響資料 */ }
+    return out;
   };
 
   /**
