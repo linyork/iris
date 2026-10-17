@@ -31,6 +31,13 @@ var Commands = (() => {
       name: 'refresh',
       description: '重新計算持倉與指標',
       handler: () => handleRefresh()
+    },
+    {
+      // aliases 是「整則訊息剛好等於這句」也算數的中文說法，不必打斜線
+      name: 'reclassify',
+      aliases: ['重新分類'],
+      description: '用分類對照重新分類記帳資料',
+      handler: () => ExpenseImport.formatRemapReply(ExpenseImport.remap())
     }
   ];
 
@@ -125,13 +132,17 @@ var Commands = (() => {
    */
   commands.tryHandle = (event) => {
     var text = (event.message && event.message.text || '').trim();
-    if (text.charAt(0) !== '/') return null;
-
-    // 群組中 Telegram 會送出 "/report@YourBotName"，需去掉 @ 之後的部分；
-    // 參數（如未來的 /price 2330）先切開，目前的指令都不吃參數。
-    var head = text.split(/\s+/)[0].slice(1).split('@')[0].toLowerCase();
-
-    var def = definitions.find(d => d.name === head);
+    var def, head;
+    if (text.charAt(0) === '/') {
+      // 群組中 Telegram 會送出 "/report@YourBotName"，需去掉 @ 之後的部分；
+      // 參數（如未來的 /price 2330）先切開，目前的指令都不吃參數。
+      head = text.split(/\s+/)[0].slice(1).split('@')[0].toLowerCase();
+      def = definitions.find(d => d.name === head);
+    } else {
+      // 中文別名只認整則訊息一字不差，「幫我重新分類一下」之類的照樣交給 ChatBot
+      def = definitions.find(d => (d.aliases || []).indexOf(text) >= 0);
+      head = def ? def.name : '';
+    }
     if (!def) return null;
 
     Logger.info('Commands.tryHandle', '執行指令', { command: head });

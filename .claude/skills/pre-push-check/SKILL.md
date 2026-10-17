@@ -100,6 +100,9 @@ Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），
 - [ ] **改 `SCHEMA_VERSION` 之前先拿一份新版的真實匯出檔**換掉 `budget_fixture.data` 跑 T56，
       不要只看 App 的更新說明就放行
 - [ ] **改 `分類對照` 的 `seed` 只影響新建的分頁**：線上那張已經是人維護的，要主人自己補
+- [ ] **改 `分類對照` 的欄位（`TABS` 的 headers）要附遷移**：它是輸入層，標題列對不上時
+      `ensureTab` 直接丟例外，每一次匯入、重新分類都會失敗。參考 `migrateMapping()`：
+      在 `ensureTab` 之前自己補欄，而且只做一次
 - [ ] 不要改成 Drive 轉檔：會新增 oauthScope（見下一節）
 
 ### 如果 `appsscript.json` 有變動

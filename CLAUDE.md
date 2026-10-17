@@ -173,6 +173,7 @@ answer is fixed skip the whole ReAct loop and one LLM call.
 | `/dashboard` | On Telegram, sends a message with an inline `web_app` button that opens the Mini App; elsewhere returns `Config.DASHBOARD_URL` (Script Property — the browser dashboard is on the HEAD deployment's `/dev`, whose deployment id differs from the webhook's `/exec`, so it cannot be derived). The handler sends its own message and returns `''` — "handled, nothing left to push" — which is distinct from `null`. |
 | `/report` | Runs `buildDailyReport()` — the same generator the 09:00 trigger uses, minus the weekend guard, replying only to the caller |
 | `/refresh` | Runs `Position.rebuild()` on demand. 持倉 prices are live formulas, but 指標 holds values frozen at rebuild time — and the total-assets figure everything downstream reads comes from 指標. The 13:00 job does the same thing on a schedule; this is for when you don't want to wait. |
+| `/reclassify` | `ExpenseImport.remap()`: re-applies `分類對照` to the `消費` rows already imported. Also triggered by the bare message 「重新分類」 — a definition's `aliases` match the **whole** message only, so 「幫我重新分類一下」 still goes to ChatBot. |
 
 The command list is shared between dispatch and `Telegram.setupCommands()` (`setMyCommands`) so the
 menu cannot drift from what is implemented. **After adding or renaming a command, run
@@ -1071,8 +1072,16 @@ contains the bot token; never log it.
 - **重複與舊檔。** Telegram 重送同一個 update 已經被 `doPost` 的 CacheService 擋掉；主人
   自己重傳，靠 `匯入紀錄` 的 `export_id` + script lock。比上次成功匯入還舊的匯出檔一律拒絕：
   整張覆寫時舊檔會把新紀錄刪掉。規格書的「處理中」列沒有做 —— 上面兩層已經涵蓋，多一個
-  狀態還得處理逾時。
-  ⚠️ 同一份檔案改完 `分類對照` 再傳也會被當重複。要重新套用分類，從 App 重新匯出一份。
+  狀態還得處理逾時。同一份再傳時不重匯，但會照現在的 `分類對照` 重新分類。
+- **分類對照分兩層比**：`收支|分類|子分類`（子分類有填的列）先，`收支|分類`（子分類空白）後，
+  都沒有才是「未分類」。「支出／其他」底下混了裝修、旅遊、所得稅、保單、自動加值，只看分類
+  的話全部算生活支出。一次性支出計入支出，但回覆的「本月生活支出」不含它，另外列。
+- **改了對照表 → `ExpenseImport.remap()`**（「重新分類」、`/reclassify`、DevTools 的
+  `remapExpenseCategories()`）：只改 `消費` 的 `分析類型`、`計入支出` 兩欄，不寫 `匯入紀錄`。
+- ⚠️ **`分類對照` 是輸入層，標題列對不上時 `ensureTab` 會丟例外**（不替人搬欄位）。
+  2026-10-18 在中間插了「子分類」欄，所以線上的舊四欄表由 `migrateMapping()` 在 `ensureTab`
+  之前自己插欄、補預設的子分類列 —— **只在還沒有子分類欄時做一次**，主人之後刪掉的列不會被
+  補回來。之後再改這張表的欄位，也要走同樣的路，不然每一次匯入都會失敗。
 - **全有或全無。** `parse()` 是純函式，格式（`format_id`、`schema_version`、筆數、必要欄位、
   每一列的日期與金額）全部驗過才拿鎖寫入。`schema_version` 不是 7 就整批拒絕：App 改版可能
   改了欄位，寧可不匯也不要默默寫錯。

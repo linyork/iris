@@ -129,6 +129,17 @@ function rebuildPositions() {
   return r;
 }
 
+/**
+ * 用現在的「分類對照」重新分類「消費」，不必從 App 重新匯出。
+ * 只改「分析類型」「計入支出」兩欄，不寫「匯入紀錄」。分類對照還是舊的四欄的話，
+ * 會先補上「子分類」欄與預設的子分類列。Telegram 傳「重新分類」做的是同一件事。
+ */
+function remapExpenseCategories() {
+  var r = ExpenseImport.remap();
+  console.log(ExpenseImport.formatRemapReply(r));
+  return r;
+}
+
 // ─── 儀表板 / 顧問 ────────────────────────────────────────────────
 
 /**

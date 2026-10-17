@@ -41,6 +41,10 @@ var ExpenseImport = (() => {
 
   /** 對照不到的分類：計入支出 —— 寧可多算支出，也不要漏算 */
   m.UNMAPPED = '未分類';
+  /** 回覆裡「本月生活支出」只算這一類（加上未分類）；一次性支出另外列 */
+  m.LIVING   = '生活支出';
+  m.ONE_OFF  = '一次性支出';
+  m.ADVANCE  = '代墊往來';
   /** 「匯入紀錄」的狀態欄；去重與新舊比較只看這種列 */
   m.DONE = '成功';
 
@@ -293,25 +297,33 @@ var ExpenseImport = (() => {
   // ─── 分類對照 ────────────────────────────────────────────────
 
   /**
-   * 「收支|分類」→ {type, counted}。鍵要含收支：App 的「其他」收入和支出都有。
-   * 分析類型空白的列不算有對照；同一個鍵出現兩次以第一列為準。
+   * 「分類對照」→ 兩層查表：
+   *   sub   「收支|分類|子分類」—— 子分類有填的列
+   *   base  「收支|分類」       —— 子分類空白的列，代表整個分類
+   * 鍵要含收支：App 的「其他」收入和支出都有。分析類型空白的列不算有對照；
+   * 同一個鍵出現兩次以第一列為準。表上還沒有子分類欄時，每一列都落在 base。
    * ⚠️ 不讓 AI 判斷分類 —— 結果要可預測，錯了也知道去哪裡改。
    */
   m.readMapping = (ss) => {
-    var map = {};
+    var map = { sub: {}, base: {} };
     var sh = ss.getSheetByName('分類對照');
     if (!sh) return map;
     AssetSchema.readObjects(sh).forEach(x => {
-      var key = _str(x['收支']) + '|' + _str(x['分類']);
       var type = _str(x['分析類型']);
-      if (!type || map[key]) return;
-      map[key] = { type: type, counted: _bool(x['計入支出']) };
+      if (!type) return;
+      var sub = _str(x['子分類']);
+      var key = _str(x['收支']) + '|' + _str(x['分類']) + (sub ? '|' + sub : '');
+      var bucket = sub ? map.sub : map.base;
+      if (!bucket[key]) bucket[key] = { type: type, counted: _bool(x['計入支出']) };
     });
     return map;
   };
 
+  /** 先比完整的「收支|分類|子分類」，再比「收支|分類」，都沒有才是未分類 */
   var _classify = (row, mapping, unmapped) => {
-    var hit = mapping[row['收支'] + '|' + row['分類']];
+    var base = row['收支'] + '|' + row['分類'];
+    var sub = _str(row['子分類']);
+    var hit = (sub && mapping.sub[base + '|' + sub]) || mapping.base[base];
     if (hit) {
       row['分析類型'] = hit.type;
       row['計入支出'] = hit.counted;
@@ -319,8 +331,46 @@ var ExpenseImport = (() => {
     }
     row['分析類型'] = m.UNMAPPED;
     row['計入支出'] = true;
-    var k = row['收支'] + '／' + row['分類'];
+    var k = row['收支'] + '／' + row['分類'] + (sub ? '／' + sub : '');
     unmapped[k] = (unmapped[k] || 0) + 1;
+  };
+
+  /**
+   * 舊的四欄「分類對照」→ 加上「子分類」欄（插在「分類」後面），並補上預設的子分類列。
+   *
+   * 要在 ensureTab 之前跑：輸入層的標題列對不上時 ensureTab 會丟例外，不替人搬欄位。
+   * **只在還沒有子分類欄時做一次**：插欄、補列（已經有同一個收支＋分類＋子分類的跳過）。
+   * 之後主人刪掉哪一列，下次匯入也不會被補回來。原本的列一個字都不動，讀寫一律依欄名。
+   *
+   * @returns {{migrated: boolean, added: number}}
+   */
+  m.migrateMapping = (ss) => {
+    var out = { migrated: false, added: 0 };
+    var sh = ss.getSheetByName('分類對照');
+    if (!sh) return out;
+    var before = AssetSchema.headerMap(sh);
+    if (before['子分類'] !== undefined || before['分類'] === undefined) return out;
+
+    sh.insertColumnAfter(before['分類'] + 1);
+    sh.getRange(1, before['分類'] + 2).setValue('子分類');
+    out.migrated = true;
+
+    var tab = AssetSchema.TABS.filter(t => t.name === '分類對照')[0];
+    var H = tab.headers;
+    var key = (o) => [o['收支'], o['分類'], o['子分類']].map(_str).join('|');
+    var have = {};
+    AssetSchema.readObjects(sh).forEach(x => { have[key(x)] = true; });
+    var header = AssetSchema.headerMap(sh).__header;
+    var rows = tab.seed
+      .map(r => { var o = {}; H.forEach((h, i) => { o[h] = r[i]; }); return o; })
+      .filter(o => _str(o['子分類']) && !have[key(o)])
+      .map(o => header.map(h => o[h] !== undefined ? o[h] : ''));
+    if (rows.length) {
+      sh.getRange(sh.getLastRow() + 1, 1, rows.length, header.length).setValues(rows);
+      out.added = rows.length;
+    }
+    Logger.info('ExpenseImport.migrateMapping', '分類對照加上子分類欄', out);
+    return out;
   };
 
   // ─── 同步 ────────────────────────────────────────────────────
@@ -386,15 +436,18 @@ var ExpenseImport = (() => {
     try {
       var ss = AssetSchema.open();
       var sheet = AssetSchema.ensureTab(ss, '消費').sheet;
+      m.migrateMapping(ss);
       AssetSchema.ensureTab(ss, '分類對照');
       var logSheet = AssetSchema.ensureTab(ss, '匯入紀錄').sheet;
 
+      // 同一份再傳：資料不動，但照現在的「分類對照」重新分類 —— 主人改完對照表，
+      // 最直覺的動作就是把同一份檔案再丟一次
       var history = AssetSchema.readObjects(logSheet).filter(x => _str(x['狀態']) === m.DONE);
       if (history.some(x => _str(x['export_id']) === man.exportId)) {
-        Logger.info('ExpenseImport.run', '重複的匯出檔', man.exportId);
-        return { ok: false, duplicate: true,
-                 reason: '這份匯出檔已經匯入過了，資料沒有變動。改了「分類對照」想重新套用的話，' +
-                         '從 App 重新匯出一份再傳。' };
+        Logger.info('ExpenseImport.run', '重複的匯出檔，只重新分類', man.exportId);
+        var again = _remapLocked(ss);
+        return { ok: false, duplicate: true, remap: again,
+                 reason: '這份匯出檔已經匯入過了，資料沒有變動。\n' + m.formatRemapReply(again) };
       }
       // 整張覆寫時拿舊檔來匯，會把之後新增的紀錄刪掉
       var last = history.reduce((a, x) => Math.max(a, _ts(x['exported_at'])), -Infinity);
@@ -480,24 +533,113 @@ var ExpenseImport = (() => {
   };
 
   /**
-   * 某個月（yyyy-MM）的兩個數字，給匯入完的回覆用。
-   *   生活支出：計入支出的「支出」加總，減掉計入支出的「退款」。收入不管怎麼標都不算進來，
-   *             不然一個還沒對照的收入分類（預設計入支出）會讓支出變少，跟「寧可多算」相反。
+   * 某個月（yyyy-MM）的數字，給匯入完的回覆用。
+   *   生活支出：分析類型是「生活支出」或「未分類」的支出，減掉計入支出的「退款」。
+   *             收入不管怎麼標都不算進來，不然一個還沒對照的收入分類（預設計入支出）會讓
+   *             支出變少，跟「寧可多算」相反。
+   *   一次性支出：另外加總。它計入支出（是自己花的錢），但混進生活支出的話，裝修那一年的
+   *             月支出會被灌大好幾倍。
    *   代墊往來淨額：代墊往來的支出 − 收入。正數是這個月墊出去的比收回來的多。
    */
   m.monthSummary = (rows, month) => {
-    var out = { spend: 0, advance: 0 };
+    var out = { spend: 0, oneOff: 0, advance: 0 };
     rows.forEach(r => {
       if (String(r['日期']).slice(0, 7) !== month) return;
       var amt = AssetSchema.num(r['金額']);
-      if (r['計入支出'] === true && r['收支'] === '支出') out.spend += amt;
-      if (r['計入支出'] === true && r['收支'] === '退款') out.spend -= amt;
-      if (r['分析類型'] === '代墊往來') {
+      var type = r['分析類型'];
+      if (r['收支'] === '支出' && (type === m.LIVING || type === m.UNMAPPED)) out.spend += amt;
+      if (r['收支'] === '支出' && type === m.ONE_OFF && r['計入支出'] === true) out.oneOff += amt;
+      if (r['收支'] === '退款' && r['計入支出'] === true) out.spend -= amt;
+      if (type === m.ADVANCE) {
         if (r['收支'] === '支出') out.advance += amt;
         if (r['收支'] === '收入') out.advance -= amt;
       }
     });
     return out;
+  };
+
+  // ─── 重新分類 ────────────────────────────────────────────────
+
+  /** 拿著鎖的人呼叫：用現在的「分類對照」重算「消費」的分析類型與計入支出 */
+  var _remapLocked = (ss) => {
+    var sheet = ss.getSheetByName('消費');
+    if (!sheet || sheet.getLastRow() < 2) {
+      return { ok: false, reason: '「消費」還沒有資料：先在 Telegram 傳記帳 App 匯出的 .xlsx。' };
+    }
+    var mig = m.migrateMapping(ss);
+    AssetSchema.ensureTab(ss, '分類對照');
+    var map = AssetSchema.headerMap(sheet);
+    var need = ['收支', '分類', '子分類', '分析類型', '計入支出'];
+    var missing = need.filter(h => map[h] === undefined);
+    if (missing.length) return { ok: false, reason: '「消費」少了欄位：' + missing.join('、') + '。' };
+
+    var n = sheet.getLastRow() - 1;
+    var data = sheet.getRange(2, 1, n, Math.max(sheet.getLastColumn(), 1)).getValues();
+    var mapping = m.readMapping(ss), unmapped = {}, byType = {};
+    var types = [], counted = [], updated = 0, total = 0;
+    data.forEach(r => {
+      var row = { '收支': _str(r[map['收支']]), '分類': _str(r[map['分類']]), '子分類': _str(r[map['子分類']]) };
+      if (!row['收支'] && !row['分類']) {           // 空白列原樣留著
+        types.push([r[map['分析類型']]]);
+        counted.push([r[map['計入支出']]]);
+        return;
+      }
+      total++;
+      _classify(row, mapping, unmapped);
+      if (row['分析類型'] !== _str(r[map['分析類型']]) || row['計入支出'] !== _bool(r[map['計入支出']])) updated++;
+      byType[row['分析類型']] = (byType[row['分析類型']] || 0) + 1;
+      types.push([row['分析類型']]);
+      counted.push([row['計入支出']]);
+    });
+    // 只寫這兩欄：其他欄是 App 的鏡像，「匯入紀錄」也不動 —— 這不是一次匯入
+    if (updated) {
+      sheet.getRange(2, map['分析類型'] + 1, n, 1).setNumberFormat('@').setValues(types);
+      sheet.getRange(2, map['計入支出'] + 1, n, 1).setValues(counted);
+    }
+    var result = {
+      ok: true, total: total, updated: updated, mapping: mig,
+      byType: Object.keys(byType).sort((a, b) => byType[b] - byType[a]).map(k => ({ type: k, n: byType[k] })),
+      unmapped: Object.keys(unmapped).sort().map(k => ({ key: k, n: unmapped[k] }))
+    };
+    Logger.info('ExpenseImport.remap', '重新分類完成', {
+      total: total, updated: updated, unmapped: result.unmapped.length, migrated: mig.migrated
+    });
+    return result;
+  };
+
+  /**
+   * 用現在的「分類對照」重新分類「消費」裡已經有的資料，不必從 App 重新匯出。
+   * 主人改了對照表之後用（Telegram 傳「重新分類」或 /reclassify，或編輯器跑
+   * remapExpenseCategories()）。只改「分析類型」「計入支出」兩欄。
+   */
+  m.remap = () => {
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(30 * 1000)) return { ok: false, reason: '有一份匯入還在處理中，等它結束再試一次。' };
+    try {
+      var r = _remapLocked(AssetSchema.open());
+      SpreadsheetApp.flush();
+      return r;
+    } finally {
+      lock.releaseLock();
+    }
+  };
+
+  m.formatRemapReply = (r) => {
+    if (!r.ok) return '⚠️ ' + r.reason;
+    var lines = ['已用現在的「分類對照」重新分類：共 ' + _money(r.total) + ' 筆，更新 ' + _money(r.updated) + ' 筆'];
+    r.byType.forEach(t => lines.push('・' + t.type + ' ' + _money(t.n) + ' 筆'));
+    if (r.mapping && r.mapping.migrated) {
+      lines.push('（「分類對照」加上了子分類欄，並補了 ' + r.mapping.added + ' 列預設的子分類對照）');
+    }
+    _unmappedLines(r.unmapped).forEach(l => lines.push(l));
+    return lines.join('\n');
+  };
+
+  var _unmappedLines = (unmapped) => {
+    if (!unmapped.length) return [];
+    return ['', '⚠️ ' + unmapped.length + ' 個分類沒有對照，暫時標成「' + m.UNMAPPED + '」並計入支出：']
+      .concat(unmapped.map(u => '・' + u.key + '（' + _money(u.n) + ' 筆）'))
+      .concat(['到「分類對照」補上之後，傳「重新分類」給我就會套用。']);
   };
 
   // ─── 回覆 ────────────────────────────────────────────────────
@@ -518,13 +660,10 @@ var ExpenseImport = (() => {
     if (r.excluded) lines.push('另有 ' + _money(r.excluded) + ' 筆在 App 裡標成忽略或停用，沒有匯入。');
     if (r.period) lines.push('期間：' + _slash(r.period[0]) + ' – ' + _slash(r.period[1]));
     lines.push('');
-    lines.push('本月到目前：生活支出 ' + _money(r.month.spend) + '｜代墊往來淨額 ' + _money(r.month.advance));
-    if (r.unmapped.length) {
-      lines.push('');
-      lines.push('⚠️ ' + r.unmapped.length + ' 個分類沒有對照，暫時標成「' + m.UNMAPPED + '」並計入支出：');
-      r.unmapped.forEach(u => lines.push('・' + u.key + '（' + _money(u.n) + ' 筆）'));
-      lines.push('到「分類對照」補上，再從 App 重新匯出一份傳過來就會更新。');
-    }
+    lines.push('本月到目前：生活支出 ' + _money(r.month.spend) +
+      (r.month.oneOff ? '｜一次性支出 ' + _money(r.month.oneOff) : '') +
+      '｜代墊往來淨額 ' + _money(r.month.advance));
+    _unmappedLines(r.unmapped).forEach(l => lines.push(l));
     r.warnings.forEach(w => { lines.push(''); lines.push('⚠️ ' + w); });
     return lines.join('\n');
   };

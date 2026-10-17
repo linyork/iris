@@ -154,6 +154,15 @@ class Sheet {
   clear() { this.rows = []; this.width = 1; this.formats = {}; EVAL.reset(); }
   clearNotes() { }
   insertRowsAfter(after, n) { this._grow(after + n, this.width); }
+  /** 在第 col 欄（1-based）後面插一欄：右邊的值與格式整片往右移 */
+  insertColumnAfter(col) {
+    this.rows.forEach(r => r.splice(col, 0, ''));
+    this.width++;
+    const f = {};
+    Object.keys(this.formats).forEach(k => { f[+k > col ? +k + 1 : +k] = this.formats[k]; });
+    this.formats = f;
+    EVAL.reset();
+  }
   deleteRow(r) { this.rows.splice(r - 1, 1); EVAL.reset(); }
   deleteRows(r, n) { this.rows.splice(r - 1, n); EVAL.reset(); }
   /** 取原始儲存格內容（不求值） */
@@ -2990,7 +2999,7 @@ console.log('\nT56  記帳 App 匯出檔 → 消費');
   check('而且回覆講明沒有刪除', /不是完整匯出/.test(ExpenseImport.formatReply(part)));
 
   // ── 改了分類對照，重新匯出一份就套上 ──
-  sheetOf('分類對照').appendRow(['支出', '寵物', '生活支出', true]);
+  sheetOf('分類對照').appendRow(['支出', '寵物', '', '生活支出', true]);
   const remap = run(book(R2, { export_id: 'e4', exported_at_utc: '2026-08-05T00:00:00.000Z' }));
   check('補上分類對照後重匯，未分類消失', remap.ok && remap.unmapped.length === 0 &&
     rowsOf().find(x => x.source_uid === 'u7')['分析類型'] === '生活支出', JSON.stringify(remap.unmapped));
@@ -3029,6 +3038,84 @@ console.log('\nT56  記帳 App 匯出檔 → 消費');
     AssetSchema.readObjects(fss.getSheetByName('分類對照')).length === AssetSchema.TABS.find(t => t.name === '分類對照').seed.length,
     JSON.stringify(fresh));
 
+  // 「支出／其他」底下混了裝修、旅遊、所得稅、保單、自動加值，只看分類的話全部變成生活支出。
+  // 分類對照加了子分類欄；線上那張是舊的四欄，要自己補欄、補預設列，而且只補一次。
+  console.log('\nT57  分類對照的子分類');
+  load('Commands.gs');
+  Config.SHEET_ID = 'expense-sub';
+  const sss = SpreadsheetApp.openById('expense-sub');
+  const oldMap = new Sheet('分類對照', [['收支', '分類', '分析類型', '計入支出'],
+    ['支出', '食', '生活支出', true], ['支出', '其他', '生活支出', true], ['收入', '其他', '其他收入', false],
+    ['退款', '其他', '退款', true], ['支出', '寵物', '毛小孩', true]]);          // 最後一列是主人自己加的
+  sss.sheets.push(oldMap);
+  const sig = (x) => JSON.stringify([x['收支'], x['分類'], x['分析類型'], x['計入支出']]);
+  const before57 = AssetSchema.readObjects(oldMap).map(sig);
+  const S = [
+    rec('s1', '2026-08-01', '10:00', '支出', '其他', 300000, 'm1', { 子分類: '裝修房子' }),
+    rec('s2', '2026-08-01', '11:00', '支出', '其他', 1000, 'm1', { 子分類: '自動加值' }),
+    rec('s3', '2026-08-01', '12:00', '支出', '其他', 200, 'm1', { 子分類: '吃飯' }),
+    rec('s4', '2026-08-01', '13:00', '支出', '其他', 50, 'm1'),
+    rec('s5', '2026-08-01', '14:00', '支出', '食', 120, 'm1'),
+    rec('s6', '2026-08-01', '15:00', '支出', '娛樂', 70, 'm1', { 子分類: '電影' })
+  ];
+  const subFile = () => book(S, { export_id: 's-e1', exported_at_utc: '2026-08-02T00:00:00.000Z' });
+  const sr = run(subFile());
+  const sReply = ExpenseImport.formatReply(sr);
+  const mapSheet = sss.getSheetByName('分類對照');
+  const mh = () => AssetSchema.headerMap(mapSheet);
+  check('分類對照多了子分類欄，插在分類後面', mh().__header.slice(0, 5).join() === '收支,分類,子分類,分析類型,計入支出',
+    mh().__header.join());
+  const after57 = AssetSchema.readObjects(mapSheet);
+  check('原本的列內容沒變、子分類留空', before57.every(b => after57.some(x => sig(x) === b && x['子分類'] === '')),
+    JSON.stringify(after57));
+  const subRows = () => AssetSchema.readObjects(mapSheet).filter(x => x['子分類']);
+  check('補上 5 列預設的子分類對照', subRows().length === 5, subRows().length);
+  ExpenseImport.migrateMapping(sss);
+  ExpenseImport.remap();
+  check('重複執行遷移不會重複新增', subRows().length === 5, subRows().length);
+
+  const of = (u) => AssetSchema.readObjects(sss.getSheetByName('消費')).find(x => x.source_uid === u);
+  check('支出／其他／裝修房子 → 一次性支出、計入支出', of('s1')['分析類型'] === '一次性支出' && of('s1')['計入支出'] === true,
+    of('s1')['分析類型']);
+  check('支出／其他／自動加值 → 內部轉帳、不計入支出', of('s2')['分析類型'] === '內部轉帳' && of('s2')['計入支出'] === false,
+    of('s2')['分析類型']);
+  check('支出／其他／吃飯（沒有專屬列）→ 照支出／其他那列', of('s3')['分析類型'] === '生活支出', of('s3')['分析類型']);
+  check('支出／其他 沒有子分類 → 生活支出', of('s4')['分析類型'] === '生活支出', of('s4')['分析類型']);
+  check('未分類清單是 收支／分類／子分類', /支出／娛樂／電影（1 筆）/.test(sReply), sReply);
+  // 200 + 50 + 120 + 70（未分類）；裝修另外列
+  check('一次性支出不算進本月生活支出，另外列出', /生活支出 440｜一次性支出 300,000｜/.test(sReply), sReply);
+
+  // ── 改了對照表 → 重新分類，只動兩欄 ──
+  const cSheet = sss.getSheetByName('消費');
+  const CH = AssetSchema.headerMap(cSheet);
+  const others = () => JSON.stringify(cSheet.rows.map(r => r.filter((_, i) => i !== CH['分析類型'] && i !== CH['計入支出'])));
+  const others0 = others();
+  const logRows = () => AssetSchema.readObjects(sss.getSheetByName('匯入紀錄')).length;
+  const log0 = logRows();
+  const mapRow = (io, cat, sub) => mapSheet.rows.findIndex(r => r[0] === io && r[1] === cat && r[2] === sub) + 1;
+  mapSheet.getRange(mapRow('支出', '其他', '裝修房子'), mh()['分析類型'] + 1).setValue('生活支出');
+  mapSheet.appendRow(['支出', '娛樂', '', '生活支出', true]);
+  const rm = Commands.tryHandle({ message: { text: '重新分類' } });
+  check('傳「重新分類」→ 回覆更新了幾筆、各分析類型幾筆', /更新 2 筆/.test(rm) && /・生活支出 5 筆/.test(rm), rm);
+  check('重新分類後消費只有分析類型與計入支出兩欄有變', others() === others0 && of('s1')['分析類型'] === '生活支出' &&
+    of('s6')['分析類型'] === '生活支出');
+  check('重新分類不寫匯入紀錄', logRows() === log0, logRows());
+  check('/reclassify 也行；沒有要改的就更新 0 筆', /更新 0 筆/.test(Commands.tryHandle({ message: { text: '/reclassify' } })));
+  check('只有整句剛好是「重新分類」才攔，其他交給 ChatBot', Commands.tryHandle({ message: { text: '幫我重新分類一下' } }) === null);
+
+  // ── 同一份匯出檔再傳，也套用新的對照 ──
+  mapSheet.getRange(mapRow('支出', '其他', '自動加值'), mh()['分析類型'] + 1).setValue('生活支出');
+  mapSheet.getRange(mapRow('支出', '其他', '自動加值'), mh()['計入支出'] + 1).setValue(true);
+  const again = run(subFile());
+  check('同一份再傳：不重匯，但照新的分類對照重新分類', again.duplicate && /已經匯入過了/.test(again.reason) &&
+    /更新 1 筆/.test(again.reason) && of('s2')['分析類型'] === '生活支出' && logRows() === log0, again.reason);
+  check('沒有消費資料時重新分類講清楚', (() => {
+    Config.SHEET_ID = 'expense-empty';
+    const r = ExpenseImport.formatRemapReply(ExpenseImport.remap());
+    Config.SHEET_ID = 'expense-sub';
+    return /還沒有資料/.test(r);
+  })());
+
   // ── 真的匯出檔（budget_fixture.data，不進版控）──
   const FIX = path.join(__dirname, 'budget_fixture.data');
   if (fs.existsSync(FIX)) {
@@ -3050,6 +3137,10 @@ console.log('\nT56  記帳 App 匯出檔 → 消費');
     if (types('收入').length && types('支出').length) {
       check('真的匯出檔：收入／其他 與 支出／其他 分開', types('收入').join() !== types('支出').join(),
         types('收入') + ' / ' + types('支出'));
+    }
+    const reno = rows.filter(x => x['分類'] === '其他' && x['子分類'] === '裝修房子');
+    if (reno.length) {
+      check('真的匯出檔：裝修房子是一次性支出', reno.every(x => x['分析類型'] === '一次性支出'));
     }
     check('真的匯出檔：同一份再傳是重複', run(blob).duplicate === true);
     console.log('  （' + rows.length + ' 筆，未對照 ' + real.unmapped.length + ' 類，解析加寫入 ' + ms + ' ms）');
