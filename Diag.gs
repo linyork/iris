@@ -10,6 +10,8 @@
  *   what=log              consolelog 尾端；可加 n / level / tag / since 篩選
  *   what=chat             chat 尾端；可加 n / since
  *   what=sheet&name=指標  任一分頁的標題列 + 尾端 n 列
+ *   what=sheet&name=每日快照&from=2025-08-30&to=2025-09-02
+ *                         改成依「日期」欄（沒有就第一欄）取 from～to（含）的列，前 n 列
  *
  * 為什麼要有它：Drive 連接器讀到的是快取，而且會截斷 —— 2026-10-08 它還列著
  * 主人已經手動刪掉的分頁。這個入口跑在 GAS 裡、直接讀試算表，拿到的就是當下。
@@ -110,10 +112,54 @@ var Diag = (() => {
     return _tail(sheet, _n(p.n, 20), since ? (r) => String(r[3]) >= since : null);
   };
 
+  /** 'yyyy-MM-dd'／'yyyy/MM/dd'（可帶時間）或 Date → 'yyyy-MM-dd'；讀不出來回 '' */
+  var _day = (v) => {
+    if (v instanceof Date) return Utilities.formatDate(v, 'GMT+8', 'yyyy-MM-dd');
+    var m = /^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/.exec(String(v === null || v === undefined ? '' : v).trim());
+    if (!m) return '';
+    var pad = (x) => (x.length === 1 ? '0' + x : x);
+    return m[1] + '-' + pad(m[2]) + '-' + pad(m[3]);
+  };
+
+  /**
+   * 日期落在 from～to（含）的列，照表上的順序取前 n 列；matched 是符合的總列數。
+   *
+   * 先只讀日期那一欄找出要哪些列，再讀那一段 —— 不受 MAX_SCAN 限制：要看的常是一年前的
+   * 某一天（例如核對每日快照的回補），而一年前在那張表上是一萬多列之前，尾端掃不到。
+   */
+  var _byDate = (sheet, from, to, n) => {
+    var last = sheet.getLastRow();
+    var cols = Math.max(sheet.getLastColumn(), 1);
+    var header = sheet.getRange(1, 1, 1, cols).getValues()[0].map(_cell);
+    var out = { header: header, rows: [], total: Math.max(last - 1, 0), matched: 0 };
+    if (last < 2) return out;
+    var at = header.indexOf('日期');
+    if (at < 0) at = 0;
+    var hit = [];
+    sheet.getRange(2, at + 1, last - 1, 1).getValues().forEach((r, i) => {
+      var d = _day(r[0]);
+      if (d && (!from || d >= from) && (!to || d <= to)) hit.push(i);
+    });
+    out.matched = hit.length;
+    if (!hit.length) return out;
+    var take = hit.slice(0, n);
+    var first = take[0], end = take[take.length - 1];
+    var want = {};
+    take.forEach(i => { want[i] = true; });
+    out.rows = sheet.getRange(first + 2, 1, end - first + 1, cols).getValues()
+      .filter((_, j) => want[first + j]).map(r => r.map(_cell));
+    return out;
+  };
+
   d.sheet = (p) => {
     var name = String(p.name || '');
     var sheet = name && _ss().getSheetByName(name);
     if (!sheet) return { error: '找不到分頁：' + name };
+    if (p.from || p.to) {
+      var from = p.from ? _day(p.from) : '', to = p.to ? _day(p.to) : '';
+      if ((p.from && !from) || (p.to && !to)) return { error: 'from／to 請用 yyyy-MM-dd' };
+      return _byDate(sheet, from, to, _n(p.n, 50));
+    }
     return _tail(sheet, _n(p.n, 50), null);
   };
 

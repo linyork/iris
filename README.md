@@ -142,7 +142,7 @@ Telegram Bot API ───┤        │
 | `Dashboard.gs` | 網頁儀表板的 payload 組裝、快取與存取控制 |
 | `DashboardPage.html` | 儀表板前端單頁 |
 | `MiniApp.gs` | Telegram Mini App 的 `initData` 驗簽與後端進入點 |
-| `Diag.gs` | 唯讀診斷入口（`/exec?view=diag&key=…`）：即時回傳分頁清單、排程比對、consolelog、chat 或任一分頁尾端，JSON。不寫任何東西，連 log 都不寫 |
+| `Diag.gs` | 唯讀診斷入口（`/exec?view=diag&key=…`）：即時回傳分頁清單、排程比對、consolelog、chat 或任一分頁尾端（也可以用 `from`／`to` 依日期取一段），JSON。不寫任何東西，連 log 都不寫 |
 | `MiniAppPage.html` | Mini App 前端（手機優先，可點持倉問 Iris） |
 | `DailyReport.gs` | 三份報告共用的 `_generateReport()` 骨架，加上每日 09:00 早報、週六週報、每月 1 日月報 |
 | `MarketAlert.gs` | 10:00 / 14:00 盤中異動警報（單檔 ETF 日跌幅 > `ALERT_ETF_DROP`） |

@@ -246,7 +246,8 @@ had already deleted by hand, so nothing read through it could be trusted. This r
 reads the spreadsheet directly.
 
 `what`: `summary` (default) / `sheets` / `triggers` / `log` (`n`, `level`, `tag`, `since`) /
-`chat` (`n`, `since`) / `sheet` (`name`, `n`).
+`chat` (`n`, `since`) / `sheet` (`name`, `n`, and `from`/`to` to pick rows by their 日期
+column instead of the tail — the tail read stops at 5,000 rows, a year of 每日快照 is far more).
 
 - **Read-only, permanently.** The key travels in the URL and lands in Google's access logs; it is
   good enough to keep strangers out, not to guard writes.

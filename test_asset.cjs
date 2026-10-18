@@ -2443,6 +2443,23 @@ console.log('\nT44  唯讀診斷入口');
   check('不認得的 what 講清楚可用的選項', /summary/.test(Diag.collect({ what: 'nope' }).error));
   check('n 有上限', Diag.collect({ what: 'log', n: 99999 }).log.rows.length <= 500);
 
+  // 依日期取一段：要核對的常是一年前的某一天，在長表上是幾千列之前，尾端掃不到
+  const days = [['日期', '類型', '市值']];
+  for (let i = 0; i < 6000; i++) {
+    const d = new RealDate(Date.UTC(2025, 0, 1) + Math.floor(i / 3) * 864e5).toISOString().slice(0, 10);
+    days.push([d, ['合計', '持股', '應收'][i % 3], i]);
+  }
+  target.sheets.push(new Sheet('長表', days));
+  const range = Diag.collect({ what: 'sheet', name: '長表', from: '2025-01-02', to: '2025/01/03' }).sheet;
+  check('依日期取一段：只回範圍內、頭尾都含', range.rows.length === 6 && range.matched === 6 &&
+    range.rows[0][0] === '2025-01-02' && range.rows[5][0] === '2025-01-03', JSON.stringify(range.rows));
+  check('依日期可以取到尾端掃不到的舊列', range.total === 6000 && range.rows[0][2] === 3);
+  const capped = Diag.collect({ what: 'sheet', name: '長表', from: '2025-01-01', n: 4 }).sheet;
+  check('依日期也有 n 上限，matched 講出全部有幾列', capped.rows.length === 4 && capped.matched === 6000);
+  check('日期看不懂回錯誤', /yyyy-MM-dd/.test(Diag.collect({ what: 'sheet', name: '長表', from: '昨天' }).sheet.error));
+  check('依日期查也不寫 consolelog', log.getLastRow() === rowsBefore);
+  target.sheets = target.sheets.filter(x => x.getName() !== '長表');
+
   target.sheets = target.sheets.filter(x => x.getName() !== 'consolelog');
   delete global.Config.DIAG_KEY;
 }
