@@ -3267,53 +3267,33 @@ console.log('\nT58  應收款');
   check('每日快照的總資產含應收款', totRow && near(num(totRow['市值']), metric('總資產'), 0.01));
 }
 
-// 借出那天現金少了、總資產卻沒有應收款，走勢上就有一次假的下跌。一次性回補，而且要冪等。
-console.log('\nT59  應收款回補每日快照');
+// 2026-10-18 跑過一次應收款回補，前提（借出時現金已扣、走勢有斷崖）不成立：同一筆錢在歷史裡
+// 算了兩次。undoBackfill 是它的精確反操作 —— 拿掉補登應收的列、總資產減回去，別的列不動。
+console.log('\nT59  撤回應收款回補');
 {
   const savedId = Config.SHEET_ID;
-  Config.SHEET_ID = 'recv-backfill';
-  const bss = SpreadsheetApp.openById('recv-backfill');
-  bss.sheets.push(new Sheet('應收款', [AssetSchema.expected('應收款'),
-    ['2026-01-10', '阿明', '借出', 700, '某帳戶', '', 'seed', ''],
-    ['2026-03-01', '阿明', '借出', 300, '某帳戶', '', 'seed', '']]));
-  const day = (d, total, stock, status) => [[d, '合計', '總資產', '', total, status || '交易日'],
-    [d, '合計', '股票市值', '', stock, status || '交易日'], [d, '持股', '0056', 30, stock, status || '交易日']];
-  // 借出當天總資產掉 700、300：錢離開了現金，卻沒有變成應收款
-  const hist = [AssetSchema.expected('每日快照')]
-    .concat(day('2026-01-08', 10000, 6000)).concat(day('2026-01-09', 10000, 6000))
-    .concat(day('2026-01-10', 9300, 6000)).concat(day('2026-01-11', 9300, 6000))
-    .concat(day('2026-02-28', 9300, 6000, '休市')).concat(day('2026-03-01', 9000, 6000))
-    .concat(day('2026-03-02', 9000, 6000));
-  // 上線之後由 18:00 寫進來的一天：總資產本來就含應收款，也已經有應收列
-  hist.push(['2026-03-03', '合計', '總資產', '', 10000, '交易日'], ['2026-03-03', '合計', '股票市值', '', 6000, '交易日'],
-    ['2026-03-03', '應收', '阿明', '', 1000, '交易日']);
-  const snap = new Sheet('每日快照', hist);
-  bss.sheets.push(snap);
-
-  const totals = () => AssetSchema.readObjects(bss.getSheetByName('每日快照'))
-    .filter(x => x['類型'] === '合計' && x['鍵'] === '總資產').map(x => num(x['市值']));
-  const stocks = () => AssetSchema.readObjects(bss.getSheetByName('每日快照'))
-    .filter(x => x['類型'] === '合計' && x['鍵'] === '股票市值').map(x => num(x['市值']));
-  const stock0 = JSON.stringify(stocks());
-  const r1 = Receivable.backfillSnapshots();
-  check('回補之後走勢沒有斷崖（借出前後的總資產一樣）', JSON.stringify(totals()) === JSON.stringify([10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000]),
-    JSON.stringify(totals()));
-  check('合計／股票市值不動', JSON.stringify(stocks()) === stock0);
-  const rows = AssetSchema.readObjects(bss.getSheetByName('每日快照'));
-  const filled = rows.filter(x => x['類型'] === '應收' && x['狀態'] === Receivable.BACKFILLED);
-  // 01-10、01-11、02-28、03-01、03-02；03-03 本來就有應收列
-  check('借出當天起每天一列應收、狀態＝補登應收，餘額照當天算', filled.length === 5 &&
-    num(filled[0]['市值']) === 700 && num(filled.find(x => x['日期'] === '2026-03-01')['市值']) === 1000,
-    JSON.stringify(filled.map(x => x['日期'] + ':' + x['市值'])));
-  const i10 = rows.findIndex(x => x['類型'] === '應收' && x['日期'] === '2026-01-10');
-  check('應收列緊接在那一天的最後一列後面', rows[i10 - 1]['日期'] === '2026-01-10' && rows[i10 + 1]['日期'] === '2026-01-11');
-  check('已經有應收列的那天跳過，不會加兩次', r1.skipped === 1 && totals()[7] === 10000, JSON.stringify(r1));
-  check('備份分頁存在', !!bss.getSheetByName(r1.backup) && /^每日快照_備份_\d{8}$/.test(r1.backup) &&
-    bss.getSheetByName(r1.backup).getLastRow() === hist.length, r1.backup);
-  const once = JSON.stringify(bss.getSheetByName('每日快照').rows);
-  const r2 = Receivable.backfillSnapshots();
-  check('再跑一次數字不變（冪等）', JSON.stringify(bss.getSheetByName('每日快照').rows) === once && r2.days === 0, JSON.stringify(r2));
-  check('同一天不會疊出第二份備份', bss.getSheets().filter(s => /^每日快照_備份_/.test(s.getName())).length === 1);
+  Config.SHEET_ID = 'recv-undo';
+  const uss = SpreadsheetApp.openById('recv-undo');
+  const day = (d, total, stock) => [[d, '合計', '總資產', '', total, '交易日'],
+    [d, '合計', '股票市值', '', stock, '交易日'], [d, '持股', '0056', 30, stock, '交易日']];
+  const original = [AssetSchema.expected('每日快照')]
+    .concat(day('2026-01-09', 10000, 6000)).concat(day('2026-01-10', 10050, 6050)).concat(day('2026-03-01', 10100, 6100));
+  // 回補過後的樣子：借出當天起總資產加上餘額，每天多一列補登應收
+  const filled = [AssetSchema.expected('每日快照')]
+    .concat(day('2026-01-09', 10000, 6000))
+    .concat(day('2026-01-10', 10750, 6050)).concat([['2026-01-10', '應收', '阿明', '', 700, Receivable.BACKFILLED]])
+    .concat(day('2026-03-01', 11100, 6100)).concat([['2026-03-01', '應收', '阿明', '', 1000, Receivable.BACKFILLED]]);
+  // 上線後 18:00 正常寫進來的一天：它的應收列不是補登的，不能動
+  const live = [['2026-10-18', '合計', '總資產', '', 12000, '休市'], ['2026-10-18', '合計', '股票市值', '', 6200, '休市'],
+    ['2026-10-18', '應收', '阿明', '', 1000, '休市']];
+  uss.sheets.push(new Sheet('每日快照', filled.concat(live)));
+  const rowsNow = () => JSON.stringify(uss.getSheetByName('每日快照').rows.filter(r => r.some(v => v !== '')));
+  const want = JSON.stringify(original.concat(live).map(r => padTo(r, 6)));
+  const r1 = Receivable.undoBackfill();
+  check('撤回後跟回補前一模一樣，之後寫的列原封不動', rowsNow() === want && r1.days === 2 && r1.rows === 2,
+    JSON.stringify(r1) + '\n' + rowsNow());
+  const r2 = Receivable.undoBackfill();
+  check('再跑一次什麼都不做（冪等）', r2.ok && r2.rows === 0 && rowsNow() === want, JSON.stringify(r2));
   Config.SHEET_ID = savedId;
   SpreadsheetApp.openById(Config.SHEET_ID);
 }

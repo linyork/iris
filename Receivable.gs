@@ -1,6 +1,6 @@
 /**
  * Receivable
- * @description 應收款：借給別人、預期會收回的錢。讀餘額、記借出／收回、回補每日快照
+ * @description 應收款：借給別人、預期會收回的錢。讀餘額、記借出／收回
  *
  * 「應收款」分頁是流水帳，一筆事件一列：借出 +、收回 −、調整照填的正負號。餘額計入總資產 ——
  * 指標的「應收款」是 SUMIF 公式（metricFormula），主人手打一列就馬上算進去，不必等重算。
@@ -8,7 +8,9 @@
  * ⚠️ 借出與收回是**兩張表一起動**：錢離開／回到現金帳戶記在「交易」（提出／存入），債權記在
  *    這裡。只寫一邊的話，總資產會憑空多一筆或少一筆。所以 record() 拿 script lock、先驗完再寫，
  *    第二邊寫失敗就把第一邊撤掉。
- * ⚠️ 手打進表的列（期初補登、調整）不動現金：期初那幾筆錢離開帳戶時，現金早就扣過了。
+ * ⚠️ 手打進表的列（期初補登、調整）不動現金：手打就代表現金那一邊由主人自己處理。
+ *    2026-10-18 期初補登時才發現，那兩筆借出在表上的現金裡從來沒扣過 —— 所以另外用
+ *    setCashBalance 補扣了一筆調整。不要以為「應收款有了，現金一定已經扣過」。
  *    期初的金額也不寫進程式 —— 程式碼會進 GitHub（見 CLAUDE.md「No real figures in git」）。
  * ⚠️ 不從記帳 App 的 Loans / LoanRecords 同步：App 不算餘額（amount 永遠是 0），舊的一筆貸款
  *    還把每期還款記成「借入」。應收款以這張表為準。
@@ -22,7 +24,7 @@ var Receivable = (() => {
   var _round2 = (n) => Math.round(n * 100) / 100;
 
   r.ACTIONS = ['借出', '收回', '調整'];
-  /** 回補進每日快照的應收列，狀態欄寫這個 */
+  /** 2026-10-18 那次回補寫進每日快照的狀態；undoBackfill 靠它找出要拿掉的列 */
   r.BACKFILLED = '補登應收';
 
   /** 一列對餘額的影響。跟 metricFormula 的 SUMIF 同一套規則：借出加、收回減、調整照填的號 */
@@ -78,14 +80,6 @@ var Receivable = (() => {
 
   /** 應收款合計 */
   r.total = (ss) => _round2(r.getReceivables(ss).reduce((a, x) => a + x['餘額'], 0));
-
-  /** 某一天（含）為止每個對方的餘額。沒有日期的列當成最早的一筆 */
-  r.balancesAsOf = (rows, ymd) => {
-    var by = {};
-    rows.forEach(x => { if (x.date <= ymd) by[x.who] = (by[x.who] || 0) + x.delta; });
-    Object.keys(by).forEach(k => { by[k] = _round2(by[k]); });
-    return by;
-  };
 
   /**
    * 指標「應收款」的公式。欄位字母讀實際的標題列：主人刪欄、挪欄，SUMIF 也跟著走，
@@ -257,104 +251,68 @@ var Receivable = (() => {
     }
   };
 
-  // ─── 回補每日快照（一次性）──────────────────────────────────
+  // ─── 撤回回補（一次性）──────────────────────────────────────
+  //
+  // 2026-10-18 跑過一次「把應收款回補進每日快照」：規格書說借出那兩天現金已經扣了、走勢有假的
+  // 下跌，所以從第一筆借出起每天的總資產加上應收餘額。實際上兩個前提都不成立 —— 表上的一銀
+  // 現金戶從來沒扣過這兩筆（銀行裡早就只剩零頭），歷史在那兩天也沒有任何下跌。那筆錢在歷史裡
+  // 一直以「現金」的身分算在總資產裡，總額本來就對；回補等於同一筆錢算兩次，走勢上多出兩個
+  // 假的上升。現金改在當天用 setCashBalance 補扣，歷史則用這支撤回。
+  //
+  // ⚠️ 教訓：回補歷史之前，先去資料裡看那個「斷崖」到底在不在。
 
   /**
-   * 借出那天現金少了、總資產卻沒有對應的應收款，所以走勢在每一筆借出那天都有一次假的下跌。
-   * 這支把「應收款」第一筆以後的每一天補回來：
-   *   - 合計／總資產 加上當天的應收餘額（合計／股票市值不動，XIRR 的開帳市值讀它）
-   *   - 每個對方一列 類型＝應收、狀態＝補登應收，緊接在那一天的最後一列後面
+   * 拿掉每日快照裡狀態＝補登應收的列，那幾天的 合計／總資產 減回這些列的市值合計 ——
+   * 回補的精確反操作，不讀備份，所以之後 18:00 寫進來的列不受影響。
+   * 冪等：沒有補登應收的列就什麼都不做。
    *
-   * 冪等：已經有任何「應收」列的日期一律跳過 —— 補登過的、以及上線後每天 18:00 照常寫進來的
-   * （那些天的總資產本來就含應收款，再加一次就是兩倍）。
-   * 執行前先把「每日快照」整張複製成「每日快照_備份_yyyyMMdd」（當天已經有就不再複製）。
-   *
-   * @returns {{ok: boolean, reason?: string, backup?: string, days?: number, rows?: number, skipped?: number}}
+   * @returns {{ok: boolean, reason?: string, days?: number, rows?: number}}
    */
-  r.backfillSnapshots = () => {
+  r.undoBackfill = () => {
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(30 * 1000)) return { ok: false, reason: '另一個寫入還在處理中，等一下再試。' };
     try {
       var ss = AssetSchema.open();
       var tz = ss.getSpreadsheetTimeZone();
-      var recv = r.readRows(ss).rows;
-      if (!recv.length) return { ok: false, reason: '「應收款」還沒有資料，沒有東西可以補。' };
-      var first = recv.map(x => x.date).filter(Boolean).sort()[0] || '';
-
       var snap = ss.getSheetByName('每日快照');
       if (!snap || snap.getLastRow() < 2) return { ok: false, reason: '「每日快照」是空的。' };
-
-      var backup = '每日快照_備份_' + Utilities.formatDate(new Date(), tz, 'yyyyMMdd');
-      if (!ss.getSheetByName(backup)) snap.copyTo(ss).setName(backup);
-
       var map = AssetSchema.headerMap(snap);
-      var need = ['日期', '類型', '鍵', '市值', '狀態'];
-      var missing = need.filter(h => map[h] === undefined);
+      var missing = ['日期', '類型', '鍵', '市值', '狀態'].filter(h => map[h] === undefined);
       if (missing.length) return { ok: false, reason: '「每日快照」少了欄位：' + missing.join('、') };
       var header = map.__header;
       var data = snap.getRange(2, 1, snap.getLastRow() - 1, Math.max(snap.getLastColumn(), 1)).getValues();
-      // 只對日期欄有值的列呼叫（空值在 normalizeDate 會變成今天）
-      var ymdOf = (row) => AssetTools.normalizeDate(row[map['日期']], tz);
+      var dayOf = (row) => _str(row[map['日期']]) ? AssetTools.normalizeDate(row[map['日期']], tz) : '';
+      var isFilled = (row) => _str(row[map['類型']]) === '應收' && _str(row[map['狀態']]) === r.BACKFILLED;
 
-      // 第一趟：每一天的最後一列、總資產那一列、有沒有應收列
-      var lastIdx = {}, totalIdx = {}, hasRecv = {};
-      data.forEach((row, i) => {
-        if (!_str(row[map['日期']])) return;
-        var d = ymdOf(row);
-        if (!d) return;
-        lastIdx[d] = i;
-        var type = _str(row[map['類型']]), key = _str(row[map['鍵']]);
-        if (type === '合計' && key === '總資產') totalIdx[d] = i;
-        if (type === '應收') hasRecv[d] = true;
+      var extra = {};
+      var removed = 0;
+      data.forEach(row => {
+        if (!isFilled(row)) return;
+        var d = dayOf(row);
+        extra[d] = _round2((extra[d] || 0) + _num(row[map['市值']]));
+        removed++;
       });
+      if (!removed) return { ok: true, days: 0, rows: 0 };
 
-      var days = 0, added = 0, skipped = 0;
-      var plan = {};                     // 日期 → {balances, sum}
-      Object.keys(totalIdx).forEach(d => {
-        if (d < first) return;
-        if (hasRecv[d]) { skipped++; return; }
-        var bal = r.balancesAsOf(recv, d);
-        var sum = _round2(Object.keys(bal).reduce((a, k) => a + bal[k], 0));
-        if (!sum && !Object.keys(bal).some(k => bal[k])) return;
-        plan[d] = { bal: bal, sum: sum };
-      });
-
-      // 第二趟：照原順序抄一份，總資產加上應收，那一天的最後一列後面插應收列
       var out = [];
-      var obj = (row) => { var o = {}; header.forEach((h, j) => { if (h) o[h] = row[j]; }); return o; };
-      data.forEach((row, i) => {
-        if (!_str(row[map['日期']])) { out.push(obj(row)); return; }
-        var d = ymdOf(row);
-        var p = plan[d];
-        var o = obj(row);
-        if (p && totalIdx[d] === i) o['市值'] = _round2(_num(o['市值']) + p.sum);
-        out.push(o);
-        if (p && lastIdx[d] === i) {
-          days++;
-          Object.keys(p.bal).filter(k => p.bal[k]).sort().forEach(k => {
-            var n = {};
-            header.forEach(h => { if (h) n[h] = ''; });
-            n['日期'] = row[map['日期']];          // 沿用那一天的日期值，型別跟同一天的其他列一樣
-            n['類型'] = '應收';
-            n['鍵'] = k;
-            n['市值'] = p.bal[k];
-            n['狀態'] = r.BACKFILLED;
-            out.push(n);
-            added++;
-          });
+      data.forEach(row => {
+        if (isFilled(row)) return;
+        var o = {};
+        header.forEach((h, j) => { if (h) o[h] = row[j]; });
+        var d = dayOf(row);
+        if (extra[d] && _str(row[map['類型']]) === '合計' && _str(row[map['鍵']]) === '總資產') {
+          o['市值'] = _round2(_num(o['市值']) - extra[d]);
         }
+        out.push(o);
       });
-
-      if (days) {
-        AssetSchema.writeBlockByName(snap, () => out);
-        SpreadsheetApp.flush();
-        if (typeof Dashboard !== 'undefined') Dashboard.invalidate();
-      }
-      var result = { ok: true, backup: backup, days: days, rows: added, skipped: skipped };
-      Logger.info('Receivable.backfillSnapshots', '回補應收款快照', result);
+      AssetSchema.writeBlockByName(snap, () => out);
+      SpreadsheetApp.flush();
+      if (typeof Dashboard !== 'undefined') Dashboard.invalidate();
+      var result = { ok: true, days: Object.keys(extra).length, rows: removed };
+      Logger.info('Receivable.undoBackfill', '撤回應收款回補', result);
       return result;
     } catch (ex) {
-      Logger.error('Receivable.backfillSnapshots', '回補失敗', ex);
+      Logger.error('Receivable.undoBackfill', '撤回失敗', ex);
       return { ok: false, reason: ex && ex.message ? ex.message : String(ex) };
     } finally {
       lock.releaseLock();

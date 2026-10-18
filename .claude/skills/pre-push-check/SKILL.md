@@ -109,7 +109,7 @@ Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），
 - [ ] 五個讀者一起改：`指標`（含佔比列）、`Snapshot._metrics`、`Facts`、`Dashboard.getPayload`
       與兩個頁面（圓環、現金區塊）、`DataSync` 的每日快照列
 - [ ] 佔比的分母是總資產，新的一類沒有自己的佔比列的話，四個佔比加起來就不是 100%
-- [ ] 歷史快照的總資產要不要回補（參考 `Receivable.backfillSnapshots`：先備份、冪等）
+- [ ] 歷史快照的總資產要不要回補：**先去資料裡確認歷史真的有那個斷崖**再決定。2026-10-18 照規格書回補應收款，結果歷史根本沒有斷崖，回補讓同一筆錢算了兩次，又撤回
 
 ### 如果 `appsscript.json` 有變動
 - [ ] **新增 oauthScopes 會讓既有授權失效**，排程 trigger 會開始噴 "Authorization required"。

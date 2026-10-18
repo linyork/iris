@@ -141,12 +141,11 @@ function remapExpenseCategories() {
 }
 
 /**
- * 一次性：借出那幾天的每日快照有假的下跌（現金少了、總資產卻沒算應收款），補回來。
- * 先在「應收款」填好期初那幾列再跑。會先把「每日快照」複製一份「每日快照_備份_yyyyMMdd」。
- * 冪等：已經有應收列的日期一律跳過，重跑數字不變。
+ * 一次性：撤回 2026-10-18 那次應收款回補。那次的前提（借出時現金已扣、走勢有斷崖）實際上
+ * 不成立，回補讓同一筆錢在歷史裡算了兩次。拿掉狀態＝補登應收的列、總資產減回去；冪等。
  */
-function backfillReceivableSnapshots() {
-  var r = Receivable.backfillSnapshots();
+function undoReceivableBackfill() {
+  var r = Receivable.undoBackfill();
   console.log(JSON.stringify(r, null, 2));
   return r;
 }
