@@ -77,6 +77,7 @@ var Dashboard = (() => {
       series:      series,
       holdings:    holdings,
       cash:        cash,
+      receivables: Receivable.summary(ss),
       dividends:   Snapshot._dividends(ss),
       fromCache:   false
     };

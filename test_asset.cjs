@@ -149,6 +149,9 @@ class Sheet {
     return api;
   }
   getName() { return this.name; }
+  setName(n) { this.name = n; return this; }
+  /** 複製整張表到 ss（Sheets 會叫它「XXX 的副本」，呼叫端再 setName） */
+  copyTo(ss) { const c = new Sheet(this.name + ' 的副本', this.rows); c.formats = Object.assign({}, this.formats); ss.sheets.push(c); return c; }
   setFrozenRows(n) { this.frozen = n; }
   setFrozenColumns() { }
   clear() { this.rows = []; this.width = 1; this.formats = {}; EVAL.reset(); }
@@ -355,6 +358,7 @@ load('AssetSchema.gs');
 load('Position.gs');
 load('AssetMigrate.gs');
 load('AssetTools.gs');
+load('Receivable.gs');
 load('AssetImport.gs');
 // Snapshot 需要 StockPrice（TWSE 即時報價），本機測試不打外網
 global.StockPrice = { getRawPrices: () => [] };
@@ -3150,6 +3154,151 @@ console.log('\nT56  記帳 App 匯出檔 → 消費');
   Config.SHEET_ID = savedId;
   SpreadsheetApp.openById(Config.SHEET_ID);    // CURRENT_SS 指回主表，後面的公式求值才讀得到
   NOW = savedNow;
+}
+
+// 借給家人、會收回的錢要算進總資產。借出那天現金已經扣了，所以手打的期初列不能再動現金；
+// iris 記的借出／收回則要「應收款」和「交易」一起動，總資產才不會憑空多一筆或少一筆。
+console.log('\nT58  應收款');
+{
+  SpreadsheetApp.openById(Config.SHEET_ID);
+  const ss = target;
+  Position.rebuild();
+  const recv = ss.getSheetByName('應收款');
+  check('應收款分頁存在，標題在第 1 列', !!recv && recv.raw(1, 1) === '日期' && recv.raw(1, 3) === '動作');
+  const metric = (k) => num((AssetSchema.readObjects(ss.getSheetByName('指標')).find(x => x['指標'] === k) || {})['數值']);
+  const ledger = () => JSON.stringify(ss.getSheetByName('交易').rows) + JSON.stringify(ss.getSheetByName('現金').rows);
+  const total0 = metric('總資產');
+  const ledger0 = ledger();
+
+  // 主人自己手打期初（金額是合成的）
+  recv.appendRow(['2026-05-01', '阿明', '借出', 7000, '某帳戶', '期初補登，現金已於當時扣除', 'seed', '']);
+  recv.appendRow(['2026-07-01', '阿明', '借出', 3000, '某帳戶', '期初補登，現金已於當時扣除', 'seed', '']);
+  check('getReceivables 回傳對方、餘額、最後異動日',
+    JSON.stringify(Receivable.getReceivables(ss)) === JSON.stringify([{ 對方: '阿明', 餘額: 10000, 最後異動日: '2026-07-01' }]),
+    JSON.stringify(Receivable.getReceivables(ss)));
+  check('手打的列不動交易與現金', ledger() === ledger0);
+  check('指標的應收款是公式：手打完不必重算就算進總資產',
+    metric('應收款') === 10000 && near(metric('總資產'), total0 + 10000, 0.01), metric('應收款') + ' / ' + metric('總資產'));
+
+  Position.rebuild();
+  check('總資產＝股票＋現金＋實體＋應收款', near(metric('總資產'),
+    metric('股票市值') + metric('現金') + metric('實體資產') + metric('應收款'), 0.01));
+  check('四個佔比加起來是 100%', near(metric('股票佔比') + metric('現金佔比') + metric('實體佔比') + metric('應收佔比'), 1, 0.001),
+    [metric('股票佔比'), metric('現金佔比'), metric('實體佔比'), metric('應收佔比')].join());
+  check('Snapshot 帶出應收款與佔比', Snapshot._metrics(ss).receivables === 10000 && Snapshot._metrics(ss).receivableRatio > 0);
+  const fx = Facts.build(ss);
+  check('事實區塊講應收款，佔比也有應收', /應收款.*10,000/.test(fx) && /／應收 /.test(fx), fx);
+  check('儀表板拿得到每個對方', JSON.stringify(Receivable.summary(ss)) ===
+    JSON.stringify({ total: 10000, items: [{ name: '阿明', balance: 10000, lastDate: '2026-07-01' }] }));
+
+  // ── iris 記的收回／借出：兩張表一起動 ──
+  const accts = AssetSchema.readObjects(ss.getSheetByName('帳戶')).filter(x => x['狀態'] !== '停用');
+  const twd = accts.find(x => String(x['幣別']).toUpperCase() === 'TWD' && x['類型'] === '現金') ||
+              accts.find(x => String(x['幣別']).toUpperCase() === 'TWD');
+  const foreign = accts.find(x => x['幣別'] && String(x['幣別']).toUpperCase() !== 'TWD');
+  const A = twd['帳戶'];
+  const cashOf = () => num((AssetSchema.readObjects(ss.getSheetByName('現金')).find(x => x['帳戶'] === A) || {})['餘額']);
+  const lastTrade = () => AssetSchema.readTrades(ss).slice(-1)[0];
+  let c0 = cashOf(), t0 = metric('總資產'), w0 = Utils.ledgerWriteCount();
+  const back = Receivable.record({ action: '收回', counterparty: '阿明', amount: 1000, account: A, date: '2026-08-03' });
+  check('收回：應收款 −1,000', Receivable.total(ss) === 9000, back);
+  check('收回：帳戶 +1,000，交易記一筆存入', near(cashOf(), c0 + 1000, 0.01) && lastTrade()['動作'] === '存入' &&
+    /應收款收回－阿明/.test(lastTrade()['備註']), cashOf() + ' vs ' + c0);
+  check('收回：總資產不變', near(metric('總資產'), t0, 0.01), metric('總資產') + ' vs ' + t0);
+  check('回覆講兩邊的列號與剩下的餘額', /^已記錄/.test(back) && /應收款第 \d+ 列、交易第 \d+ 列/.test(back) &&
+    /阿明 的應收餘額 9,000/.test(back), back);
+  check('寫入有被算成帳本寫入（「已記錄」才不會被當成假宣稱）', Utils.ledgerWriteCount() > w0);
+
+  const all = () => ledger() + JSON.stringify(recv.rows);
+  let s0 = all();
+  const over = Receivable.record({ action: '收回', counterparty: '阿明', amount: 50000, account: A });
+  check('收回超過餘額 → 不寫，回覆目前餘額', /擋下來/.test(over) && /9,000/.test(over) && all() === s0, over);
+  const nobody = Receivable.record({ action: '收回', counterparty: '路人', amount: 1, account: A });
+  check('沒有應收款的對方 → 不寫', /目前沒有應收款/.test(nobody) && all() === s0, nobody);
+  check('不存在的帳戶 → 不寫', /沒有這個帳戶/.test(Receivable.record({ action: '借出', counterparty: '阿明',
+    amount: 100, account: '不存在的戶' })) && all() === s0);
+  if (foreign) {
+    check('外幣戶 → 不寫（應收款以台幣記）', /台幣/.test(Receivable.record({ action: '借出', counterparty: '阿明',
+      amount: 100, account: foreign['帳戶'] })) && all() === s0);
+  }
+
+  c0 = cashOf(); t0 = metric('總資產');
+  const lend = Receivable.record({ action: '借出', counterparty: '阿明', amount: 2000, account: A });
+  check('借出：應收 +2,000、帳戶 −2,000（提出）、總資產不變', Receivable.total(ss) === 11000 &&
+    near(cashOf(), c0 - 2000, 0.01) && lastTrade()['動作'] === '提出' && near(metric('總資產'), t0, 0.01), lend);
+
+  // 交易那邊寫不進去 → 應收款那一列也要撤掉
+  const savedAppend = AssetSchema.appendTrade;
+  AssetSchema.appendTrade = () => { throw new Error('模擬交易寫入失敗'); };
+  const l0 = ledger();
+  const broken = Receivable.record({ action: '借出', counterparty: '阿明', amount: 500, account: A });
+  AssetSchema.appendTrade = savedAppend;
+  check('交易寫失敗 → 應收款撤回，兩邊都沒動', /什麼都沒寫/.test(broken) && Receivable.total(ss) === 11000 && ledger() === l0, broken);
+
+  // ── 工具 ──
+  const tl = Tools.execute('getReceivables', {});
+  check('getReceivables 工具列出對方與合計', tl.ok && /阿明：餘額 11,000/.test(tl.text) && /合計 11,000/.test(tl.text), tl.text);
+  check('recordReceivable 缺參數 → invalid_args', Tools.execute('recordReceivable', { action: '收回' }).status === 'invalid_args');
+
+  // ── 每日快照：之後每天多一種「應收」列 ──
+  const ds = DataSync.run();
+  const snapRows = AssetSchema.readObjects(ss.getSheetByName('每日快照')).filter(x => String(x['日期']) === ds.date);
+  const recvRow = snapRows.find(x => x['類型'] === '應收');
+  const totRow = snapRows.find(x => x['類型'] === '合計' && x['鍵'] === '總資產');
+  check('每日快照有 類型＝應收 的列，市值是當日餘額', recvRow && recvRow['鍵'] === '阿明' && num(recvRow['市值']) === 11000,
+    JSON.stringify(recvRow));
+  check('每日快照的總資產含應收款', totRow && near(num(totRow['市值']), metric('總資產'), 0.01));
+}
+
+// 借出那天現金少了、總資產卻沒有應收款，走勢上就有一次假的下跌。一次性回補，而且要冪等。
+console.log('\nT59  應收款回補每日快照');
+{
+  const savedId = Config.SHEET_ID;
+  Config.SHEET_ID = 'recv-backfill';
+  const bss = SpreadsheetApp.openById('recv-backfill');
+  bss.sheets.push(new Sheet('應收款', [AssetSchema.expected('應收款'),
+    ['2026-01-10', '阿明', '借出', 700, '某帳戶', '', 'seed', ''],
+    ['2026-03-01', '阿明', '借出', 300, '某帳戶', '', 'seed', '']]));
+  const day = (d, total, stock, status) => [[d, '合計', '總資產', '', total, status || '交易日'],
+    [d, '合計', '股票市值', '', stock, status || '交易日'], [d, '持股', '0056', 30, stock, status || '交易日']];
+  // 借出當天總資產掉 700、300：錢離開了現金，卻沒有變成應收款
+  const hist = [AssetSchema.expected('每日快照')]
+    .concat(day('2026-01-08', 10000, 6000)).concat(day('2026-01-09', 10000, 6000))
+    .concat(day('2026-01-10', 9300, 6000)).concat(day('2026-01-11', 9300, 6000))
+    .concat(day('2026-02-28', 9300, 6000, '休市')).concat(day('2026-03-01', 9000, 6000))
+    .concat(day('2026-03-02', 9000, 6000));
+  // 上線之後由 18:00 寫進來的一天：總資產本來就含應收款，也已經有應收列
+  hist.push(['2026-03-03', '合計', '總資產', '', 10000, '交易日'], ['2026-03-03', '合計', '股票市值', '', 6000, '交易日'],
+    ['2026-03-03', '應收', '阿明', '', 1000, '交易日']);
+  const snap = new Sheet('每日快照', hist);
+  bss.sheets.push(snap);
+
+  const totals = () => AssetSchema.readObjects(bss.getSheetByName('每日快照'))
+    .filter(x => x['類型'] === '合計' && x['鍵'] === '總資產').map(x => num(x['市值']));
+  const stocks = () => AssetSchema.readObjects(bss.getSheetByName('每日快照'))
+    .filter(x => x['類型'] === '合計' && x['鍵'] === '股票市值').map(x => num(x['市值']));
+  const stock0 = JSON.stringify(stocks());
+  const r1 = Receivable.backfillSnapshots();
+  check('回補之後走勢沒有斷崖（借出前後的總資產一樣）', JSON.stringify(totals()) === JSON.stringify([10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000]),
+    JSON.stringify(totals()));
+  check('合計／股票市值不動', JSON.stringify(stocks()) === stock0);
+  const rows = AssetSchema.readObjects(bss.getSheetByName('每日快照'));
+  const filled = rows.filter(x => x['類型'] === '應收' && x['狀態'] === Receivable.BACKFILLED);
+  // 01-10、01-11、02-28、03-01、03-02；03-03 本來就有應收列
+  check('借出當天起每天一列應收、狀態＝補登應收，餘額照當天算', filled.length === 5 &&
+    num(filled[0]['市值']) === 700 && num(filled.find(x => x['日期'] === '2026-03-01')['市值']) === 1000,
+    JSON.stringify(filled.map(x => x['日期'] + ':' + x['市值'])));
+  const i10 = rows.findIndex(x => x['類型'] === '應收' && x['日期'] === '2026-01-10');
+  check('應收列緊接在那一天的最後一列後面', rows[i10 - 1]['日期'] === '2026-01-10' && rows[i10 + 1]['日期'] === '2026-01-11');
+  check('已經有應收列的那天跳過，不會加兩次', r1.skipped === 1 && totals()[7] === 10000, JSON.stringify(r1));
+  check('備份分頁存在', !!bss.getSheetByName(r1.backup) && /^每日快照_備份_\d{8}$/.test(r1.backup) &&
+    bss.getSheetByName(r1.backup).getLastRow() === hist.length, r1.backup);
+  const once = JSON.stringify(bss.getSheetByName('每日快照').rows);
+  const r2 = Receivable.backfillSnapshots();
+  check('再跑一次數字不變（冪等）', JSON.stringify(bss.getSheetByName('每日快照').rows) === once && r2.days === 0, JSON.stringify(r2));
+  check('同一天不會疊出第二份備份', bss.getSheets().filter(s => /^每日快照_備份_/.test(s.getName())).length === 1);
+  Config.SHEET_ID = savedId;
+  SpreadsheetApp.openById(Config.SHEET_ID);
 }
 
 console.log('\n' + (fail === 0 ? '全部通過' : fail + ' 項失敗') + '（' + pass + '/' + (pass + fail) + '）');

@@ -95,6 +95,8 @@ var AssetTools = (() => {
     var pad = (x) => (x.length === 1 ? '0' + x : x);
     return m[1] + '-' + pad(m[2]) + '-' + pad(m[3]);
   };
+  /** 日期 → yyyy-MM-dd；空值是今天，看不懂回空字串。Receivable 也用這一份 */
+  t.normalizeDate = _normalizeDate;
 
   /**
    * 記一筆交易到「交易」表，然後重算持倉。

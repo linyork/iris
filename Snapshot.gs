@@ -379,6 +379,8 @@ var Snapshot = (() => {
         stockRatio:    n('股票佔比'),
         cashRatio:     n('現金佔比'),
         physicalRatio: n('實體佔比'),
+        receivables:   n('應收款'),
+        receivableRatio: n('應收佔比'),
         tradeCount:    n('交易筆數'),
         positionCount: n('持倉檔數'),
         // Sheets 常把這個時間字串吃成 Date，而 _str(Date) 會吐出 JS 的 toString，

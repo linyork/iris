@@ -525,11 +525,21 @@ function renderCash(d) {
     box.innerHTML = '<div class="row">尚無資料</div>';
     return;
   }
-  box.innerHTML = d.cash.accounts.map(function (a) {
+  var html = d.cash.accounts.map(function (a) {
     return '<div class="row"><span>' + a.account + '</span>' +
            '<span class="amt">' + fmt(a.amount) + '</span></div>';
   }).join('') +
   '<div class="row total-row"><span>合計</span><span class="amt">' + fmt(d.cash.total) + '</span></div>';
+  // 應收款：借出去、會收回的錢，計入總資產但不是現金
+  var rc = d.receivables;
+  if (rc && rc.items && rc.items.length) {
+    html += rc.items.map(function (x) {
+      return '<div class="row"><span>應收・' + x.name + '</span>' +
+             '<span class="amt">' + fmt(x.balance) + '</span></div>';
+    }).join('') +
+    '<div class="row total-row"><span>應收款合計</span><span class="amt">' + fmt(rc.total) + '</span></div>';
+  }
+  box.innerHTML = html;
 }
 
 function render(d) {

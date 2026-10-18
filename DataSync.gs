@@ -16,6 +16,8 @@
  * 寫入的內容（一天約 8 列）：
  *   合計 / 總資產、股票市值   ← 指標（走勢、日週月漲跌、XIRR 開帳市值都讀這兩列）
  *   持股 / 每檔代號            ← 持倉（僅股數 > 0）；只有「單價」被讀 —— 判斷「資料未更新」
+ *   應收 / 每個對方            ← 應收款的當日餘額（餘額 0 的不寫）。總資產已經含它；
+ *                                Receivable.backfillSnapshots 靠「這天有沒有應收列」判斷要不要回補
  *
  * 2026-10-08 起不再寫「現金」「實體」列，也拿掉名稱／數量／幣別三欄：從來沒有讀者。
  * 舊的現金／實體列還留在表上（歷史資料），讀的地方都只挑合計與持股，不受影響。
@@ -76,6 +78,11 @@ var DataSync = (() => {
       rows.push({ 日期: dateStr, 類型: '持股', 鍵: code, 單價: price || '', 市值: _num(p['市值']) || '' });
     });
     var held = Object.keys(prices).length;
+
+    // ── 應收 ── 每個對方一列，市值＝當天的餘額。合計／總資產已經含應收款（指標的公式）
+    Receivable.getReceivables(ss).forEach(x => {
+      if (x['餘額']) rows.push({ 日期: dateStr, 類型: '應收', 鍵: x['對方'], 市值: x['餘額'] });
+    });
 
     return { rows: rows, prices: prices, badCodes: badCodes, held: held };
   };

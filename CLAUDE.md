@@ -87,11 +87,12 @@ renaming or relocating them fails silently:
 1. `Main.gs` — `doPost()` receives the LINE **or** Telegram webhook, normalizes it into a single LINE-shaped event object, deduplicates via `CacheService` (6h TTL), silently drops non-master events, calls `ChatBot.reply()`
 2. `ChatBot.gs` — ReAct loop (max `Config.TOOL_MAX_ITERATIONS` = 5 turns; the cap is not the time guard — each turn checks `Utils.execElapsedMs()` and stops opening new ones past 200s). Injects the `Facts` block into the system context. Caches **successful** tool results within a turn (a failure is not cached — an over-eager cache would pin one flaky TWSE call as this turn's verdict, when the model's retry might well have worked), strips Markdown before returning, and blocks a 「已記錄」 claim that the ledger does not corroborate.
 3. `AIServiceFactory.gs` — Routes to `GeminiService` or `NvidiaService` based on `Config.AI_PROVIDER`. NVIDIA path goes through `AIAdapter` (Gemini ↔ OpenAI format conversion) so the rest of the codebase always speaks Gemini format.
-4. `Tools.gs` — Defines and executes **14** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. `execute()` returns an envelope, `{ok, status, text}` — `status` is `ok` / `invalid_args` / `error`, and `ChatBot` sends it to the model alongside the text so a failure cannot be read as data (see [工具回傳要分得出成功與失敗](#工具回傳要分得出成功與失敗)). Grouped by which layer they touch:
+4. `Tools.gs` — Defines and executes **16** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. `execute()` returns an envelope, `{ok, status, text}` — `status` is `ok` / `invalid_args` / `error`, and `ChatBot` sends it to the model alongside the text so a failure cannot be read as data (see [工具回傳要分得出成功與失敗](#工具回傳要分得出成功與失敗)). Grouped by which layer they touch:
    - **Computed-layer reads** (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, answering "what do I have now".
    - **Input-layer reads** (`listTrades`, `listAccounts`) — the 交易/帳戶 tabs themselves, answering "how did this get recorded, which row do I change". They live in `AssetTools.gs`, not `Snapshot`, because each one is the precondition for a write: `listTrades` hands out the row number `voidTrade` needs, `listAccounts` is the only surface exposing **原幣** balances (`Snapshot._cash` gives TWD-converted only).
    - **Ledger writes** (`recordTrade`, `recordDividend`, `setCashBalance`, `voidTrade`) — all four land in the 交易 tab via `AssetTools.gs`; a dividend, a balance correction and a void are each just one row with a different 動作 or 狀態.
    - **Master writes** (`addAccount`, `updateAccount`) — the only code that writes 帳戶. Instruments have no master any more — see [標的退役](#標的退役名稱只是顯示).
+   - **Receivables** (`recordReceivable`, `getReceivables`) — `Receivable.gs`; a 借出／收回 writes 應收款 **and** 交易 together. See [應收款](#應收款借出去的錢算總資產).
    - **External** (`searchWeb`).
 5. `GoogleSheet.gs` — System tabs (chat / log) plus the formatting layer for asset queries, which read through `Snapshot`. Single spreadsheet instance cached per execution.
 
@@ -602,6 +603,27 @@ A new 代號 can only enter through 買進 (or a broker import); `recordTrade` r
 action on a code neither 持倉 nor 交易 has seen. The next rebuild grows its 持倉 row (named by
 the exchange's 簡稱), and the reply names it.
 
+### 應收款：借出去的錢算總資產
+
+`應收款` 是輸入層的流水帳（借出＋、收回－、調整照填的號），`Receivable.gs` 是它唯一的讀寫者。
+**總資產＝股票市值＋現金＋實體資產＋應收款**；`指標` 的「應收款」是 `Receivable.metricFormula()`
+組的 SUMIF 公式（欄位字母讀實際標題列），手打一列不必等重算。
+
+- ⚠️ **手打的列不動現金。** 借出當下錢已經離開帳戶、現金早就扣了，所以期初補登與調整只在
+  這張表加列。期初的金額由主人自己填，**不寫進程式**（會進 GitHub）。
+- ⚠️ **iris 記的借出／收回兩張表一起寫**：應收款一列＋交易一筆提出／存入，script lock 裡做，
+  交易寫不進去就把應收款那一列清掉。收回不能走 `recordTrade` 的存入 —— 現金加了、應收款沒減，
+  總資產憑空多一筆；工具描述與 `Prompt.gs` 都這樣講。收回超過對方餘額整筆擋下；只收台幣戶。
+- **XIRR 不受影響**：它的現金流只有股票的買進／賣出／股利，存入與提出那兩條腿不進去。
+- 總資產的組成有五個讀者，改的時候一起看：`Position._writeMetrics`（指標，含應收佔比）、
+  `Snapshot._metrics`、`Facts`、`Dashboard.getPayload` 的 `receivables`（兩個頁面的圓環與現金
+  區塊）、`DataSync`（每天一列 類型＝應收）。
+- **回補（`backfillReceivableSnapshots()`）**：第一筆應收款以後每一天的 `合計／總資產` 加上
+  當天餘額，並補應收列。⚠️ **有任何應收列的日期一律跳過**，不只是狀態＝補登應收的 —— 上線後
+  18:00 寫的那些天，總資產本來就含應收款，再加就是兩倍。補的列插在**那一天的最後一列後面**而
+  不是表尾：`Snapshot._totalHistory` 從表尾往回讀一段，舊日期堆在表尾會把近期的資料擠出那個窗。
+- `圖表` 分頁是主人自己的公式頁，沒有任何程式讀寫它；那裡的應收款與佔比分母由主人手動改。
+
 ### 人設寫的是行為，排版放最後
 
 `Prompt.SYSTEM_PROMPT` used to spend about 40% of its length on formatting — no Markdown, use
@@ -944,8 +966,8 @@ figures and breaks the ratio identity above.
 日期 | 類型 | 鍵 | 單價 | 市值 | 狀態
 ```
 
-One row per item: 合計/總資產, 合計/股票市值 (市值), and one 持股 row per held position
-(單價). About 8 rows a day. Each has exactly the readers it needs: 總資產 feeds the trend,
+One row per item: 合計/總資產, 合計/股票市值 (市值), one 持股 row per held position
+(單價), and one 應收 row per counterparty with a balance (市值). About 8–9 rows a day. Each has exactly the readers it needs: 總資產 feeds the trend,
 day/week/month change and `getHistory`; 股票市值 is XIRR's opening value; the 持股 prices are
 compared with the previous day to detect 資料未更新.
 

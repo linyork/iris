@@ -105,6 +105,12 @@ Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），
       在 `ensureTab` 之前自己補欄，而且只做一次
 - [ ] 不要改成 Drive 轉檔：會新增 oauthScope（見下一節）
 
+### 如果總資產的組成有變（`Position._writeMetrics` 的總資產公式）
+- [ ] 五個讀者一起改：`指標`（含佔比列）、`Snapshot._metrics`、`Facts`、`Dashboard.getPayload`
+      與兩個頁面（圓環、現金區塊）、`DataSync` 的每日快照列
+- [ ] 佔比的分母是總資產，新的一類沒有自己的佔比列的話，四個佔比加起來就不是 100%
+- [ ] 歷史快照的總資產要不要回補（參考 `Receivable.backfillSnapshots`：先備份、冪等）
+
 ### 如果 `appsscript.json` 有變動
 - [ ] **新增 oauthScopes 會讓既有授權失效**，排程 trigger 會開始噴 "Authorization required"。
       push 後必須進 GAS 編輯器手動執行任一函式重新授權

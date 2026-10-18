@@ -394,6 +394,9 @@ function renderAlloc(d) {
 
   var cashTotal = d.cash ? d.cash.total : 0;
   if (cashTotal > 0) items.push({ label: '現金與其他', value: cashTotal });
+  // 應收款計入總資產，少了這塊圓環加總就對不上總資產
+  var recvTotal = d.receivables ? d.receivables.total : 0;
+  if (recvTotal > 0) items.push({ label: '應收款', value: recvTotal });
 
   if (charts.alloc) charts.alloc.destroy();
   if (!items.length) return;
@@ -453,6 +456,16 @@ function renderCash(d) {
   }).join('');
   html += '<div class="row total"><span>合計</span>' +
           '<span class="amt">' + fmtMoney(d.cash.total) + '</span></div>';
+  // 應收款：借出去、會收回的錢，計入總資產但不是現金
+  var rc = d.receivables;
+  if (rc && rc.items && rc.items.length) {
+    html += rc.items.map(function (x) {
+      return '<div class="row"><span>應收・' + x.name + '</span>' +
+             '<span class="amt">' + fmtMoney(x.balance) + '</span></div>';
+    }).join('');
+    html += '<div class="row total"><span>應收款合計</span>' +
+            '<span class="amt">' + fmtMoney(rc.total) + '</span></div>';
+  }
   box.innerHTML = html;
 }
 

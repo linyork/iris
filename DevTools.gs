@@ -140,6 +140,17 @@ function remapExpenseCategories() {
   return r;
 }
 
+/**
+ * 一次性：借出那幾天的每日快照有假的下跌（現金少了、總資產卻沒算應收款），補回來。
+ * 先在「應收款」填好期初那幾列再跑。會先把「每日快照」複製一份「每日快照_備份_yyyyMMdd」。
+ * 冪等：已經有應收列的日期一律跳過，重跑數字不變。
+ */
+function backfillReceivableSnapshots() {
+  var r = Receivable.backfillSnapshots();
+  console.log(JSON.stringify(r, null, 2));
+  return r;
+}
+
 // ─── 儀表板 / 顧問 ────────────────────────────────────────────────
 
 /**

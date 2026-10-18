@@ -82,8 +82,14 @@ var Facts = (() => {
         //    分母寫在數字旁邊，比事後叫它小心有效。
         lines.push('現值殖利率：' + pct(m.currentYield) + '　成本殖利率：' + pct(m.costYield) +
           '（全部持股合計；沒有分類別的殖利率，不要拿它跟單一類別的門檻比）');
+        var hasRecv = m.receivables !== null && m.receivables !== undefined && m.receivables !== 0;
+        if (hasRecv) {
+          lines.push('應收款（借出去、會收回的錢）：' + money(m.receivables) +
+            '，已計入總資產；誰欠多少用 getReceivables');
+        }
         lines.push('佔總資產 —— 股票 ' + pct(m.stockRatio) +
           '／現金 ' + pct(m.cashRatio) + '／實體 ' + pct(m.physicalRatio) +
+          (hasRecv ? '／應收 ' + pct(m.receivableRatio) : '') +
           '（逐檔的佔比在 getHoldings，那個分母是股票市值，兩者不可混用）');
 
         if (m.warnings && m.warnings.length) {

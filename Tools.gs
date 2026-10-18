@@ -63,7 +63,8 @@ var Tools = (() => {
       name: 'recordTrade',
       description: '把一筆交易記進「資產管理」表：買進、賣出、股利、現金存提、費用、利息、帳戶間轉帳。當主人說「今天買了/賣了什麼」「收到股利」「從某個帳戶提了多少」時使用。記完會自動重算持倉、成本、已實現損益與帳戶餘額並回報。資訊不齊（例如只說賣了但沒說幾股或價位）時不要猜，先問。' +
         '⚠️ 賣出會先檢查那一天手上有沒有那麼多股，不夠就整筆擋下不寫 —— 被擋下時照工具講的轉述，' +
-        '不要改小股數硬記，也不要改用別的動作繞過去。',
+        '不要改小股數硬記，也不要改用別的動作繞過去。' +
+        '⚠️ 借錢給別人、別人還錢不是這裡：用 recordReceivable，存入／提出只動得到現金。',
       parameters: {
         type: 'object',
         properties: {
@@ -115,6 +116,37 @@ var Tools = (() => {
           date:    { type: 'string', description: '日期，格式 yyyy-MM-dd（可選，預設今天）' }
         },
         required: ['account', 'balance']
+      }
+    },
+    {
+      name: 'recordReceivable',
+      description: '記一筆借出或收回的應收款（借給家人朋友、預期會收回的錢）。' +
+        '當主人說「又借弟弟 10 萬，從一銀轉」「弟弟還了 5 萬，匯到一銀」時使用。' +
+        '會同時寫「應收款」與「交易」：借出＝從帳戶提出、收回＝存入帳戶，所以總資產不變。' +
+        '⚠️ 不要改用 recordTrade 的存入／提出 —— 那只動到現金，應收款不會跟著變，總資產會多算或少算一筆。' +
+        '收回超過對方的應收餘額會整筆擋下，照工具講的轉述。對方、金額、帳戶沒講清楚就先問。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action:       { type: 'string', description: '擇一：借出 / 收回' },
+          counterparty: { type: 'string', description: '對方，例如「弟弟」；同一個人每次都用同一個稱呼' },
+          amount:       { type: 'number', description: '金額（台幣，正數）' },
+          account:      { type: 'string', description: '錢從哪個帳戶出、或回到哪個帳戶，需與「帳戶」表完全一致（台幣戶）' },
+          date:         { type: 'string', description: '日期，格式 yyyy-MM-dd（可選，預設今天）' },
+          note:         { type: 'string', description: '備註（可選）' }
+        },
+        required: ['action', 'counterparty', 'amount', 'account']
+      }
+    },
+    {
+      name: 'getReceivables',
+      description: '查應收款（借出去、還沒收回的錢）：「弟弟還欠多少」「我借出去的錢還有多少」。' +
+        '回每個對方的餘額與最後異動日；沒給 counterparty 就列全部並附合計。',
+      parameters: {
+        type: 'object',
+        properties: {
+          counterparty: { type: 'string', description: '只看某一個對方（可選）' }
+        }
       }
     },
     {
@@ -258,6 +290,15 @@ var Tools = (() => {
             return invalid('缺少必要參數：account 與 balance 皆為必填。');
           }
           return AssetTools.setCashBalance(args);
+
+        case 'recordReceivable':
+          if (!args.action || !args.counterparty || !args.amount || !args.account) {
+            return invalid('缺少必要參數：action、counterparty、amount、account 皆為必填。');
+          }
+          return Receivable.record(args);
+
+        case 'getReceivables':
+          return Receivable.describe(args.counterparty);
 
         case 'voidTrade':
           if (args.row === undefined || args.row === null) {

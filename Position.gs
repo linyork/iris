@@ -524,11 +524,14 @@ var Position = (() => {
     var stockCost     = positions.reduce((a, x) => a + (_num(x['股數']) > 0 ? _num(x['總成本']) : 0), 0);
     var cashValue     = sum(cash, '台幣值');
     var physicalValue = sum(physical, '市值');
+    // 應收款：借給別人、會收回來的錢。分頁不存在就先建（空的），指標的 SUMIF 公式才有地方指
+    AssetSchema.ensureTab(ss, '應收款');
+    var receivableValue = Receivable.total(ss);
     // 已實現與股利從 replay 加總，不從持倉：出清的標的不在持倉裡了，但它們賺賠的錢是真的
     var replayedPos   = Object.keys(replayed.positions).map(c => replayed.positions[c]);
     var totalDividend = replayedPos.reduce((a, x) => a + _round(x.dividend, 2), 0);
     var totalRealized = replayedPos.reduce((a, x) => a + _round(x.realized, 2), 0);
-    var totalAssets   = stockValue + cashValue + physicalValue;
+    var totalAssets   = stockValue + cashValue + physicalValue + receivableValue;
 
     // ── 缺價守門 ──────────────────────────────────────────────
     //
@@ -648,7 +651,7 @@ var Position = (() => {
       '⚠️ 待修正 ' + (i + 1), '', w
     ]);
 
-    // ⚠️ 這四格刻意是**公式**，不是重算當下的死值。
+    // ⚠️ 這五格（總資產、股票市值、現金、實體資產、應收款）刻意是**公式**，不是重算當下的死值。
     //
     // 它們是整份資料的頭條數字：`Snapshot._totals` 拿總資產當「今天」、`DataSync`
     // 把它寫進每日快照、`持倉!R` 用 VLOOKUP 抓它算佔比、儀表板與 Mini App 都顯示它。
@@ -665,12 +668,15 @@ var Position = (() => {
     };
     var sumStock = colSum('持倉', '市值'), sumCash = colSum('現金', '台幣值');
     var sumPhys  = colSum('實體資產', '市值');
+    // 應收款也是公式：主人手打一列（期初補登、調整）不必等重算就算進總資產
+    var sumRecv  = '(' + Receivable.metricFormula(ss) + ')';
     var metricRows = warnRows.concat([
-      ['總資產',       '=' + sumStock + '+' + sumCash + '+' + sumPhys,
-                       '股票市值 + 現金 + 實體資產'],
+      ['總資產',       '=' + sumStock + '+' + sumCash + '+' + sumPhys + '+' + sumRecv,
+                       '股票市值 + 現金 + 實體資產 + 應收款'],
       ['股票市值',     '=' + sumStock,      '持倉表市值合計'],
       ['現金',         '=' + sumCash,       '各帳戶餘額換算台幣'],
       ['實體資產',     '=' + sumPhys,       '黃金等'],
+      ['應收款',       '=' + sumRecv,       '借出 − 收回 ± 調整（應收款分頁），會收回來的錢'],
       ['—— 投資績效 ——', '', ''],
       ['股票投入成本', _round(stockCost),     '目前仍持有部位的成本'],
       ['未實現損益',   _round(stockValue - stockCost), '市值 − 投入成本'],
@@ -692,6 +698,7 @@ var Position = (() => {
       ['股票佔比',     _round(pct(stockValue, totalAssets), 4), ''],
       ['現金佔比',     _round(pct(cashValue, totalAssets), 4), ''],
       ['實體佔比',     _round(pct(physicalValue, totalAssets), 4), ''],
+      ['應收佔比',     _round(pct(receivableValue, totalAssets), 4), ''],
       ['—— 更新 ——', '', ''],
       ['最後重算',     Utilities.formatDate(new Date(), 'GMT+8', 'yyyy-MM-dd HH:mm:ss'), ''],
       ['交易筆數',     trades.length, ''],

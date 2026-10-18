@@ -9,7 +9,7 @@
 > | 目前手刻 | 對應的 LangChain / LangGraph 概念 |
 > |---|---|
 > | `ChatBot.gs` 的 ReAct 迴圈 | `LangGraph` StateGraph + ToolNode |
-> | `Tools.gs` 的 14 個工具 | `@tool` decorator / `StructuredTool` |
+> | `Tools.gs` 的 16 個工具 | `@tool` decorator / `StructuredTool` |
 > | `AIServiceFactory` + `AIAdapter` | `BaseChatModel` 抽象 + provider 子類 |
 > | `GoogleSheet` 的 chat 讀寫 | `Memory` / `Checkpointer` |
 >
@@ -92,7 +92,7 @@ Telegram Bot API ───┤        │
                  │
                  ▼
 ┌──────────────────────────────────────────────┐
-│  Tools.gs · 14 個工具                         │
+│  Tools.gs · 16 個工具                         │
 │   ├─ 資產查詢：getHoldings / getDashboard /    │
 │   │           getHistory / getPrice           │
 │   ├─ 股利：getDividendHistory / recordDividend │
@@ -100,6 +100,7 @@ Telegram Bot API ───┤        │
 │   │       setCashBalance / voidTrade          │
 │   ├─ 主檔：listTrades / listAccounts /         │
 │   │       updateAccount                       │
+│   ├─ 應收：recordReceivable / getReceivables  │
 │   └─ 外部：searchWeb (Google Custom Search)    │
 └────────────────┬─────────────────────────────┘
                  │
@@ -152,6 +153,7 @@ Telegram Bot API ───┤        │
 | `Logger.gs` | 寫入 `consolelog` 工作表 |
 | `AssetTools.gs` | 新表**輸入層**的用例層：`recordTrade` 驗證後 append 一列並重算；`voidTrade` 作廢記錯的列；`updateAccount` 改帳戶主檔；`listTrades` / `listAccounts` 讀輸入層（計算層的讀取在 `Snapshot`） |
 | `AssetImport.gs` | 券商 CSV 匯入（Telegram 傳檔進來）。認得兩種格式：**證券對帳單**（有「委託書號」，買賣都記，首選）與**已實現損益**（有「賣出日期」，只記賣出）。兩種格式互相去重 |
+| `Receivable.gs` | 應收款：每個對方的餘額（`getReceivables`）、指標用的 SUMIF 公式、借出／收回（「應收款」＋「交易」兩邊一起寫）、每日快照的一次性回補 |
 | `ExpenseImport.gs` | 記帳 App 匯出檔（`.xlsx`）→ `消費` 分頁的鏡像同步。自己解 xlsx（不經 Drive），整張覆寫、只分析不入帳；`export_id` 去重、舊檔拒絕（見「記帳 App 匯出檔」） |
 | `DevTools.gs` | **所有在 GAS 編輯器手動執行的進入點**：建表、重算、dry run、診斷。編輯器的函式下拉選單不顯示檔案來源，所以集中在這裡；trigger 與 web 進入點因為綁定名稱，仍留在各自的檔案。遷移相關的進入點已移除 —— 遷移做完了，留在選單裡只會被誤觸 |
 | `Config.gs` | 集中讀取 Script Properties 與系統常數 |
@@ -172,6 +174,7 @@ Telegram Bot API ───┤        │
 | 工作表 | 層 | 用途 |
 |---|---|---|
 | `帳戶` | 輸入 | 帳戶主檔。期初餘額只填一次，之後的水位由交易推導 |
+| `應收款` | 輸入 | 借出去、會收回的錢的流水帳（借出／收回／調整），餘額計入總資產（見「應收款」） |
 | `實體資產` | 輸入 | 黃金這類非證券資產：名稱、數量手填，現價、市值是公式。不追蹤成本與損益 |
 | `交易` | 輸入 | **唯一的事實來源**。只新增不改；記錯用 `voidTrade` 把「狀態」設成作廢 |
 | `持倉` | 計算 | 股數、成本、平均成本、累計股利、已實現損益、市價、市值（損益率與佔比由程式自己算） |
@@ -196,7 +199,7 @@ production 完全不讀不寫，只有 `AssetMigrate.gs` 在測試裡當 fixture
 日期 | 類型 | 鍵 | 單價 | 市值 | 狀態
 ```
 
-合計（總資產、股票市值）與每檔持股各一列，一天約 8 列。2026-10-08 以前還會寫每個現金帳戶與黃金各一列，那些舊列留在表上當歷史，沒有程式讀。
+合計（總資產、股票市值）、每檔持股、每個應收款的對方各一列，一天約 8～9 列。2026-10-08 以前還會寫每個現金帳戶與黃金各一列，那些舊列留在表上當歷史，沒有程式讀。
 
 **這個形狀就是為什麼舊的「欄位契約」可以整個拿掉。** 舊表 `@所有股票紀錄` 是一檔一欄，
 多一檔 ETF 就整排右移而手動維護的標題列不動 —— 靜默錯位，將近 950 列歷史全部標錯。
@@ -365,6 +368,24 @@ TWSE 的 `STOCK_DAY_AVG` 端點硬解析收盤價。
 - 券商對帳單只有股名：匯入時先查**證交所＋櫃買中心名單**換成代號，查不到才看持倉的名稱；
   只接受剛好對到一檔，不猜
 
+### 應收款：借出去的錢算總資產
+
+借給家人朋友、預期會收回的錢記在 `應收款` 分頁（一筆事件一列：借出＋、收回－、調整照填的
+正負號）。餘額計入總資產：**總資產＝股票市值＋現金＋實體資產＋應收款**。`指標` 的「應收款」是
+SUMIF 公式，手打一列馬上就算進去；儀表板的圓環多一塊應收款，現金區塊下面列出每個對方。
+
+- **手打的列不動現金。** 期初補登（當初借出時現金早就扣過了）、調整，都直接在表上加列。
+- **iris 記的借出／收回會兩邊一起寫**：「又借弟弟 10 萬，從一銀轉」→ 應收款一列借出＋交易一筆
+  提出；「弟弟還了 5 萬，匯到一銀」→ 應收款一列收回＋交易一筆存入。總資產不變，現金與應收款
+  一增一減。在同一把鎖裡寫，交易那邊寫不進去就把應收款那一列撤掉。
+- **收回超過對方的餘額會整筆擋下**，回覆目前的餘額。只收台幣帳戶。
+- **每日快照**每天多一種列：類型＝應收、鍵＝對方、市值＝當日餘額。
+- **歷史回補**：借出那幾天的走勢有假的下跌（現金少了、總資產卻沒算應收款）。填好期初列之後，
+  在 GAS 編輯器跑一次 `backfillReceivableSnapshots()`：會先備份成 `每日快照_備份_yyyyMMdd`，
+  把第一筆應收款以後每一天的總資產加上當天餘額，並補上狀態＝補登應收的應收列。已經有應收列的
+  日期一律跳過，重跑不會加兩次；`合計／股票市值` 不動。
+- 不從記帳 App 的 Loans 同步：App 不算餘額，舊的一筆貸款還把每期還款記成「借入」。
+
 ### 記帳 App 匯出檔 → 消費
 
 手機記帳 App 的資料只存在本機，可以匯出 `.xlsx`。在 App 裡把匯出檔分享到 Iris 的 Telegram
@@ -396,7 +417,7 @@ xlsx 由 `ExpenseImport` 自己解（`Utilities.unzip` 讀 XML），不經 Drive
 
 ## AI 工具集
 
-`Tools.gs` 共定義 14 個工具，呼叫者為 LLM。
+`Tools.gs` 共定義 16 個工具，呼叫者為 LLM。
 工具以 `definitions` 陣列（給模型看的 schema）加上 `execute()` 內的 `switch` 分派實作，
 **新增工具時兩處都要改**，只加 definitions 會讓模型叫得出來卻一律收到「未知的工具」。
 
@@ -415,6 +436,8 @@ xlsx 由 `ExpenseImport` 自己解（`Utilities.unzip` 讀 XML），不經 Drive
 | `listTrades(limit, symbol, account, action, includeVoid)` | 列出逐筆交易，**每筆都帶「第 N 列」**（`voidTrade` 要的列號）。與 `getHistory`（每日快照）不同 |
 | `listAccounts` | 列出所有帳戶（含停用）與**原幣**餘額。`getDashboard` 只給換算後的台幣值 |
 | `updateAccount(name, newName, type, currency, institution, status, note)` | 改「帳戶」主檔。改名會**連「交易」的每一列一起改寫**；不提供刪除，只有停用，且停用前餘額必須是 0 |
+| `recordReceivable(action, counterparty, amount, account, date, note)` | 借出／收回應收款：**「應收款」與「交易」一起寫**（借出＝提出、收回＝存入），總資產不變。收回超過對方餘額整筆擋下 —— 見[應收款](#應收款借出去的錢算總資產) |
+| `getReceivables(counterparty)` | 每個對方的應收餘額與最後異動日，附合計 |
 | `searchWeb(query)` | Google Custom Search 取得即時時事 |
 
 ReAct 迴圈上限 `Config.TOOL_MAX_ITERATIONS = 5`，且**最後一輪不帶工具定義**，
