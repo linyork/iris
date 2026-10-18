@@ -141,11 +141,21 @@ function remapExpenseCategories() {
 }
 
 /**
- * 一次性：撤回 2026-10-18 那次應收款回補。那次的前提（借出時現金已扣、走勢有斷崖）實際上
- * 不成立，回補讓同一筆錢在歷史裡算了兩次。拿掉狀態＝補登應收的列、總資產減回去；冪等。
+ * 列出每日快照裡同一天有兩份以上的日期（只看不刪）：每份的列號、各自的總資產、
+ * 結構不一樣而不會被刪的日期。刪之前先跑這支看清楚。
  */
-function undoReceivableBackfill() {
-  var r = Receivable.undoBackfill();
+function checkSnapshotDuplicates() {
+  var r = DataSync.dedupe({ dryRun: true });
+  console.log(JSON.stringify(r, null, 2));
+  return r;
+}
+
+/**
+ * 刪掉每日快照裡同一天多出來的副本，每天只留最後一份；結構不一樣的日期不碰。
+ * 先跑 checkSnapshotDuplicates() 確認要刪的列號。不要在 18:00 排程前後跑。
+ */
+function removeSnapshotDuplicates() {
+  var r = DataSync.dedupe();
   console.log(JSON.stringify(r, null, 2));
   return r;
 }

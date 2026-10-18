@@ -225,6 +225,88 @@ var DataSync = (() => {
   };
 
   /** 只檢查不寫入：回報今天會寫幾列、狀態是什麼 */
+  /**
+   * 同一天有兩份以上快照的，只留最後一份。
+   *
+   * 一份＝從一列「合計／總資產」開始，到下一列「合計／總資產」或日期換掉為止（那一天在第一列
+   * 總資產之前的列算第一份）。舊表遷移進來的歷史裡有整天重複的：2026-10-18 發現 2026-03-28 有
+   * 兩份各 18 列。重複會讓走勢在那一天有兩個點；兩份的總資產又不一樣的話（應收款回補撤回時，
+   * 第一份被多扣了一次應收款），圖上就是一個假的凹陷。
+   *
+   * ⚠️ 只刪「結構一樣」的副本：每一份的 類型／鍵 順序都要跟留下來的那份相同。不一樣的那天
+   *    整天不碰，列在 skipped —— 那可能不是重複，而是同一天記了不同的東西。
+   * 刪除用 deleteRows，由下往上刪，其他列的值一格都不重寫。
+   *
+   * @param {{dryRun?: boolean}} [options] dryRun 只回報不刪
+   * @returns {{ok: boolean, reason?: string, dates: Array, skipped: Array, removed: number}}
+   */
+  ds.dedupe = (options) => {
+    options = options || {};
+    try {
+      var ss = AssetSchema.open();
+      var tz = ss.getSpreadsheetTimeZone();
+      var sheet = ss.getSheetByName(SNAP);
+      if (!sheet || sheet.getLastRow() < 2) return { ok: true, dates: [], skipped: [], removed: 0 };
+      var m = AssetSchema.headerMap(sheet);
+      if (['日期', '類型', '鍵', '市值'].some(h => m[h] === undefined)) {
+        return { ok: false, reason: '每日快照缺少必要欄位' };
+      }
+      var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, Math.max(sheet.getLastColumn(), 1)).getValues();
+
+      // 每一天切成幾份：{date, copies: [{first, last, sig, total}]}，first/last 是表上的列號
+      var days = {}, order = [];
+      data.forEach((r, i) => {
+        if (!_str(r[m['日期']])) return;
+        var d = _dateKey(r[m['日期']], tz);
+        var row = i + 2;
+        var isTotal = _str(r[m['類型']]) === '合計' && _str(r[m['鍵']]) === '總資產';
+        var day = days[d];
+        if (!day) { day = days[d] = { date: d, copies: [] }; order.push(d); }
+        var cur = day.copies[day.copies.length - 1];
+        // 新的一份：遇到總資產列，或這一天的列中間被別的日期隔開了
+        if (!cur || (isTotal && cur.hasTotal) || cur.last !== row - 1) {
+          cur = { first: row, last: row, sig: [], total: null, hasTotal: false };
+          day.copies.push(cur);
+        }
+        cur.last = row;
+        cur.sig.push(_str(r[m['類型']]) + '/' + _str(r[m['鍵']]));
+        if (isTotal) { cur.hasTotal = true; cur.total = _num(r[m['市值']]); }
+      });
+
+      var dates = [], skipped = [], drop = [];
+      order.forEach(d => {
+        var copies = days[d].copies;
+        if (copies.length < 2) return;
+        var keep = copies[copies.length - 1];
+        var same = copies.every(c => c.sig.join('|') === keep.sig.join('|'));
+        var info = {
+          date: d,
+          keep: [keep.first, keep.last],
+          drop: copies.slice(0, -1).map(c => [c.first, c.last]),
+          totals: copies.map(c => c.total)
+        };
+        if (!same) { skipped.push(info); return; }
+        dates.push(info);
+        copies.slice(0, -1).forEach(c => drop.push(c));
+      });
+
+      var removed = drop.reduce((a, c) => a + c.last - c.first + 1, 0);
+      if (!options.dryRun && drop.length) {
+        drop.sort((a, b) => b.first - a.first)
+          .forEach(c => sheet.deleteRows(c.first, c.last - c.first + 1));
+        SpreadsheetApp.flush();
+        if (typeof Dashboard !== 'undefined') Dashboard.invalidate();
+        Logger.info('DataSync.dedupe', '刪除重複的快照', {
+          dates: dates.map(x => x.date), removed: removed, skipped: skipped.map(x => x.date)
+        });
+      }
+      return { ok: true, dates: dates, skipped: skipped, removed: removed, dryRun: !!options.dryRun };
+    } catch (ex) {
+      Logger.error('DataSync.dedupe', '檢查重複快照失敗', ex);
+      return { ok: false, reason: ex && ex.message ? ex.message : String(ex) };
+    }
+  };
+
   ds.verify = () => {
     var r = ds.run({ dryRun: true });
     if (!r.ok) return '⚠️ 今天不會寫入：' + r.reason;

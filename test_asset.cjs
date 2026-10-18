@@ -3267,33 +3267,40 @@ console.log('\nT58  應收款');
   check('每日快照的總資產含應收款', totRow && near(num(totRow['市值']), metric('總資產'), 0.01));
 }
 
-// 2026-10-18 跑過一次應收款回補，前提（借出時現金已扣、走勢有斷崖）不成立：同一筆錢在歷史裡
-// 算了兩次。undoBackfill 是它的精確反操作 —— 拿掉補登應收的列、總資產減回去，別的列不動。
-console.log('\nT59  撤回應收款回補');
+// 舊表遷移進來的歷史裡有整天重複兩份的（2026-03-28），應收款回補撤回時還把第一份多扣了一次。
+// 每天只留最後一份；結構不一樣的不是重複，整天不碰。
+console.log('\nT59  每日快照的重複日期');
 {
   const savedId = Config.SHEET_ID;
-  Config.SHEET_ID = 'recv-undo';
-  const uss = SpreadsheetApp.openById('recv-undo');
-  const day = (d, total, stock) => [[d, '合計', '總資產', '', total, '交易日'],
-    [d, '合計', '股票市值', '', stock, '交易日'], [d, '持股', '0056', 30, stock, '交易日']];
-  const original = [AssetSchema.expected('每日快照')]
-    .concat(day('2026-01-09', 10000, 6000)).concat(day('2026-01-10', 10050, 6050)).concat(day('2026-03-01', 10100, 6100));
-  // 回補過後的樣子：借出當天起總資產加上餘額，每天多一列補登應收
-  const filled = [AssetSchema.expected('每日快照')]
-    .concat(day('2026-01-09', 10000, 6000))
-    .concat(day('2026-01-10', 10750, 6050)).concat([['2026-01-10', '應收', '阿明', '', 700, Receivable.BACKFILLED]])
-    .concat(day('2026-03-01', 11100, 6100)).concat([['2026-03-01', '應收', '阿明', '', 1000, Receivable.BACKFILLED]]);
-  // 上線後 18:00 正常寫進來的一天：它的應收列不是補登的，不能動
-  const live = [['2026-10-18', '合計', '總資產', '', 12000, '休市'], ['2026-10-18', '合計', '股票市值', '', 6200, '休市'],
-    ['2026-10-18', '應收', '阿明', '', 1000, '休市']];
-  uss.sheets.push(new Sheet('每日快照', filled.concat(live)));
-  const rowsNow = () => JSON.stringify(uss.getSheetByName('每日快照').rows.filter(r => r.some(v => v !== '')));
-  const want = JSON.stringify(original.concat(live).map(r => padTo(r, 6)));
-  const r1 = Receivable.undoBackfill();
-  check('撤回後跟回補前一模一樣，之後寫的列原封不動', rowsNow() === want && r1.days === 2 && r1.rows === 2,
-    JSON.stringify(r1) + '\n' + rowsNow());
-  const r2 = Receivable.undoBackfill();
-  check('再跑一次什麼都不做（冪等）', r2.ok && r2.rows === 0 && rowsNow() === want, JSON.stringify(r2));
+  Config.SHEET_ID = 'snap-dupes';
+  const dss = SpreadsheetApp.openById('snap-dupes');
+  const copy = (d, total) => [[d, '合計', '總資產', '', total, '遷移'], [d, '合計', '股票市值', '', 6000, '遷移'],
+    [d, '持股', '0056', 30, 6000, '遷移'], [d, '現金', '郵局', '', 100, '遷移']];
+  const rows = [AssetSchema.expected('每日快照')]
+    .concat(copy('2026-03-27', 10000))
+    .concat(copy('2026-03-28', 8920)).concat(copy('2026-03-28', 10000))      // 第 6–9 列是錯的那份
+    .concat(copy('2026-03-29', 10010))
+    // 同一天兩份但內容不同（第二份少一檔持股）：不是重複，不能動
+    .concat(copy('2026-03-30', 10020)).concat(copy('2026-03-30', 10020).filter(r => r[1] !== '持股'));
+  dss.sheets.push(new Sheet('每日快照', rows));
+  const snapRows = () => dss.getSheetByName('每日快照').rows.filter(r => r.some(v => v !== ''));
+  const before = JSON.stringify(snapRows());
+
+  const dry = DataSync.dedupe({ dryRun: true });
+  check('只看不刪：列出重複的日期、要刪的列號與兩份的總資產', dry.ok && dry.dates.length === 1 &&
+    dry.dates[0].date === '2026-03-28' && JSON.stringify(dry.dates[0].drop) === '[[6,9]]' &&
+    JSON.stringify(dry.dates[0].keep) === '[10,13]' && JSON.stringify(dry.dates[0].totals) === '[8920,10000]' &&
+    JSON.stringify(snapRows()) === before, JSON.stringify(dry));
+  check('結構不一樣的同一天列在 skipped，不刪', dry.skipped.length === 1 && dry.skipped[0].date === '2026-03-30');
+
+  const r = DataSync.dedupe();
+  const after = snapRows();
+  const totals = after.filter(x => x[1] === '合計' && x[2] === '總資產').map(x => x[0] + ':' + x[4]);
+  check('刪掉第一份、留最後一份，其他日期一格不動', r.removed === 4 &&
+    JSON.stringify(totals) === JSON.stringify(['2026-03-27:10000', '2026-03-28:10000', '2026-03-29:10010', '2026-03-30:10020', '2026-03-30:10020']) &&
+    after.length === rows.length - 4, JSON.stringify(totals));
+  const again = DataSync.dedupe();
+  check('再跑一次什麼都不刪（冪等）', again.ok && again.removed === 0 && snapRows().length === after.length);
   Config.SHEET_ID = savedId;
   SpreadsheetApp.openById(Config.SHEET_ID);
 }

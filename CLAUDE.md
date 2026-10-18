@@ -623,9 +623,11 @@ the exchange's 簡稱), and the reply names it.
   區塊）、`DataSync`（每天一列 類型＝應收）。
 - **不回補歷史快照。** 2026-10-18 照規格書跑過一次回補（借出日起每天的總資產加上應收餘額），
   但規格書的兩個前提都不成立：現金從沒扣過、走勢在那兩天也沒有斷崖。那筆錢在歷史裡一直以
-  「現金」的身分算進總資產，總額本來就對；回補讓同一筆錢算兩次，走勢多出兩個假的上升。用
-  `undoReceivableBackfill()`（`Receivable.undoBackfill`，回補的精確反操作）撤回，回補程式已
-  移除。⚠️ **補歷史之前，先去資料裡看那個斷崖到底在不在。**
+  「現金」的身分算進總資產，總額本來就對；回補讓同一筆錢算兩次，走勢多出兩個假的上升。當天
+  寫了撤回函式撤掉，回補與撤回的程式都已移除。⚠️ **補歷史之前，先去資料裡看那個斷崖到底在不在。**
+  ⚠️ 撤回本身還踩了一次：回補只在「那天最後一列總資產」加錢，撤回卻對那天**每一列**總資產減錢
+  —— 遷移來的歷史有整天重複兩份的日期（2026-03-28），第一份因此被多扣一次，圖上出現假的凹陷。
+  反操作必須對同一個儲存格做，不是對同一類儲存格做；見下面 Daily Snapshot 的 `DataSync.dedupe`。
 - `圖表` 分頁是主人自己的公式頁，沒有任何程式讀寫它；那裡的應收款與佔比分母由主人手動改。
 
 ### 人設寫的是行為，排版放最後
@@ -1005,6 +1007,14 @@ What survived, because it was never about columns:
 
 `verifySnapshot()` and `dryRunSetData()` in `DevTools.gs` report what today would write
 without writing it.
+
+⚠️ **The migrated history contains whole days written twice** (found 2026-10-18: 2026-03-28, two
+identical 18-row copies). A duplicated day is two points on the trend, and any per-row fix-up that
+assumes one 總資產 row per date will treat them differently. `DataSync.dedupe()` keeps the last
+copy of each day; a "copy" starts at a 合計/總資產 row. It refuses a day whose copies differ in
+類型/鍵 sequence, since that's not a duplicate. It deletes with `deleteRows`, bottom-up, so no
+other cell is rewritten. DevTools: `checkSnapshotDuplicates()` (dry run) then
+`removeSnapshotDuplicates()`.
 
 ### Scheduled Triggers
 
