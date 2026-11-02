@@ -63,7 +63,18 @@ clasp logs
 clasp open
 ```
 
-The **pre-push git hook** (`.git/hooks/pre-push`) automatically runs `clasp push` + `clasp deploy` whenever you push to `main`. Manual clasp commands are only needed outside of git pushes.
+The **pre-push git hook** (`.githooks/pre-push`, versioned) runs `node test_asset.cjs` whenever you
+push to `main`, and only if it passes runs `clasp push` + `clasp deploy`. A failing test aborts the
+push **and** the deploy. Manual clasp commands are only needed outside of git pushes.
+
+- **Enable it once per clone:** `git config core.hooksPath .githooks`. It used to live in
+  `.git/hooks/`, which is not versioned — a fresh clone deployed with no hook at all.
+- **No `legacy_fixture.data`, no deploy.** The fixture is real data and never in git; without it
+  the suite can't run, and the hook refuses rather than skipping the tests.
+- ⚠️ Both the tests and `clasp push` read the **working tree**, not the commit being pushed. They
+  agree with each other, so what was tested is what gets deployed — but with uncommitted changes,
+  what lands on GitHub is not what runs in GAS. Commit clean before pushing.
+- There is no hosted CI. `git push --no-verify` skips the whole thing, deploy included.
 
 ### Manual entry points live in `DevTools.gs`
 
@@ -76,8 +87,8 @@ belongs.
 ⚠️ **Two kinds of top-level function must NOT move there**, because they are bound by name and
 renaming or relocating them fails silently:
 
-- Trigger handlers — `setData`, `dailyReport`, `weeklyReport`, `monthlyReport`, `marketAlert`,
-  `dailyCleanUp`
+- Trigger handlers — every `fn` in `Cron.SCHEDULE` and every name in `Cron.ONESHOT` (the
+  report retries). Read the list there; don't copy it here.
 - Web / `google.script.run` entry points — `doPost`, `doGet`, `dashboardData`, `miniAppData`,
   `miniAppAsk`
 
@@ -274,6 +285,10 @@ expected_hash     = hex(HMAC_SHA256(message = data_check_string, key = secret_ke
 released by `miniAppData()` / `miniAppAsk()` after `MiniApp.verifyInitData()` passes — which checks
 the signature, rejects `auth_date` older than 24h (replay), and then still runs the user id through
 `Utils.checkMaster`. A valid signature proves *who* opened it, not that they are allowed in.
+
+`T60` pins every one of those rejections plus both entry points refusing before they read data. It
+signs with Node's `crypto` directly, following Telegram's algorithm, rather than through the
+`Utilities` mock — so a wrong mock fails the test instead of agreeing with the code under test.
 
 `MiniAppPage.html` is intentionally **not** a copy of `DashboardPage.html` — it is phone-first and
 narrower (total, 投資績效, trend, tappable holdings, 累計貢獻, cash, preset questions). Colours come
@@ -1039,6 +1054,12 @@ that's the three report retries (see [Resilience](#ai-provider-switching)). They
 `Cron.list()` can tell "waiting to fire" apart from "someone made this by hand" — a name that GAS
 binds by string still fails silently when renamed, whether or not it's on a schedule.
 
+`T61` is what catches the rename before it ships: it scans every `.gs` for top-level `function`
+declarations and requires each `SCHEDULE` / `ONESHOT` name, each web entry point, and each
+`google.script.run.<name>` the two pages call to exist — exactly once, since GAS silently keeps
+only one of two same-named functions. It also caps `SCHEDULE` at 14 entries so the 20-trigger quota
+keeps room for pending retries.
+
 ## Broker CSV import
 
 Send a broker CSV to the bot as a Telegram document and it lands in `交易`. Two formats are
@@ -1155,7 +1176,8 @@ All secrets are stored in GAS **Script Properties** (not in code):
 | `LINE_API_KEY` | LINE channel access token (optional if using Telegram) |
 | `TELEGRAM_API_KEY` | Telegram bot token from @BotFather (optional if using LINE) |
 | `SHEET_ID` | Google Sheet ID |
-| `ADMIN_STRING` | Master user LINE userId |
+| `ADMIN_STRING` | Comma-separated master userIds (see below) |
+| `DASHBOARD_URL` | `/dev` URL of the browser dashboard, returned by `/dashboard` outside Telegram |
 | `GEMINI_API_KEY` | Gemini API key (optional if using NVIDIA) |
 | `NVIDIA_API_KEY` | NVIDIA NIM API key (optional if using Gemini) |
 | `DIAG_KEY` | Key for the read-only diagnostics endpoint (optional — unset or under 16 chars disables it) |
@@ -1165,7 +1187,7 @@ All secrets are stored in GAS **Script Properties** (not in code):
 ## First-Time Setup
 
 1. Run `setup()` in GAS to verify all sheets exist and properties are set
-2. Run `setupAllTriggers()` once to register the 04:00 / 18:00 triggers
+2. Run `setupAllTriggers()` once to register every trigger in `Cron.SCHEDULE`
 3. Point the platform at the fixed deployment URL ending in `/exec`:
    - **Telegram** — run `setupTelegramWebhook()` in the GAS editor (registers the webhook via the Bot API)
    - **LINE** — paste the `/exec` URL into the LINE Developers console

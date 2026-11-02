@@ -10,3 +10,6 @@
 # clasp 的本機設定（含 scriptId 以外的個人路徑）
 .clasprc.json
 node_modules/
+
+# pre-push hook 測試失敗時留下的輸出
+.test_output.log

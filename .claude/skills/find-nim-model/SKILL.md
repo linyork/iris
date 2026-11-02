@@ -44,7 +44,8 @@ prompt: "Extract EVERY model id from the data array, one per line, verbatim, no 
 - **`NVIDIA_MODELS.FAST`**：同上
 - **`NVIDIA_MODELS.SMART`**：背景排程，可用思考模型，品質優先於速度
 
-**清單裡一定要放一顆現役模型當對照組**（例如 `deepseek-ai/deepseek-v4-flash`）。
+**清單裡一定要放一顆現役模型當對照組**——就用 `Config.NVIDIA_DEFAULT_MODEL` 現在的值，
+不要寫死名字（這裡原本舉的 `deepseek-ai/deepseek-v4-flash` 早已下架，拿它當對照組只會全部誤判）。
 它若也失敗，代表是 API key / 網路 / NIM 整體壅塞的問題，不是候選模型的問題——
 沒有對照組時很容易把壅塞誤判成模型不可用。
 
@@ -114,8 +115,10 @@ var openaiTools = AIAdapter.convertToolsToOpenAI(toolDef);
 
 | 模型家族 | 有效寫法 | 驗證 |
 |---|---|---|
-| `deepseek-ai/deepseek-v4*` | `chat_template_kwargs: { thinking: false }` | 現役 |
-| `z-ai/glm*` | `chat_template_kwargs: { enable_thinking, clear_thinking }` | 現役 |
+| `google/gemma*` | 非思考模型，什麼都不送；帶工具時也不送 `tool_choice` | 現役主模型（2026-10-08 起） |
+| `moonshotai/kimi*` | `chat_template_kwargs: { thinking: false }` | 已退役（不叫工具直接編「已記錄」） |
+| `deepseek-ai/deepseek-v4*` | `chat_template_kwargs: { thinking: false }` | 已退役（下架），分支保留 |
+| `z-ai/glm*` | `chat_template_kwargs: { enable_thinking, clear_thinking }` | 只降低推理量，關不乾淨 |
 | `nvidia/*nemotron*` | **system 訊息內容放 `/no_think`** | reasoning 493 → 0 |
 | `openai/gpt-oss*` | **top-level `reasoning_effort: 'low'`** | reasoning 1036 → 68 |
 

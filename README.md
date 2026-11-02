@@ -666,8 +666,17 @@ clasp deploy -i <deploymentId>   # 更新版本化部署（webhook 生效，URL 
 clasp logs        # 檢視執行記錄
 ```
 
-`.git/hooks/pre-push` 會在推上 `main` 時**自動執行 `clasp push` + `clasp deploy`**，
-因此 `git push` 等於直接上生產；平常不需要手動下 clasp 指令。
+`.githooks/pre-push` 會在推上 `main` 時**先跑 `node test_asset.cjs`，通過才執行
+`clasp push` + `clasp deploy`**；測試失敗就連推送帶部署一起取消。`git push` 等於直接上生產，
+平常不需要手動下 clasp 指令。
+
+hook 進版控，每個 clone 要啟用一次：
+
+```bash
+git config core.hooksPath .githooks
+```
+
+本機沒有 `legacy_fixture.data`（真實資料，不進版控）時測不了，hook 會拒絕部署而不是跳過測試。
 
 專案共有兩個 deployment：
 
@@ -700,9 +709,9 @@ CLAUDE.md 是精簡地圖、README 是完整說明、SKILL 是流程與地雷。
    - **Telegram** — 在 GAS 執行 `setupTelegramWebhook()`
    - **LINE** — 將 `/exec` 網址貼進 LINE Developers 主控台並啟用 webhook
 7. 在 GAS 執行 `setupTelegramCommands()`，註冊斜線指令選單（僅 Telegram 需要）。
-7. 建立第二個 deployment 給儀表板，取得其 `/dev` 網址並填入 Script Property `DASHBOARD_URL`；
+8. 建立第二個 deployment 給儀表板，取得其 `/dev` 網址並填入 Script Property `DASHBOARD_URL`；
    執行 `checkDashboardAuth()` 確認認證閘門看得到你的身分。
-8. 用管理員帳號傳訊息到 Bot，驗證 `doPost` → `ChatBot` → AI 路徑全通。
+9. 用管理員帳號傳訊息到 Bot，驗證 `doPost` → `ChatBot` → AI 路徑全通。
 
 ---
 

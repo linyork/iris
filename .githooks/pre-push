@@ -1,0 +1,67 @@
+#!/bin/sh
+
+# pre-push hook：推送到 main 時先跑測試，通過才 clasp push + clasp deploy。
+#
+# 這支檔案進版控；啟用方式（每個 clone 一次）：git config core.hooksPath .githooks
+#
+# ⚠️ 測試與 clasp push 讀的都是**工作目錄**，不是要推的那個 commit。
+#    兩者一致，所以「測過的」就是「部署上去的」；但有未提交的改動時，推上 GitHub 的
+#    commit 跟部署的程式不一樣。推之前先 commit 乾淨。
+
+zero_commit="0000000000000000000000000000000000000000"
+repo_root=$(git rev-parse --show-toplevel)
+
+while read local_ref local_sha remote_ref remote_sha
+do
+    if [ "$local_ref" = "refs/heads/main" ]; then
+        if [ "$local_sha" = "$zero_commit" ]; then
+            continue
+        fi
+
+        echo "----------------------------------------------------"
+        echo "🧪 偵測到推送到 'main'，先跑測試..."
+        echo "----------------------------------------------------"
+
+        # fixture 是真實資料，不進版控（見 .gitignore）。缺了就測不了，測不了就不部署。
+        if [ ! -f "$repo_root/legacy_fixture.data" ]; then
+            echo "❌ 找不到 legacy_fixture.data，無法跑測試，取消推送與部署。"
+            exit 1
+        fi
+
+        node "$repo_root/test_asset.cjs" > "$repo_root/.test_output.log" 2>&1
+        if [ $? -ne 0 ]; then
+            grep -E "✗|項失敗|Error" "$repo_root/.test_output.log" | head -40
+            echo "❌ 測試失敗，取消推送與部署。完整輸出：.test_output.log"
+            exit 1
+        fi
+        tail -1 "$repo_root/.test_output.log"
+        rm -f "$repo_root/.test_output.log"
+
+        echo "🔄 自動執行 'clasp push' 同步至 Google Apps Script..."
+        echo "----------------------------------------------------"
+
+        clasp push
+
+        if [ $? -ne 0 ]; then
+            echo "❌ 錯誤：'clasp push' 失敗。"
+            echo "   請修正上述錯誤後再嘗試推送。"
+            exit 1
+        fi
+
+        echo "✅ 'clasp push' 執行成功。"
+        echo "🔄 自動執行 'clasp deploy' 更新現有部署版本..."
+        echo "----------------------------------------------------"
+
+        clasp deploy -i AKfycbxN-6Yx2GEiLvyBIeZ9z0CyZPbUuBXMyoD6xtN3j_XOc38_S2OBrOonVPaxXM4NVRcI
+
+        if [ $? -ne 0 ]; then
+            echo "❌ 錯誤：'clasp deploy' 失敗。"
+            exit 1
+        fi
+
+        echo "✅ 部署更新成功，URL 維持不變。"
+        echo "----------------------------------------------------"
+    fi
+done
+
+exit 0

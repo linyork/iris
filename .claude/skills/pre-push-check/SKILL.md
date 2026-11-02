@@ -5,8 +5,9 @@ description: 推送前一致性檢查。檢查這次改動有無遺漏配套修�
 
 # Iris 推送前一致性檢查
 
-這個專案沒有 CI 也沒有本地測試執行器，而且 `.git/hooks/pre-push` 會在推上 `main` 時
-**自動執行 `clasp push` + `clasp deploy`**——`git push` 等於直接上生產。
+這個專案沒有雲端 CI。`.githooks/pre-push` 會在推上 `main` 時先跑 `node test_asset.cjs`，
+通過才**自動執行 `clasp push` + `clasp deploy`**——`git push` 等於直接上生產。
+測試只擋得住測試寫到的東西；下面這份清單管的是測試抓不到的配套修改。
 執行以下清單，有問題立即指出並等修完再繼續。
 
 ## 步驟一 — 確認本次改動範圍

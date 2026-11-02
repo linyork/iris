@@ -1,0 +1,2 @@
+# shell 腳本遇到 CRLF 會壞：每一行結尾多一個 CR，sh 會把它當成指令的一部分
+.githooks/* text eol=lf
