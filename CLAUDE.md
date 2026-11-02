@@ -146,6 +146,11 @@ So `NvidiaService.callAPI` requires `backoff + as-slow-as-last-time + 45s cleanu
 before starting the fallback. `UrlFetchApp` has no timeout parameter, so the only place to hold
 the line is the decision to spend another call.
 
+`T63` runs both layers on a fake clock (each scripted fetch advances it, so does `Utilities.sleep`)
+against the **real** `Config` tiers: slow and fast failures, the 90s fallback floor, the fallback
+inheriting the tier's `max_tokens` and thinking strength, and every model family's payload shape.
+Adding a model family means adding its row there too.
+
 `Utils.execElapsedMs()` / `execTimeLeftMs()` measure from **file load** — in GAS that is the start
 of the execution, since every run reloads all `.gs`. Deliberately not a `startTime` threaded down
 from the entry point: the code that needs the clock sits three layers below it.
@@ -170,6 +175,11 @@ Retry entry points live in `Cron.ONESHOT`, not `SCHEDULE` — they have no fixed
 registration exists so `Cron.list()` prints a pending retry as `⏳` rather than as a rogue
 hand-made trigger. One that never goes away means `_deleteTriggersFor` did not run; delete it by hand.
 
+`T62` replays a sustained outage — every failure and every retry actually fired, ten rounds — and
+asserts the trigger count never climbs; it also pins that the retry deletes its own trigger
+**before** doing any work, and that a trigger's event-object argument isn't read as "this is a retry".
+The tests reset `_isReportRetry` by hand to stand in for GAS reloading the file per execution.
+
 ### Slash Commands
 
 `Commands.gs` intercepts `/`-prefixed messages in `doPost` **before** `ChatBot.reply()`. Telegram's
@@ -178,7 +188,12 @@ answer is fixed skip the whole ReAct loop and one LLM call.
 
 `Commands.tryHandle(event)` returns `null` for anything that isn't a command, which is what tells
 `doPost` to fall through to ChatBot. ⚠️ **Returning an empty string instead of `null` would make
-`doPost` treat it as handled and the message would vanish.**
+`doPost` treat it as handled and the message would vanish.** `T64` drives the real `doPost` with
+Telegram updates and pins both directions, plus dedup of a re-sent update, the silent drop of a
+non-master (whose text must not reach `consolelog`), and file routing by extension.
+
+Known gap, not pinned: a sticker or any other text-less message from the master normalizes to an
+empty `text` message and goes to `ChatBot`, costing one LLM call for nothing.
 
 | Command | Behaviour |
 |---|---|

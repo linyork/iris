@@ -3438,6 +3438,289 @@ console.log('\nT61  排程與網頁進入點綁的是名字');
     pages.map(p => p + '=' + called(p).join('/')).join(' '));
 }
 
+// ─── T62  報告失敗只重試一次 ─────────────────────────────────────
+// 失敗的報告會排一個 15 分鐘後的一次性 trigger。重試不能再排下一個：過載持續整個上午時，
+// 每 15 分鐘生一個 trigger 會塞爆每人 20 個的額度，連正規排程都建不回來。
+// 這裡的 _isReportRetry 在 GAS 每次執行會重載歸零；測試要自己歸零來模擬「新的一次執行」。
+console.log('\nT62  報告失敗只重試一次');
+{
+  const saved = { ScriptApp: global.ScriptApp, MSF: global.MessagingServiceFactory, now: NOW };
+  let triggers = [];
+  const mkTrigger = (h, extra) => Object.assign({ getHandlerFunction: () => h, handler: h }, extra);
+  global.ScriptApp = {
+    getProjectTriggers: () => triggers.slice(),
+    deleteTrigger: (t) => { triggers = triggers.filter(x => x !== t); },
+    newTrigger: (h) => ({ timeBased: () => ({ after: (ms) => ({ create: () => { triggers.push(mkTrigger(h, { afterMs: ms })); } }) }) })
+  };
+  let pushed = [];
+  global.MessagingServiceFactory = { pushToMasters: (m) => { pushed.push(m); return 1; } };
+
+  load('DailyReport.gs');
+  const realGenerate = global._generateReport;
+  let seenAtWork = null;          // 開工那一刻還剩哪些 trigger
+  let outcome = null;             // _generateReport 這次要回什麼（null = 失敗）
+  global._generateReport = () => { seenAtWork = triggers.map(t => t.handler); return outcome; };
+  const fresh = () => { global._isReportRetry = false; pushed = []; };   // 一次新的執行
+  const fire = (h) => { fresh(); global[h](); };                         // GAS 觸發一個 trigger
+
+  NOW = new RealDate('2026-09-16T09:00:00+08:00');   // 週三，早報才會跑
+  triggers = [mkTrigger('setData'), mkTrigger('dailyReport')];
+
+  fresh(); global.dailyReport();
+  const retries = () => triggers.filter(t => t.handler === 'dailyReportRetry');
+  check('早報失敗 → 排一個 15 分鐘後的 dailyReportRetry',
+    retries().length === 1 && retries()[0].afterMs === 15 * 60 * 1000, JSON.stringify(triggers.map(t => t.handler)));
+  check('通知講「15 分鐘後自動重試一次」', pushed.length === 1 && /15 分鐘後自動重試一次/.test(pushed[0]), pushed[0]);
+
+  fresh(); global.dailyReport();
+  check('同一天又失敗一次 → 還是只有一個重試（舊的先清掉）', retries().length === 1);
+
+  fire('dailyReportRetry');
+  check('重試開工前就刪掉自己的 trigger（被 GAS 砍掉也不會佔額度）',
+    seenAtWork && seenAtWork.indexOf('dailyReportRetry') < 0, JSON.stringify(seenAtWork));
+  check('重試又失敗 → 不再排下一個', retries().length === 0);
+  check('通知改講「不再自動重試」並附上 /report', /不再自動重試/.test(pushed[0]) && /\/report/.test(pushed[0]), pushed[0]);
+  check('別的排程（setData、dailyReport）一個都沒被刪',
+    ['setData', 'dailyReport'].every(h => triggers.some(t => t.handler === h)));
+
+  // 持續一整個上午的過載：每次失敗、每個重試都照實觸發，trigger 數不能往上爬
+  let peak = 0;
+  for (let i = 0; i < 10; i++) {
+    fresh(); global.dailyReport(); peak = Math.max(peak, triggers.length);
+    if (retries().length) { fire('dailyReportRetry'); peak = Math.max(peak, triggers.length); }
+  }
+  check('連續 10 輪失敗，trigger 最多只多一個', peak <= 3 && retries().length === 0, 'peak=' + peak);
+
+  // GAS 會把事件物件當第一個引數傳給 trigger 處理函式 —— 不能被當成「這是重試」
+  fresh(); global.weeklyReport({ authMode: 'FULL', triggerUid: '123' });
+  check('排程帶事件物件呼叫 → 仍會排重試', triggers.some(t => t.handler === 'weeklyReportRetry'));
+  fire('weeklyReportRetry');
+  fresh(); global.monthlyReport({ triggerUid: '456' });
+  fire('monthlyReportRetry');
+  check('週報、月報走同一套：重試後沒有殘留',
+    !triggers.some(t => /ReportRetry$/.test(t.handler)), JSON.stringify(triggers.map(t => t.handler)));
+
+  outcome = '本週內容';
+  fresh(); global.weeklyReport();
+  check('成功 → 推報告，不排重試',
+    pushed.length === 1 && /本週內容/.test(pushed[0]) && !triggers.some(t => /Retry$/.test(t.handler)));
+  outcome = null;
+
+  NOW = new RealDate('2026-09-19T09:00:00+08:00');   // 週六
+  fresh(); global.dailyReport();
+  check('週末的早報不跑，也不當成失敗', pushed.length === 0 && retries().length === 0);
+  NOW = new RealDate('2026-09-16T09:00:00+08:00');
+
+  global.MessagingServiceFactory = { pushToMasters: () => { throw new Error('push down'); } };
+  let escaped = false;
+  try { fresh(); global.dailyReport(); } catch (e) { escaped = true; }
+  check('失敗通知自己也送不出去 → 不往外丟，重試照排', !escaped && retries().length === 1);
+
+  global._generateReport = realGenerate;
+  global._isReportRetry = false;
+  global.ScriptApp = saved.ScriptApp;
+  global.MessagingServiceFactory = saved.MSF;
+  NOW = saved.now;
+}
+
+// ─── T63  AI 備援與時間預算 ──────────────────────────────────────
+// GAS 執行到 360 秒會被直接砍掉，攔不到、連最後一行 log 都沒有。NIM gateway 慢速失敗一次就是
+// ~300 秒，所以「要不要再打一次」看的是剩餘時間，不是剩幾次。這裡用一個假時鐘：每次 fetch
+// 照劇本推進時間，Utilities.sleep 也推進時間，Utils.execTimeLeftMs 讀同一個時鐘。
+console.log('\nT63  AI 備援與時間預算');
+{
+  const saved = {
+    Config: global.Config, PS: global.PropertiesService, fetch: global.UrlFetchApp, sleep: Utilities.sleep,
+    now: global.Date.now, left: Utils.execTimeLeftMs, ai: global.Logger.ai
+  };
+  global.PropertiesService = { getScriptProperties: () => ({ getProperty: k => ({ NVIDIA_API_KEY: 'test-key' })[k] }) };
+  load('Config.gs');                 // 用真的 tier 設定：主模型、備援、各 tier 的 token 與思考旗標
+  const C = global.Config;
+  global.Logger.ai = () => {};
+  load('AIAdapter.gs');
+  load('NvidiaService.gs');
+  load('AIServiceFactory.gs');
+
+  let clock = 0;
+  global.Date.now = () => clock;
+  Utils.execTimeLeftMs = () => 360000 - clock;
+  Utilities.sleep = (ms) => { clock += ms; };
+
+  // 劇本：每一步是 { code, ms } 或 { throw, ms }；body 預設是正常的一則回覆
+  let script = [], calls = [];
+  const okBody = (text) => JSON.stringify({ choices: [{ message: { role: 'assistant', content: text }, finish_reason: 'stop' }] });
+  global.UrlFetchApp = {
+    fetch: (url, opt) => {
+      const p = JSON.parse(opt.payload);
+      const step = script.shift() || { code: 200 };
+      calls.push(p);
+      clock += step.ms || 1000;
+      if (step.throw) throw new Error(step.throw);
+      return { getResponseCode: () => step.code, getContentText: () => step.body || okBody(step.text || 'hi') };
+    }
+  };
+  const run = (steps, fn) => { script = steps.slice(); calls = []; clock = 0; return fn(); };
+  const msgs = [{ role: 'user', content: 'q' }];
+  const N = (opts) => NvidiaService.callAPI(msgs, Object.assign({ model: C.NVIDIA_DEFAULT_MODEL }, opts));
+
+  // ── NvidiaService 自己的重試 ──
+  let r = run([{ code: 503 }, { code: 200 }], () => N());
+  check('503 後重試成功，中間等 2 秒', r && calls.length === 2 && clock === 1000 + 2000 + 1000, 'clock=' + clock);
+  r = run([{ throw: 'Address unavailable' }, { code: 200 }], () => N());
+  check('連線例外也算可重試', r && calls.length === 2);
+  r = run([{ code: 429 }, { code: 504 }, { code: 529 }], () => N());
+  check('429 / 504 / 529 連續失敗 → 試滿 3 次回 null', r === null && calls.length === 3);
+  r = run([{ code: 400 }], () => N());
+  check('400 是請求本身的問題 → 不重試', r === null && calls.length === 1);
+  r = run([{ code: 504, ms: 300000 }], () => N());
+  check('一次慢速失敗吃掉 300 秒 → 不再重試，直接回 null', r === null && calls.length === 1);
+  r = run([{ code: 504, ms: 200000 }, { code: 200 }], () => N());
+  check('失敗花 200 秒、只剩 160 秒（需要 2+200+45）→ 不重試',
+    r === null && calls.length === 1, 'calls=' + calls.length);
+  r = run([{ code: 504, ms: 100000 }, { code: 200 }], () => N());
+  check('失敗花 100 秒、剩 260 秒裝得下 → 重試', r && calls.length === 2);
+  r = run([{ code: 200, body: JSON.stringify({ error: 'overloaded' }) }], () => N());
+  check('200 但沒有 choices → null（讓備援接手）', r === null);
+
+  const savedKey = Object.getOwnPropertyDescriptor(C, 'NVIDIA_API_KEY');
+  Object.defineProperty(C, 'NVIDIA_API_KEY', { get: () => '', configurable: true });
+  r = run([], () => N());
+  check('沒有 API key → 不打出去', r === null && calls.length === 0);
+  Object.defineProperty(C, 'NVIDIA_API_KEY', savedKey);
+
+  // ── 每個模型家族送的欄位不一樣，NIM 沒有共通的開關 ──
+  const tool = [{ type: 'function', function: { name: 'getHoldings', parameters: { type: 'object', properties: {} } } }];
+  const payloadFor = (model, thinking) => { run([{ code: 200 }], () => N({ model, enableThinking: thinking, tools: tool })); return calls[0]; };
+  let p = payloadFor('google/gemma-4-31b-it', true);
+  check('gemma：不送 tool_choice、不送任何思考欄位',
+    !('tool_choice' in p) && !('chat_template_kwargs' in p) && !('reasoning_effort' in p) && p.tools.length === 1, JSON.stringify(p));
+  p = payloadFor('openai/gpt-oss-20b', false);
+  check('gpt-oss：top-level reasoning_effort=low，tool_choice=auto',
+    p.reasoning_effort === 'low' && !p.chat_template_kwargs && p.tool_choice === 'auto');
+  check('gpt-oss 開思考 → reasoning_effort=high', payloadFor('openai/gpt-oss-20b', true).reasoning_effort === 'high');
+  p = payloadFor('moonshotai/kimi-k3', false);
+  check('kimi：chat_template_kwargs.thinking=false', p.chat_template_kwargs && p.chat_template_kwargs.thinking === false);
+  p = payloadFor('deepseek-ai/deepseek-v4-flash', true);
+  check('deepseek：開思考時附 reasoning_effort',
+    p.chat_template_kwargs.thinking === true && p.chat_template_kwargs.reasoning_effort === 'high');
+  p = payloadFor('z-ai/glm-5.3', false);
+  check('glm：enable_thinking=false、clear_thinking=true',
+    p.chat_template_kwargs.enable_thinking === false && p.chat_template_kwargs.clear_thinking === true);
+
+  // ── AIServiceFactory 的備援 ──
+  const ask = (tier) => AIServiceFactory.callAPI([{ role: 'user', parts: [{ text: 'q' }] }], { model: tier, caller: 'T63' });
+  const textOf = (res) => res && res.candidates[0].content.parts.map(x => x.text || '').join('');
+  check('線上設定：主模型和備援不是同一顆', C.NVIDIA_DEFAULT_MODEL !== C.NVIDIA_FALLBACK_MODEL && C.AI_FALLBACK_ENABLED);
+
+  r = run([{ code: 200, text: '主模型的回答' }], () => ask('FAST'));
+  check('主模型正常 → 一次呼叫，回 Gemini 形狀', textOf(r) === '主模型的回答' && calls.length === 1 && calls[0].model === C.NVIDIA_MODELS.FAST.model);
+
+  r = run([{ code: 503 }, { code: 503 }, { code: 503 }, { code: 200, text: '備援的回答' }], () => ask('FAST'));
+  check('主模型試滿 3 次失敗 → 換備援，回備援的答案',
+    textOf(r) === '備援的回答' && calls.length === 4 && calls[3].model === C.NVIDIA_FALLBACK_MODEL,
+    calls.map(c => c.model).join(','));
+
+  r = run([{ code: 503 }, { code: 503 }, { code: 503 }, { code: 200 }], () => ask('SMART'));
+  check('備援沿用 tier 的 max_tokens 與思考強度（SMART → high）',
+    calls[3].max_tokens === C.NVIDIA_MODELS.SMART.maxOutputTokens && calls[3].reasoning_effort === 'high',
+    JSON.stringify({ max: calls[3].max_tokens, eff: calls[3].reasoning_effort }));
+
+  r = run([{ code: 504, ms: 300000 }], () => ask('FAST'));
+  check('主模型慢速失敗後只剩 60 秒 → 不開備援，明確回 null', r === null && calls.length === 1);
+  r = run([{ code: 504, ms: 250000 }, { code: 200 }], () => ask('FAST'));
+  check('主模型失敗後還剩 110 秒（≥90）→ 開備援', textOf(r) === 'hi' && calls.length === 2 && calls[1].model === C.NVIDIA_FALLBACK_MODEL);
+  r = run([{ code: 503 }, { code: 503 }, { code: 503 }, { code: 503 }, { code: 503 }, { code: 503 }], () => ask('FAST'));
+  check('備援也失敗 → null，總共最多 6 次，不會無限換下去', r === null && calls.length === 6, 'calls=' + calls.length);
+
+  global.Config = saved.Config;
+  global.PropertiesService = saved.PS;
+  global.UrlFetchApp = saved.fetch;
+  Utilities.sleep = saved.sleep;
+  global.Date.now = saved.now;
+  Utils.execTimeLeftMs = saved.left;
+  global.Logger.ai = saved.ai;
+}
+
+// ─── T64  doPost 的分流 ──────────────────────────────────────────
+// Commands.tryHandle 回 null 才代表「不是指令」；回空字串是「處理完了，沒有要推的」。
+// 寫反了訊息就消失 —— 沒有回覆、沒有 log。同一個 update 重送要擋掉，陌生人要靜默忽略。
+console.log('\nT64  doPost 的分流');
+{
+  const saved = {
+    Commands: global.Commands, ChatBot: global.ChatBot, MSF: global.MessagingServiceFactory,
+    Cache: global.CacheService, Telegram: global.Telegram, Line: global.Line,
+    AssetImport: global.AssetImport, ExpenseImport: global.ExpenseImport, admin: Config.ADMIN_STRING
+  };
+  load('Line.gs');
+  load('Telegram.gs');
+  load('Main.gs');
+  Config.ADMIN_STRING = 'TELEGRAM:111';
+
+  let store = {};
+  global.CacheService = { getScriptCache: () => ({ get: k => store[k] || null, put: (k, v) => { store[k] = v; } }) };
+  let pushes = [], chatbotCalls = 0, commandReply = null, imported = [];
+  global.MessagingServiceFactory = { push: (u, m) => pushes.push([u, m]), indicateTyping: () => {} };
+  global.ChatBot = { reply: () => { chatbotCalls++; return 'ChatBot 的回答'; } };
+  global.Commands = { tryHandle: () => commandReply };
+  global.AssetImport = { fromUpload: (ev) => { imported.push('asset:' + ev.message.document.fileName); return '已匯入'; } };
+  global.ExpenseImport = {
+    isExportFile: (n) => /\.xlsx$/i.test(n || ''),
+    fromUpload: (ev) => { imported.push('expense:' + ev.message.document.fileName); return '已同步'; }
+  };
+
+  let uid = 1000;
+  const tg = (text, from = 111, extra = {}) => ({ postData: { contents: JSON.stringify({
+    update_id: ++uid, message: Object.assign({ message_id: uid, from: { id: from }, chat: { id: from, type: 'private' }, text }, extra)
+  }) } });
+  const reset = () => { pushes = []; chatbotCalls = 0; imported = []; };
+
+  reset(); commandReply = null; doPost(tg('我總資產多少'));
+  check('不是指令（null）→ 交給 ChatBot，推它的回答',
+    chatbotCalls === 1 && pushes.length === 1 && pushes[0][0] === 'TELEGRAM:111' && pushes[0][1] === 'ChatBot 的回答');
+
+  reset(); commandReply = '指令的回答'; doPost(tg('/refresh'));
+  check('指令有回覆 → 推指令的回覆，不叫 ChatBot', chatbotCalls === 0 && pushes.length === 1 && pushes[0][1] === '指令的回答');
+
+  reset(); commandReply = ''; doPost(tg('/dashboard'));
+  check('指令回空字串 → 視為已處理：不叫 ChatBot，也不推空訊息', chatbotCalls === 0 && pushes.length === 0);
+  commandReply = null;
+
+  reset(); const same = tg('同一則'); doPost(same); doPost(same);
+  check('Telegram 重送同一個 update → 只處理一次', chatbotCalls === 1 && pushes.length === 1);
+
+  reset(); doPost(tg('你好', 999));
+  check('非主人 → 不叫 ChatBot、不回覆', chatbotCalls === 0 && pushes.length === 0);
+  check('非主人的訊息內容不寫進 log（只記 userId）',
+    !LOGS.some(l => JSON.stringify(l).indexOf('你好') >= 0) &&
+    LOGS.some(l => l[2] === '忽略非主人事件' && l[3] === 'TELEGRAM:999'));
+
+  reset(); doPost(tg('', 111, { text: undefined, caption: '', document: { file_id: 'f1', file_name: '對帳單.csv' } }));
+  doPost(tg('', 111, { text: undefined, document: { file_id: 'f2', file_name: 'Budget.xlsx' } }));
+  check('檔案分流：.csv → AssetImport、.xlsx → ExpenseImport，都不進 ChatBot',
+    JSON.stringify(imported) === JSON.stringify(['asset:對帳單.csv', 'expense:Budget.xlsx']) && chatbotCalls === 0 && pushes.length === 2,
+    JSON.stringify(imported));
+
+  const errors = () => LOGS.filter(l => l[0] === 'ERROR').length;
+  let e0 = errors();
+  reset(); doPost(tg('', 111, { text: undefined, sticker: { file_id: 's' } }));
+  check('貼圖這類沒有文字的訊息 → 不丟例外', errors() === e0);
+
+  reset(); let threw = false;
+  try { doPost({ postData: { contents: 'not json' } }); doPost({ postData: { contents: '{"foo":1}' } }); } catch (e) { threw = true; }
+  check('看不懂的 body → 忽略，不丟例外、不回覆', !threw && pushes.length === 0 && chatbotCalls === 0);
+
+  global.ChatBot = { reply: () => { throw new Error('boom'); } };
+  reset(); threw = false; e0 = errors();
+  try { doPost(tg('會爆的訊息')); } catch (e) { threw = true; }
+  check('下游丟例外 → doPost 自己接住並寫 ERROR（平台不會一直重送）',
+    !threw && errors() === e0 + 1 && LOGS[LOGS.length - 1][1] === 'doPost');
+
+  Object.assign(global, { Commands: saved.Commands, ChatBot: saved.ChatBot, MessagingServiceFactory: saved.MSF,
+    CacheService: saved.Cache, Telegram: saved.Telegram, Line: saved.Line,
+    AssetImport: saved.AssetImport, ExpenseImport: saved.ExpenseImport });
+  Config.ADMIN_STRING = saved.admin;
+}
+
 console.log('\n' + (fail === 0 ? '全部通過' : fail + ' 項失敗') + '（' + pass + '/' + (pass + fail) + '）');
 if (fail > 0 && process.env.SHOW_LOGS) console.log(JSON.stringify(LOGS, null, 1));
 process.exit(fail === 0 ? 0 : 1);
