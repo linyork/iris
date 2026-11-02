@@ -3305,6 +3305,139 @@ console.log('\nT59  每日快照的重複日期');
   SpreadsheetApp.openById(Config.SHEET_ID);
 }
 
+// ─── T60  Mini App 的 initData 驗證 ──────────────────────────────
+// 頁面掛在匿名的 /exec 上，資料只在 verifyInitData 通過後才發 —— 它就是整道門。
+// 簽章用 Node crypto 照 Telegram 官方算法自己算，不經過下面的 Utilities mock，
+// 所以 mock 寫錯也不會跟著被測的程式一起錯成「通過」。
+console.log('\nT60  Mini App 的 initData 驗證');
+{
+  const crypto = require('crypto');
+  const savedUtil = { hmac: Utilities.computeHmacSha256Signature, newBlob: Utilities.newBlob };
+  const savedToken = Config.TELEGRAM_API_KEY, savedAdmin = Config.ADMIN_STRING;
+
+  // GAS 的位元組是 Java 的有號 byte（-128..127），mock 也照這個形狀進出
+  const toBuf = (v) => typeof v === 'string' ? Buffer.from(v, 'utf8') : Buffer.from(v.map(b => b & 255));
+  const toSigned = (buf) => Array.from(buf, b => (b > 127 ? b - 256 : b));
+  Utilities.computeHmacSha256Signature = (value, key) =>
+    toSigned(crypto.createHmac('sha256', toBuf(key)).update(toBuf(value)).digest());
+  Utilities.newBlob = (s) => ({ getBytes: () => toSigned(Buffer.from(String(s), 'utf8')) });
+
+  load('MiniApp.gs');
+  const TOKEN = '123456:TEST-ONLY-TOKEN';
+  Config.TELEGRAM_API_KEY = TOKEN;
+  Config.ADMIN_STRING = 'TELEGRAM:111';
+
+  const now = Math.floor(RealDate.now() / 1000);
+  // 照 Telegram 的做法組 initData：欄位排序串成 data_check_string 簽章，再 URL 編碼送出
+  const sign = (fields, token = TOKEN) => {
+    const dcs = Object.keys(fields).sort().map(k => k + '=' + fields[k]).join('\n');
+    const secret = crypto.createHmac('sha256', 'WebAppData').update(token).digest();
+    return crypto.createHmac('sha256', secret).update(dcs).digest('hex');
+  };
+  const encode = (fields, hash) => Object.keys(fields)
+    .map(k => k + '=' + encodeURIComponent(fields[k])).concat(hash ? ['hash=' + hash] : []).join('&');
+  const make = (over = {}, token) => {
+    const f = Object.assign({ auth_date: String(now), query_id: 'AAE', user: JSON.stringify({ id: 111, first_name: '測試' }) }, over);
+    return encode(f, sign(f, token));
+  };
+  const V = MiniApp.verifyInitData;
+
+  const ok = V(make());
+  check('主人、簽章正確、剛開啟 → 通過，帶出 userId 與 chatId',
+    ok.ok && ok.userId === 'TELEGRAM:111' && ok.chatId === '111', JSON.stringify(ok));
+  check('值含中文與符號時用解碼後的原文驗簽', V(make({ start_param: 'a b&c=中' })).ok);
+
+  const good = make();
+  check('竄改任何一個欄位 → 簽章不符',
+    /簽章不符/.test(V(good.replace('query_id=AAE', 'query_id=AAF')).error));
+  check('把 user 換成別人（沿用原 hash）→ 簽章不符',
+    /簽章不符/.test(V(good.replace(encodeURIComponent('"id":111'), encodeURIComponent('"id":112'))).error));
+  check('用別的 bot token 簽的 → 簽章不符', /簽章不符/.test(V(make({}, '999:OTHER')).error));
+  check('沒有 hash → 拒絕', /缺少 hash/.test(V(encode({ auth_date: String(now) })).error));
+  check('空字串 / undefined → 拒絕，不丟例外', !V('').ok && !V(undefined).ok);
+
+  check('超過 24 小時的 initData → 拒絕（重放）', /逾時/.test(V(make({ auth_date: String(now - 86401) })).error));
+  check('24 小時內的 → 通過', V(make({ auth_date: String(now - 86000) })).ok);
+  check('沒有 auth_date → 拒絕', /auth_date/.test(V(make({ auth_date: '' })).error));
+
+  // 簽章只證明「是誰」，不證明「有權限」
+  const stranger = V(make({ user: JSON.stringify({ id: 222 }) }));
+  check('簽章正確但不是主人 → 拒絕', !stranger.ok && /非主人/.test(stranger.error), stranger.error);
+  check('沒有 user.id → 拒絕', /user\.id/.test(V(make({ user: '{}' })).error));
+
+  Config.TELEGRAM_API_KEY = '';
+  check('TELEGRAM_API_KEY 沒設 → 一律拒絕', !V(good).ok);
+  Config.TELEGRAM_API_KEY = TOKEN;
+
+  // 兩個 google.script.run 進入點都必須先過門，不能有哪一個直接發資料
+  let leaked = false;
+  const savedDash = global.Dashboard;
+  global.Dashboard = { getPayload: () => { leaked = true; return {}; } };
+  let threw = false;
+  try { miniAppData(make({ user: JSON.stringify({ id: 222 }) })); } catch (e) { threw = /驗證失敗/.test(e.message); }
+  check('miniAppData：沒過驗證就丟例外，不讀資料', threw && !leaked);
+  threw = false;
+  try { miniAppAsk('garbage', '我總資產多少'); } catch (e) { threw = /驗證失敗/.test(e.message); }
+  check('miniAppAsk：沒過驗證就丟例外', threw);
+  global.Dashboard = savedDash;
+
+  Utilities.computeHmacSha256Signature = savedUtil.hmac;
+  Utilities.newBlob = savedUtil.newBlob;
+  Config.TELEGRAM_API_KEY = savedToken;
+  Config.ADMIN_STRING = savedAdmin;
+}
+
+// ─── T61  排程與網頁進入點綁的是名字 ─────────────────────────────
+// GAS 以字串找 trigger 的處理函式、以固定名稱找 doGet / google.script.run 的函式。
+// 改名、拼錯、包進 IIFE 都不會報錯，那班排程就這樣不再跑。這裡掃所有 .gs 的頂層函式來對。
+console.log('\nT61  排程與網頁進入點綁的是名字');
+{
+  load('Cron.gs');
+  const defs = {};
+  fs.readdirSync(__dirname).filter(f => f.endsWith('.gs')).forEach(f => {
+    const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
+    for (const m of src.matchAll(/^function ([A-Za-z_$][\w$]*)\s*\(/gm)) (defs[m[1]] = defs[m[1]] || []).push(f);
+  });
+  const names = (list) => Array.from(new Set(list));
+  const missing = (list) => list.filter(n => !defs[n]);
+  const dup = (list) => list.filter(n => defs[n] && defs[n].length > 1).map(n => n + '@' + defs[n].join('+'));
+
+  const sched = names(Cron.SCHEDULE.map(s => s.fn));
+  check('SCHEDULE 的每個 fn 都是頂層函式', missing(sched).length === 0, missing(sched).join(','));
+  check('ONESHOT 的每個名字都是頂層函式', missing(Cron.ONESHOT).length === 0, missing(Cron.ONESHOT).join(','));
+  // 同名函式出現在兩個檔，GAS 會默默只留一個 —— 哪一個取決於載入順序
+  check('排程處理函式各只定義一次', dup(sched.concat(Cron.ONESHOT)).length === 0, dup(sched.concat(Cron.ONESHOT)).join(','));
+  check('ONESHOT 不跟 SCHEDULE 重疊（重試沒有固定時間）',
+    Cron.ONESHOT.every(n => sched.indexOf(n) < 0));
+
+  const DAYS = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
+  const bad = Cron.SCHEDULE.filter(s =>
+    !(s.hour >= 0 && s.hour <= 23 && Number.isInteger(s.hour)) ||
+    (s.type === 'weekday' && DAYS.indexOf(s.day) < 0) ||
+    (s.type === 'monthday' && !(s.day >= 1 && s.day <= 28)) ||
+    ['daily', 'weekday', 'monthday'].indexOf(s.type) < 0);
+  check('每一列的 type / hour / day 都是 GAS 收得下的值', bad.length === 0, JSON.stringify(bad));
+  // 一次性重試會額外佔名額；固定排程留給它們至少 6 個空位（3 份報告 × 可能同時兩份）
+  check('固定排程數量留得出重試的名額（GAS 上限 20）', Cron.SCHEDULE.length <= 14, Cron.SCHEDULE.length);
+
+  const web = ['doPost', 'doGet', 'dashboardData', 'miniAppData', 'miniAppAsk'];
+  check('網頁與 google.script.run 進入點都是頂層函式', missing(web).length === 0, missing(web).join(','));
+  check('網頁進入點各只定義一次', dup(web).length === 0, dup(web).join(','));
+
+  // 前端用 google.script.run.<名字> 呼叫的，後端一定要有
+  // 鏈式呼叫一行一段（.withSuccessHandler(…) / .withFailureHandler(…) / .dashboardData(…)），
+  // 每次 google.script.run 之後第一個不是 with* 的行首 .名字( 就是後端函式
+  const called = (f) => fs.readFileSync(path.join(__dirname, f), 'utf8').split('google.script.run').slice(1)
+    .map(chunk => Array.from(chunk.slice(0, 1500).matchAll(/^\s*\.([a-zA-Z_$][\w$]*)\s*\(/gm), m => m[1])
+      .find(n => !/^with(SuccessHandler|FailureHandler|UserObject)$/.test(n)))
+    .filter(Boolean);
+  const pages = ['DashboardPage.html', 'MiniAppPage.html'];
+  const gone = pages.flatMap(p => called(p).filter(n => !defs[n]).map(n => p + ':' + n));
+  check('兩個頁面呼叫的後端函式都存在', gone.length === 0, gone.join(','));
+  check('有抓到頁面的呼叫（掃描本身沒失效）', pages.every(p => called(p).length > 0),
+    pages.map(p => p + '=' + called(p).join('/')).join(' '));
+}
+
 console.log('\n' + (fail === 0 ? '全部通過' : fail + ' 項失敗') + '（' + pass + '/' + (pass + fail) + '）');
 if (fail > 0 && process.env.SHOW_LOGS) console.log(JSON.stringify(LOGS, null, 1));
 process.exit(fail === 0 ? 0 : 1);
