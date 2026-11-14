@@ -33,7 +33,7 @@ Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），
       也不會放行假宣稱 —— 是反過來給**寫成功的回覆**加上「我沒有真的寫進帳本」的警語
       （見 CLAUDE.md「已記錄」是自由文字，只有工具名字算數）。
       ⚠️ 不要為了省事改成攔截所有寫入：consolelog 與 chat 每次回覆都在寫，會恆為真
-- [ ] **實作**：底層函式確實存在（多半在 `GoogleSheet.gs` / `StockPrice.gs` / `WebSearch.gs`）
+- [ ] **實作**：底層函式確實存在（多半在 `AssetTools.gs` / `Receivable.gs` / `GoogleSheet.gs` / `StockPrice.gs` / `WebSearch.gs`）
 - [ ] **文件**：`README.md` 的「AI 工具集」表格與工具總數、`CLAUDE.md` 的工具清單同步更新
 
 ### 如果 `ChatBot.gs` 的迴圈控制流有變動
@@ -60,9 +60,9 @@ Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），
 - [ ] **⚠️ 長序列（逐日資料、完整明細）不要塞進 LLM prompt**，做成獨立函式給呼叫端自己拿——參考 `totalSeries()` / `dividendSeries()`
 - [ ] `Dashboard.getPayload()` 有沒有需要跟著補
 
-### 如果 `Main.gs` 的觸發器相關有改動
+### 如果 `Cron.gs` 的 `SCHEDULE` / `ONESHOT` 有改動
 - [ ] **提醒**：push 後需從 GAS 編輯器手動執行一次 `setupAllTriggers()`，否則新的排程不會生效
-- [ ] `setupAllTriggers()` 會**先清掉所有舊 trigger 再重建**，確認新增的排程有寫進去
+- [ ] `setupAllTriggers()`（→ `Cron.setup()`）會**先清掉所有舊 trigger 再依 `SCHEDULE` 重建**，確認新增的排程有寫進去
 
 ### 如果 `Main.gs` 的 `doGet` / `Dashboard.gs` / `DashboardPage.html` 有改動
 - [ ] **認證閘門**：`doGet` 開頭必須有 `Dashboard.isAuthorized()`，webhook 部署是 `ANYONE_ANONYMOUS`，
@@ -120,11 +120,11 @@ Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），
 ### 如果 `Config.gs` 有變動
 - [ ] Model 名稱/tier 仍有效（`NVIDIA_MODELS` 裡的 model 在 NIM 目錄上還活著）
 - [ ] 換主模型時，`NVIDIA_FALLBACK_MODEL` 也要確認還活著
-- [ ] V4 系列必須送 `chat_template_kwargs`，省略會讓 NIM **掛住而不是報錯**
+- [ ] 新的模型家族要在 `NvidiaService.gs` 加思考分流（形狀見 `find-nim-model` 的表）；漏了不會報錯，只會變慢或掛住
 - [ ] 新增 Script Property → `README.md` 的環境設定表格要同步
 
 ### 如果 `GoogleSheet.gs` / `DataSync.gs` 有變動
-- [ ] 新增或改名工作表 → `setup()` 的 `requiredSheets`、`README.md` 與 `CLAUDE.md` 的資料表列表同步
+- [ ] 新增或改名系統分頁 → `setup()` 的 `requiredSheets`、`README.md` 與 `CLAUDE.md` 的 System tabs 表同步；資產分頁以 `AssetSchema.TABS` 為準，不抄進 `CLAUDE.md`
 - [ ] 讀取大表時有限制範圍，沒有整張 `getValues()` 全載
 
 ## 步驟三 — 文件同步檢查（gate，預設一句話帶過）
@@ -133,7 +133,7 @@ Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），
 先問一句 gate：
 
 **這次 diff 有沒有動到「契約 / 地圖」層級的東西？**
-（層職責、工具集、指令集、觸發器時程、記憶模型、Config key、provider 行為、Sheet schema、
+（層職責、工具集、指令集、觸發器時程、Config key、provider 行為、Sheet schema、
 部署與存取模型）
 
 - **沒有**（多數情況：內部重構、契約內的 bug 修復、註解 / typo）→ 回一句「無契約變更，文件免動」，
@@ -145,8 +145,8 @@ Tools.gs 是 **switch 分派**（`definitions` 陣列 + `execute` 的 case），
     （`.claude/skills/pre-push-check/SKILL.md`）。踩過一次的坑要寫進來，不要靠記憶。
 
 > 判斷看的是**語意**（有沒有改到「別的 AI 會拿去當真」的事實），不是檔案路徑。
-> ⚠️ 反向陷阱：不是每個邏輯小改都要塞進 CLAUDE.md。CLAUDE.md 要維持精簡地圖，
-> 過度記錄會讓它自己變成新的漂移源。README 可以厚，CLAUDE.md 不行。
+> ⚠️ 反向陷阱：不是每個邏輯小改都要塞進 CLAUDE.md。寫進去的是契約、地雷與它們的理由
+> （CLAUDE.md 開頭的約定）；只改到實作細節、不影響別人怎麼用的，留在 commit message。
 
 ## 步驟四 — 最終確認
 

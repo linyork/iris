@@ -501,7 +501,7 @@ Three things that make this work rather than merely fire:
 - **The push-back is not a rewrite.** Editing the sentence would hide the claim and still leave
   the ledger untouched; the point is to get the tool called.
 - **It happens once per reply** (`claimCorrected`). A model that disagrees would otherwise burn
-  all three turns arguing.
+  every remaining turn arguing.
 - **Lines that _start_ with `第 N 列` are stripped before matching.** `listTrades` prints
   「第 N 列 …（已作廢）」 as data; transcribing a query result is not claiming to have done something.
   ⚠️ **Never widen this to "lines containing 第 N 列".** It used to be exactly that, and on
