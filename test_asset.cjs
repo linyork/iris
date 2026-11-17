@@ -3721,6 +3721,68 @@ console.log('\nT64  doPost 的分流');
   Config.ADMIN_STRING = saved.admin;
 }
 
+// ─── T65  股票分割 ────────────────────────────────────────────────
+// 分割那一列的股數欄是倍數。持股乘上去、總成本不動、現金不動；不能被當成一筆買進。
+console.log('\nT65  股票分割');
+{
+  const t = (日期, 動作, 代號, 股數, 單價) => ({ 日期, 動作, 代號, 股數, 單價, 手續費: 0, 交易稅: 0, 金額: '' });
+  const r = Position.replay([
+    t('2026-01-01', '買進', 'S', 100, 50),
+    t('2026-02-01', '分割', 'S', 5),
+    t('2026-03-01', '賣出', 'S', 100, 12)
+  ]);
+  const p = r.positions['S'];
+  // 分割後 500 股、均價 10；賣 100 股 @12 → 已實現 200
+  check('分割後股數乘上倍數、賣出用分割後的均價', p.shares === 400 && near(p.realized, 200, 1e-9),
+    p.shares + ' / ' + p.realized);
+  check('總成本不因分割而變', near(p.cost, 4000, 1e-9), p.cost);
+  const later = Position.replay([
+    t('2026-02-01', '分割', 'S', 5), t('2026-01-01', '買進', 'S', 100, 50)
+  ]);
+  check('分割日之前補記的買進也會被乘到（依日期重放，不是依寫入順序）',
+    later.positions['S'].shares === 500, later.positions['S'].shares);
+  const rev = Position.replay([t('2026-01-01', '買進', 'R', 1000, 2), t('2026-02-01', '分割', 'R', 0.2)]);
+  check('反分割 0.2 → 200 股，沒有浮點殘渣', rev.positions['R'].shares === 200, rev.positions['R'].shares);
+  const none = Position.replay([t('2026-02-01', '分割', 'N', 5)]);
+  check('當下無持股的分割只出警告', !(none.positions['N'] && none.positions['N'].shares) && none.warnings.length === 1,
+    JSON.stringify(none.warnings));
+
+  // ── 走 recordTrade 寫進表 ──
+  const tradeSheet = target.getSheetByName('交易');
+  const posSheet   = target.getSheetByName('持倉');
+  const cashSheet  = target.getSheetByName('現金');
+  const code = H0.code;
+  const posOf = () => AssetSchema.readObjects(posSheet).find(x => String(x['代號']) === code) || {};
+  const cashSum = () => AssetSchema.readObjects(cashSheet).reduce((s, x) => s + num(x['餘額']), 0);
+  const sh0 = num(posOf()['股數']), cost0 = num(posOf()['總成本']), real0 = num(posOf()['已實現損益']);
+  const cash0 = cashSum(), n0 = AssetSchema.readObjects(tradeSheet).length;
+
+  check('沒給倍數會問', /分割倍數/.test(AssetTools.recordTrade({ action: '分割', symbol: code })), '');
+  check('倍數 1 擋下', /等於沒有分割/.test(AssetTools.recordTrade({ action: '分割', symbol: code, ratio: 1 })), '');
+  check('沒持股的代號擋下', /持倉裡沒有/.test(AssetTools.recordTrade({ action: '分割', symbol: '9999', ratio: 5 })), '');
+  check('被擋下的都沒寫進交易表', AssetSchema.readObjects(tradeSheet).length === n0, '');
+
+  const out = AssetTools.recordTrade({ action: '拆分', symbol: code, ratio: 5, date: '2026-11-17' });
+  const row = +((out.match(/已記錄第 (\d+) 列/) || [])[1] || 0);
+  check('口語「拆分」記成分割，回覆講出 1 拆 5', row >= 2 && /分割/.test(out) && /1 拆 5/.test(out), out.split('\n')[0]);
+  check('持股 ×5', num(posOf()['股數']) === sh0 * 5, num(posOf()['股數']) + ' vs ' + sh0 * 5);
+  check('總成本與已實現損益不變',
+    near(num(posOf()['總成本']), cost0, 0.01) && near(num(posOf()['已實現損益']), real0, 0.01), '');
+  check('現金一塊都沒動', near(cashSum(), cash0, 0.01), cashSum() + ' vs ' + cash0);
+  const rec = AssetSchema.readTrades(target).find(x => x.__row === row);
+  check('那一列現金流是 0、沒有帳戶', num(rec['現金流']) === 0 && !String(rec['帳戶']), JSON.stringify(rec['現金流']));
+  check('提醒手填的每股股利要換算', /股利近3年/.test(out), '');
+  check('listTrades 印成倍數不是「5 股」',
+    /1 拆 5/.test(AssetTools.listTrades({ symbol: code, action: '分割' })), '');
+
+  check('同一天同一檔再記一次被擋下（會再乘一次）',
+    /已經記過/.test(AssetTools.recordTrade({ action: '分割', symbol: code, ratio: 5, date: '2026-11-17' })) &&
+    num(posOf()['股數']) === sh0 * 5, '');
+
+  AssetTools.voidTrade({ row: row, reason: '測試' });
+  check('作廢後持股回到原本', num(posOf()['股數']) === sh0, num(posOf()['股數']));
+}
+
 console.log('\n' + (fail === 0 ? '全部通過' : fail + ' 項失敗') + '（' + pass + '/' + (pass + fail) + '）');
 if (fail > 0 && process.env.SHOW_LOGS) console.log(JSON.stringify(LOGS, null, 1));
 process.exit(fail === 0 ? 0 : 1);

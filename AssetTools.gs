@@ -36,7 +36,8 @@ var AssetTools = (() => {
     '費用': ['amount'],
     '利息': ['amount'],
     '轉出': ['amount', 'account'],
-    '轉入': ['amount', 'account']
+    '轉入': ['amount', 'account'],
+    '分割': ['symbol', 'ratio']
   };
 
   /** 口語同義詞 → 正式動作 */
@@ -46,8 +47,14 @@ var AssetTools = (() => {
     '配息': '股利', '除息': '股利', '股息': '股利',
     '存': '存入', '匯入': '存入', '入金': '存入',
     '提': '提出', '提領': '提出', '出金': '提出',
-    '手續費': '費用', '支出': '費用'
+    '手續費': '費用', '支出': '費用',
+    '拆分': '分割', '拆股': '分割', '股票分割': '分割', '反分割': '分割'
   };
+
+  /** 分割倍數的口語：5 → 「1 拆 5」，0.2 → 「5 併 1」 */
+  var _ratioText = (r) => r >= 1
+    ? '1 拆 ' + r
+    : (Math.round(1 / r * 1e6) / 1e6) + ' 併 1';
 
   /** 顯示用日期：Date 就格式化，其餘原樣吐回（看不懂也讓主人看得到原始內容） */
   var _showDate = (v, tz) => (v instanceof Date)
@@ -58,7 +65,10 @@ var AssetTools = (() => {
     var bits = [_showDate(x['日期'], tz), _str(x['動作'])];
     var code = _str(x['代號']);
     if (code) bits.push(code + (_str(x['名稱']) ? ' ' + _str(x['名稱']) : ''));
-    if (_num(x['股數'])) {
+    if (_str(x['動作']) === '分割') {
+      // 分割的股數欄是倍數，印成「5 股」會被讀成真的多了 5 股
+      if (_num(x['股數']) > 0) bits.push(_ratioText(_num(x['股數'])));
+    } else if (_num(x['股數'])) {
       bits.push(_money(x['股數']) + ' 股' + (_num(x['單價']) ? ' @' + _num(x['單價']) : ''));
     }
     if (_num(x['金額'])) bits.push('$' + _amt(x['金額']));
@@ -97,6 +107,70 @@ var AssetTools = (() => {
   };
   /** 日期 → yyyy-MM-dd；空值是今天，看不懂回空字串。Receivable 也用這一份 */
   t.normalizeDate = _normalizeDate;
+
+  /**
+   * 股票分割：一列「分割」，股數欄填倍數（見 AssetSchema.ACTIONS）。不帶帳戶、不動現金。
+   *
+   * ⚠️ 同一檔同一天已經有分割就擋下。重放是「乘上去」，重複的一列不會像重複的買進那樣
+   *    只多一點，而是整個部位再乘一次倍數。
+   */
+  var _recordSplit = (ss, tz, val, dateStr, note) => {
+    var r = val.ratio;
+    if (r === 1) return '分割倍數是 1 等於沒有分割，沒有記。1 拆 5 請填 5，5 併 1 請填 0.2。';
+
+    var all = AssetSchema.readTrades(ss);
+    var dup = all.filter(x => _str(x['動作']) === '分割' && _str(x['代號']) === val.symbol &&
+      _normalizeDate(x['日期'], tz) === dateStr)[0];
+    if (dup) {
+      return '這筆分割擋下來了：第 ' + dup.__row + ' 列已經記過 ' + dateStr + ' ' + val.symbol +
+        ' ' + _ratioText(_num(dup['股數'])) + '。再記一次持股會再乘一次。' +
+        '那一列記錯的話先用 voidTrade 作廢再重記。';
+    }
+
+    var upto = all.filter(x => {
+      var d = _str(x['日期']) ? _normalizeDate(x['日期'], tz) : '';
+      return d && d <= dateStr;
+    });
+    var before = Position.replay(upto).positions[val.symbol];
+    if (!before || before.shares <= 0) {
+      return '這筆分割擋下來了：' + dateStr + ' 當下你手上沒有 ' + val.symbol + '，分割不影響帳上任何東西。';
+    }
+
+    var row = AssetSchema.appendTrade({
+      '日期': dateStr,
+      '動作': '分割',
+      '代號': val.symbol,
+      '股數': r,
+      '單價': '',
+      '手續費': 0,
+      '交易稅': 0,
+      '金額': '',
+      '帳戶': '',
+      '備註': note || ('股票分割 ' + _ratioText(r)),
+      '來源': 'iris',
+      '建立時間': Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd HH:mm:ss')
+    }, ss);
+
+    var rebuilt = Position.rebuild();
+    var avg = (p) => Math.round(p.cost / p.shares * 100) / 100;
+    var lines = ['已記錄第 ' + row + ' 列：' + dateStr + ' 分割 ' + val.symbol + ' ' + _ratioText(r) +
+      '（不動現金）'];
+    lines.push('▸ 分割前 ' + _amt(before.shares) + ' 股、均價 ' + avg(before) +
+      ' → 分割後 ' + _amt(before.shares * r) + ' 股、均價 ' +
+      (Math.round(before.cost / (before.shares * r) * 100) / 100) + '，總成本不變');
+    lines.push('▸ 持倉的「股利近3年」若是手填的每股金額，要自己換算成分割後的（÷' + r + '），' +
+      '不然「每年股利」會差 ' + r + ' 倍');
+    if (rebuilt && rebuilt.ok) {
+      if (rebuilt.warnings && rebuilt.warnings.length) lines.push('⚠️ ' + rebuilt.warnings.join('；'));
+    } else {
+      lines.push('⚠️ 分割已寫入，但重算持倉失敗：' +
+        (rebuilt && rebuilt.reason ? rebuilt.reason : '未知原因') + '。數字暫時不準。');
+    }
+    Logger.info('AssetTools.recordTrade', '記錄分割', {
+      row: row, date: dateStr, symbol: val.symbol, ratio: r, rebuilt: rebuilt && rebuilt.ok
+    });
+    return lines.join('\n');
+  };
 
   /**
    * 記一筆交易到「交易」表，然後重算持倉。
@@ -145,12 +219,13 @@ var AssetTools = (() => {
         fee:     _num(a.fee),
         tax:     _num(a.tax),
         amount:  _num(a.amount),
-        account: _str(a.account)
+        account: _str(a.account),
+        ratio:   _num(a.ratio)
       };
       var missing = REQUIRED[action].filter(k => (k === 'symbol' || k === 'account')
         ? !val[k] : !(val[k] > 0));
       if (missing.length) {
-        var label = { symbol: '代號', shares: '股數', price: '單價', amount: '金額', account: '帳戶' };
+        var label = { symbol: '代號', shares: '股數', price: '單價', amount: '金額', account: '帳戶', ratio: '分割倍數' };
         return action + ' 缺少必要資訊：' + missing.map(k => label[k]).join('、') + '。請先問清楚再記。';
       }
 
@@ -177,6 +252,8 @@ var AssetTools = (() => {
         }
         isNew = true;
       }
+
+      if (action === '分割') return _recordSplit(ss, tz, val, dateStr, _str(a.note));
 
       // ── 賣出：檢查該日期當下的持股是否足夠 ──
       // 擋在寫入前。放行的話 Position.replay 會跳過這筆（股數不動），但「現金流」是

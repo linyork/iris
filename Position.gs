@@ -263,6 +263,22 @@ var Position = (() => {
       if (action === '股利') {
         if (!code) return;
         slot(code).dividend += _num(t['金額']);
+        return;
+      }
+
+      // 「分割」的股數欄是倍數（見 AssetSchema.ACTIONS）：持股乘上去，總成本不動，
+      // 均價自然變成 1/倍數。已實現損益與股利是金額，跟著不動。
+      if (action === '分割') {
+        if (!code || shares <= 0 || shares === 1) return;
+        var pp = positions[code];
+        if (!pp || pp.shares <= 0) {
+          warnings.push(_str(t['日期']) + ' ' + code + ' 分割（×' + shares +
+            '），但當下無持股，該筆沒有作用');
+          return;
+        }
+        // 反分割的倍數是小數（0.2），乘出來會帶浮點殘渣
+        pp.shares = Math.round(pp.shares * shares * 1e6) / 1e6;
+        return;
       }
     });
 

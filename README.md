@@ -431,7 +431,7 @@ xlsx 由 `ExpenseImport` 自己解（`Utilities.unzip` 讀 XML），不經 Drive
 | `getPrice(symbols)` | 即時台股股價（一次最多 10 檔） |
 | `getDividendHistory(year)` | 股利收入統計 |
 | `recordDividend(symbol, amount, date)` | 登記股利入帳（內部走 `recordTrade`，寫進「交易」表後自動重算） |
-| `recordTrade(action, symbol, shares, price, fee, tax, amount, account, date, note)` | **寫進新的「資產管理」表**：買進／賣出／股利／存入／提出／費用／利息／轉出／轉入，記完自動 `Position.rebuild()` 重算持倉與餘額。賣出會先驗當天持股，不足整筆擋下 —— 見[賣不掉你沒有的股票](#賣不掉你沒有的股票) |
+| `recordTrade(action, symbol, shares, price, fee, tax, amount, account, date, note, ratio)` | **寫進新的「資產管理」表**：買進／賣出／股利／存入／提出／費用／利息／轉出／轉入／分割（`ratio` 是分割倍數），記完自動 `Position.rebuild()` 重算持倉與餘額。賣出會先驗當天持股，不足整筆擋下 —— 見[賣不掉你沒有的股票](#賣不掉你沒有的股票) |
 | `setCashBalance(account, balance, note, date)` | 把某個現金帳戶**校正成指定的餘額**（主人講絕對值時用）。差額由程式重讀「現金」表當場算，寫成一列「調整」交易 —— 見[現金餘額怎麼改](#現金餘額怎麼改) |
 | `addAccount(name, type, currency, institution, balance, date, note)` | 開新帳戶，往「帳戶」主檔加一列後重算。**唯一能新增帳戶的途徑**；同名（含停用）一律擋下 |
 | `voidTrade(row, reason)` | 作廢一筆記錯的交易：列與原始數字留著，只在「狀態」打記號並讓現金流失效 —— 見[記錯了怎麼撤](#記錯了怎麼撤) |

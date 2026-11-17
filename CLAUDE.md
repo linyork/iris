@@ -101,7 +101,7 @@ renaming or relocating them fails silently:
 4. `Tools.gs` — Defines and executes **16** tools via a `definitions` array plus a `switch` in `execute()`; **both must be edited together**. `execute()` returns an envelope, `{ok, status, text}` — `status` is `ok` / `invalid_args` / `error`, and `ChatBot` sends it to the model alongside the text so a failure cannot be read as data (see [工具回傳要分得出成功與失敗](#工具回傳要分得出成功與失敗)). Grouped by which layer they touch:
    - **Computed-layer reads** (`getHoldings`, `getDashboard`, `getHistory`, `getDividendHistory`, `getPrice`) — formatters over `Snapshot`, answering "what do I have now".
    - **Input-layer reads** (`listTrades`, `listAccounts`) — the 交易/帳戶 tabs themselves, answering "how did this get recorded, which row do I change". They live in `AssetTools.gs`, not `Snapshot`, because each one is the precondition for a write: `listTrades` hands out the row number `voidTrade` needs, `listAccounts` is the only surface exposing **原幣** balances (`Snapshot._cash` gives TWD-converted only).
-   - **Ledger writes** (`recordTrade`, `recordDividend`, `setCashBalance`, `voidTrade`) — all four land in the 交易 tab via `AssetTools.gs`; a dividend, a balance correction and a void are each just one row with a different 動作 or 狀態.
+   - **Ledger writes** (`recordTrade`, `recordDividend`, `setCashBalance`, `voidTrade`) — all four land in the 交易 tab via `AssetTools.gs`; a dividend, a balance correction, a stock split and a void are each just one row with a different 動作 or 狀態.
    - **Master writes** (`addAccount`, `updateAccount`) — the only code that writes 帳戶. Instruments have no master any more — see [標的退役](#標的退役名稱只是顯示).
    - **Receivables** (`recordReceivable`, `getReceivables`) — `Receivable.gs`; a 借出／收回 writes 應收款 **and** 交易 together. See [應收款](#應收款借出去的錢算總資產).
    - **External** (`searchWeb`).
@@ -586,6 +586,22 @@ a row number). Miss one reader and that void comes back to life in exactly one n
 `Position` (持倉/現金/XIRR), `Snapshot._dividends` / `dividendSeries`,
 `GoogleSheet.getDividendHistory`, both `AssetImport` dedup loops (those pass
 `{includeVoid: true}` on purpose), `AssetMigrate`.
+
+### 股票分割：股數欄存倍數
+
+2026-11-17 00662 1 拆 5 恢復交易時加的。`交易` 記一列 `動作=分割`，**`股數` 欄填倍數**（1 拆 5 填 5、
+5 併 1 填 0.2），`Position.replay` 把那一刻的持股乘上去、總成本不動。不帶帳戶，現金流公式落到
+`TRUE,0`，XIRR 不認得它所以也不進現金流。入口是 `recordTrade` 的 `action=分割` + `ratio`（`T65`）。
+
+- **存倍數，不存「多出來的股數」。** 之後補記一筆分割日之前的買進，倍數照樣對，差額就錯了。
+- ⚠️ **不要用「單價 0 的買進」代替。** 數字湊得出來，但帳上多一筆不存在的買進，跟反手記一筆
+  沖銷是同一類錯。
+- ⚠️ **同一檔同一天的第二筆分割會被擋下。** 重放是乘法：重複的一列不是多一點，是整個部位再乘一次。
+- **持倉的 `股利近3年` 是手填的每股金額，程式不會替它換算。** 分割後要主人自己除以倍數，
+  不然 `每年股利`（`=$C*$J`）差一個倍數。`recordTrade` 的回覆會提醒。
+- 每日快照裡分割前的 `持股` 單價是舊價，沒有回補：走勢看的是總資產，總額不受分割影響。
+- 讀 `交易` 的地方若把 `股數` 當股數加總（`AssetImport` 的已記錄數量），都先篩了動作，所以不受影響；
+  新增讀者時記得分割這一列的 `股數` 不是股數。
 
 ### 標的退役：名稱只是顯示
 
