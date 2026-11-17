@@ -1054,6 +1054,19 @@ What survived, because it was never about columns:
 `verifySnapshot()` and `dryRunSetData()` in `DevTools.gs` report what today would write
 without writing it.
 
+**A failed snapshot retries once, 15 minutes later** (`setDataRetry`, same one-shot rules as the
+report retries: `_isSnapshotRetry` global, deletes its own trigger first, never schedules another).
+A missed day can't be backfilled — that day's prices are gone — and nothing on any page shows that a
+day is missing, so only the final failure pushes a notice. `ok:false` from `DataSync.run` counts as
+a failure, not just an exception (`T66`).
+
+⚠️ **2026-11-07 and 11-10 have no snapshot and no explanation.** Both logs end at 「重算完成」 —
+no 快照完成, no error. The likely story is a Sheets service failure whose `Logger.error` went to the
+same spreadsheet and failed too; `GoogleSheet.setLog` and `Logger` both swallowed it. So
+`setLog` now returns whether it wrote, and `Logger` falls back to `console` when it didn't — read
+those in the Apps Script editor under 執行項目. Only on failure: logging every line twice would bury
+the execution log. (`clasp logs` doesn't work here: no GCP project is linked.)
+
 ⚠️ **The migrated history contains whole days written twice** (found 2026-10-18: 2026-03-28, two
 identical 18-row copies). A duplicated day is two points on the trend, and any per-row fix-up that
 assumes one 總資產 row per date will treat them differently. `DataSync.dedupe()` keeps the last
@@ -1081,7 +1094,8 @@ exactly what happened to the two hand-maintained lists that used to sit here.
 
 `Cron.ONESHOT` is the second, smaller registry: handlers that are bound by name like any other
 trigger but have **no fixed time**, because they're created on demand and delete themselves. Today
-that's the three report retries (see [Resilience](#ai-provider-switching)). They're registered so
+that's the three report retries (see [Resilience](#ai-provider-switching)) and `setDataRetry`
+(see [Daily Snapshot](#daily-snapshot)). They're registered so
 `Cron.list()` can tell "waiting to fire" apart from "someone made this by hand" — a name that GAS
 binds by string still fails silently when renamed, whether or not it's on a schedule.
 
