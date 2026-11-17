@@ -110,7 +110,7 @@ renaming or relocating them fails silently:
 ### AI Provider Switching
 Switch provider with the Script Property `AI_PROVIDER` (`GEMINI` / `NVIDIA`). ⚠️ **Unset means NVIDIA**, not Gemini — that is what was live on 2026-10-08 when the setting moved out of the old `env` tab, and defaulting to anything else would silently swap the model before the property was filled in (`T45`). Takes effect on the next execution, no redeploy. Model tiers (`LITE`/`FAST`/`SMART`) are defined in `Config.gs` for both providers. Current NVIDIA model: `google/gemma-4-31b-it` for all tiers (non-thinking, native function calling). It replaced `moonshotai/kimi-k3` on 2026-10-08 — see [模型不叫工具也是一種下架](#模型不叫工具也是一種下架). Before that, `deepseek-ai/deepseek-v4-flash-0731` **disappeared from `/v1/models` on 2026-09-24 — delisted, not overloaded** — see [下架的症狀是「講話變笨」](#下架的症狀是講話變笨).
 
-**Gemma has no thinking step, so `enableThinking` does nothing for the primary.** The tiers still carry it because the fallback (`gpt-oss-20b`) reads it as `reasoning_effort` low/high:
+**Nothing reads `enableThinking` right now.** Gemma has no thinking step, and the fallback (`gpt-oss-20b`) is pinned to `reasoning_effort: low` regardless of tier (see below). The tiers keep the flag for the next primary that has a switch:
 
 | Tier | Used by | `enableThinking` |
 |---|---|---|
@@ -118,7 +118,9 @@ Switch provider with the Script Property `AI_PROVIDER` (`GEMINI` / `NVIDIA`). �
 | `SMART` | daily/weekly/monthly reports — scheduled background | `true` |
 | `LITE` | (no caller yet) | `false` |
 
-`NvidiaService.gs` has no gemma branch on purpose — nothing to switch — and gemma requests omit `tool_choice` (an older exception that is exactly how it passed the tests). ⚠️ **The fallback inherits the tier's `maxOutputTokens`** (`AIServiceFactory` only swaps the model), and `SMART` fallback runs with high reasoning, which consumes the budget — that is why `SMART` is 8192 rather than what gemma itself needs.
+`NvidiaService.gs` has no gemma branch on purpose — nothing to switch — and gemma requests omit `tool_choice` (an older exception that is exactly how it passed the tests). ⚠️ **The fallback inherits the tier's `maxOutputTokens`** (`AIServiceFactory` only swaps the model); `SMART`'s 8192 is headroom for the fallback's reasoning.
+
+⚠️ **The fallback used to run `SMART` at `reasoning_effort: high`, and that made it useless for reports.** On 2026-11-12 gemma returned 404 all day (an NIM outage, not a delisting — back on 11-13), and both times the fallback took the daily report it spent all 8192 tokens reasoning — about 280s, `finish_reason: length`, empty content — so the report failed twice. A bigger budget doesn't help: 8192 tokens already took 280s, against NIM's ~300s and GAS's 360s. So `NvidiaService` now sends `low` for every tier. The fallback's job is to get *something* delivered. **`testFallbackReport()` in `DevTools.gs`** runs today's real daily-report input through the fallback at `SMART` settings; run it after changing the fallback model or the `SMART` budget.
 
 ⚠️ **Every model family shapes that switch differently — NIM has no common flag.** `NvidiaService.gs`
 branches per family: kimi and deepseek use `chat_template_kwargs.thinking`, glm uses
@@ -148,7 +150,7 @@ the line is the decision to spend another call.
 
 `T63` runs both layers on a fake clock (each scripted fetch advances it, so does `Utilities.sleep`)
 against the **real** `Config` tiers: slow and fast failures, the 90s fallback floor, the fallback
-inheriting the tier's `max_tokens` and thinking strength, and every model family's payload shape.
+inheriting the tier's `max_tokens` (with reasoning pinned to `low`), and every model family's payload shape.
 Adding a model family means adding its row there too.
 
 `Utils.execElapsedMs()` / `execTimeLeftMs()` measure from **file load** — in GAS that is the start

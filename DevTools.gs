@@ -826,6 +826,39 @@ function testNimFaithfulness() {
 }
 
 /**
+ * 用今天真的早報內容，讓備援模型照 SMART 的設定產一次早報，看寫不寫得出正文。
+ * 不推播、不寫快照，只印結果（也寫一列 consolelog，tag=testFallbackReport）。
+ *
+ * 2026-11-12 備援接手早報兩次都失敗：reasoning_effort=high 把 8192 token 全燒在推理上。
+ * 改成 low 之後跑這支確認；改備援模型或 SMART 的預算之後也該再跑。
+ *
+ * 做法是在這次執行裡把 SMART 的主模型暫時換成備援，走 AIServiceFactory 完整路徑 ——
+ * tier 設定、格式轉換都跟真的接手時一樣。只改記憶體裡的 Config，GAS 每次執行都會重新載入。
+ */
+function testFallbackReport() {
+  var FB = Config.NVIDIA_FALLBACK_MODEL;
+  var tier = Config.NVIDIA_MODELS.SMART;
+  console.log('備援 = ' + FB + '　max_tokens = ' + tier.maxOutputTokens + '\n蒐集早報資料…');
+
+  var contents = _reportContents(_dailyReportSpec());
+  var primary = tier.model;
+  tier.model = FB;
+  var t0 = Date.now(), res;
+  try {
+    res = AIServiceFactory.callAPI(contents, { model: 'SMART', caller: 'testFallbackReport' });
+  } finally {
+    tier.model = primary;
+  }
+  var sec = Math.round((Date.now() - t0) / 1000);
+  var text = Utils.extractText(res) || '';
+
+  var verdict = text ? '✅ 寫得出正文' : '❌ 沒有正文（看 consolelog 的 NvidiaService.callAPI：finish_reason、usage）';
+  console.log(verdict + '　耗時 ' + sec + ' 秒　正文 ' + text.length + ' 字\n');
+  console.log(text.slice(0, 1500));
+  Logger.info('testFallbackReport', verdict, { model: FB, seconds: sec, chars: text.length, head: text.slice(0, 200) });
+}
+
+/**
  * 驗證備援鏈會動。改了 NVIDIA_FALLBACK_MODEL 或思考分流之後跑這支。測三件事：
  *   1 備援模型活著、關思考有效
  *   2 備援模型帶工具定義時會發出 tool_calls

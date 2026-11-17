@@ -132,11 +132,11 @@ var Config = (() => {
     //   FAST  → ChatBot ReAct 迴圈，使用者在等
     //   SMART → 早報／週報／月報，背景排程
     //   LITE  → 目前無呼叫端
-    // enableThinking 仍照「使用者是否在等」填：gemma 不吃這個旗標，但備援 gpt-oss
-    // 吃（決定 reasoning_effort low／high），所以這個欄位對備援路徑仍有意義。
+    // enableThinking 目前沒有模型在讀：gemma 不吃這個旗標，備援 gpt-oss 從 2026-11-17
+    // 起一律 reasoning_effort=low（見 NvidiaService —— high 在 11/12 把報告的預算整個
+    // 燒光）。欄位留著，給下一個有思考開關的主模型用。
     // ⚠️ 備援沿用同一個 tier 的 maxOutputTokens（AIServiceFactory 只換 model）。
-    //    SMART 備援是 reasoning_effort=high，推理會吃預算，所以 SMART 給 8192，
-    //    不是 gemma 自己需要的量 —— 縮回去的話備援接手早報時正文會被截掉。
+    //    low 的推理仍會吃一點預算，SMART 的 8192 留著當餘裕。
     NVIDIA_MODELS: {
       LITE:  { model: 'google/gemma-4-31b-it', maxOutputTokens: 2048, enableThinking: false },
       FAST:  { model: 'google/gemma-4-31b-it', maxOutputTokens: 4096, enableThinking: false },

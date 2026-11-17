@@ -26,6 +26,25 @@ var REPORT_FORMAT =
  * @param {string} spec.ask      要模型做什麼（資料由 gather 附在後面）
  * @returns {string|null} 報告內文；產生失敗回 null
  */
+/** 報告送給模型的對話：蒐集資料 + 系統脈絡 + 要求。DevTools 的 testFallbackReport 也用這一份 */
+function _reportContents(spec) {
+  var data = spec.gather();
+
+  var systemContext = Prompt.systemContext({
+    scope:  spec.scope,
+    period: spec.period
+  });
+
+  var userPrompt = spec.ask + '\n\n' +
+    Object.keys(data).map(k => '【' + k + '】\n' + data[k]).join('\n\n');
+
+  return [
+    { role: 'user',  parts: [{ text: systemContext }] },
+    { role: 'model', parts: [{ text: Prompt.ACKNOWLEDGEMENT }] },
+    { role: 'user',  parts: [{ text: userPrompt }] }
+  ];
+}
+
 function _generateReport(spec) {
   try {
     Logger.info(spec.caller, '開始產生' + spec.scope,
@@ -35,24 +54,8 @@ function _generateReport(spec) {
     // 指標是重算當下寫死的值，不重算就會拿上一次寫交易時的舊數字當今天。
     Position.rebuild();
 
-    var data = spec.gather();
-
-    var systemContext = Prompt.systemContext({
-      scope:  spec.scope,
-      period: spec.period
-    });
-
-    var userPrompt = spec.ask + '\n\n' +
-      Object.keys(data).map(k => '【' + k + '】\n' + data[k]).join('\n\n');
-
-    var contents = [
-      { role: 'user',  parts: [{ text: systemContext }] },
-      { role: 'model', parts: [{ text: Prompt.ACKNOWLEDGEMENT }] },
-      { role: 'user',  parts: [{ text: userPrompt }] }
-    ];
-
     var report = Utils.extractText(
-      AIServiceFactory.callAPI(contents, { model: 'SMART', caller: spec.caller })
+      AIServiceFactory.callAPI(_reportContents(spec), { model: 'SMART', caller: spec.caller })
     );
 
     if (!report) {
@@ -171,10 +174,9 @@ function _handleReportFailure(scope, retryHandler, hint) {
  *
  * @returns {{dateStr: string, body: string}|null} 產生失敗回 null
  */
-function buildDailyReport() {
-  var dateStr = Utilities.formatDate(new Date(), 'GMT+8', 'MM/dd');
-
-  var body = _generateReport({
+/** 早報的規格。抽出來是為了讓 DevTools 能用真的早報內容實測備援模型 */
+function _dailyReportSpec() {
+  return {
     scope:  '早報',
     caller: 'dailyReport',
     gather: () => ({
@@ -189,8 +191,12 @@ function buildDailyReport() {
       '2. 與我持倉直接相關的重點新聞或風險\n' +
       '3. 今日值得關注的機會或操作提示\n' +
       '4. 一句話總結今日建議'
-  });
+  };
+}
 
+function buildDailyReport() {
+  var dateStr = Utilities.formatDate(new Date(), 'GMT+8', 'MM/dd');
+  var body = _generateReport(_dailyReportSpec());
   return body ? { dateStr: dateStr, body: body } : null;
 }
 

@@ -69,10 +69,13 @@ var NvidiaService = (() => {
                     clear_thinking:  !glmThinking
                 };
             } else if (modelName.indexOf('openai/gpt-oss') === 0) {
-                // gpt-oss 沒有 on/off，只有強度；沿用各 tier 的 enableThinking 語意
-                // （FAST 求快 → low，SMART 求質 → high），保持與主模型一致的分流。
-                // 位置必須是 top-level，見檔頭警告。
-                payload.reasoning_effort = options.enableThinking === true ? 'high' : 'low';
+                // gpt-oss 沒有 on/off，只有強度。位置必須是 top-level，見檔頭警告。
+                // ⚠️ 一律 low，不看 enableThinking。以前 SMART 給 high：2026-11-12 gemma 404
+                //    一整天，備援接手早報兩次，兩次都把 8192 token 全燒在推理上（約 280 秒、
+                //    finish_reason=length），正文一個字都沒有。預算也加不上去：8192 token
+                //    就花了 280 秒，NIM 300 秒放棄、GAS 360 秒砍執行。
+                //    備援的工作是「收得到」，不是「寫得好」。實測入口：DevTools 的 testFallbackReport。
+                payload.reasoning_effort = 'low';
             }
 
             // Function Calling（OpenAI Tools 格式）

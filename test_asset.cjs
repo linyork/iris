@@ -3597,7 +3597,8 @@ console.log('\nT63  AI 備援與時間預算');
   p = payloadFor('openai/gpt-oss-20b', false);
   check('gpt-oss：top-level reasoning_effort=low，tool_choice=auto',
     p.reasoning_effort === 'low' && !p.chat_template_kwargs && p.tool_choice === 'auto');
-  check('gpt-oss 開思考 → reasoning_effort=high', payloadFor('openai/gpt-oss-20b', true).reasoning_effort === 'high');
+  // 2026-11-12 high 把報告的 8192 token 全燒在推理上、正文是空的，所以不管 tier 一律 low
+  check('gpt-oss 開思考也還是 reasoning_effort=low', payloadFor('openai/gpt-oss-20b', true).reasoning_effort === 'low');
   p = payloadFor('moonshotai/kimi-k3', false);
   check('kimi：chat_template_kwargs.thinking=false', p.chat_template_kwargs && p.chat_template_kwargs.thinking === false);
   p = payloadFor('deepseek-ai/deepseek-v4-flash', true);
@@ -3621,8 +3622,8 @@ console.log('\nT63  AI 備援與時間預算');
     calls.map(c => c.model).join(','));
 
   r = run([{ code: 503 }, { code: 503 }, { code: 503 }, { code: 200 }], () => ask('SMART'));
-  check('備援沿用 tier 的 max_tokens 與思考強度（SMART → high）',
-    calls[3].max_tokens === C.NVIDIA_MODELS.SMART.maxOutputTokens && calls[3].reasoning_effort === 'high',
+  check('備援沿用 tier 的 max_tokens，推理強度一律 low（SMART 也是）',
+    calls[3].max_tokens === C.NVIDIA_MODELS.SMART.maxOutputTokens && calls[3].reasoning_effort === 'low',
     JSON.stringify({ max: calls[3].max_tokens, eff: calls[3].reasoning_effort }));
 
   r = run([{ code: 504, ms: 300000 }], () => ask('FAST'));
