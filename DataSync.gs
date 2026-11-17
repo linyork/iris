@@ -326,13 +326,42 @@ var DataSync = (() => {
 // ─── Trigger 進入點 ───────────────────────────────────────────────
 // 18:00 的 Trigger 是以函式名稱 `setData` 註冊的，改名等於讓排程失效。
 
+/**
+ * 這次執行是不是快照的重試。跟 _isReportRetry 同一個道理（見 DailyReport.gs）：
+ * GAS 會把事件物件當第一個引數傳進來，所以不能用參數；全域每次執行都重新載入成 false。
+ */
+var _isSnapshotRetry = false;
+
 function setData() {
+  var res = null, why = '';
   try {
     // 快照要記的是當下的指標數字，而指標是重算當下寫死的值 ——
     // 不先重算就會把上一次寫交易時的舊數字當成今天的收盤狀態。
     Position.rebuild();
-    DataSync.run();
+    res = DataSync.run();
+    if (!res || !res.ok) why = res && res.reason ? res.reason : '沒有回傳結果';
   } catch (ex) {
-    Logger.error('setData', '每日快照失敗', ex && ex.message ? ex.message : String(ex));
+    why = ex && ex.message ? ex.message : String(ex);
+    Logger.error('setData', '每日快照失敗', why);
   }
+  if (!why) return;
+
+  // 缺的那一天之後補不回來（當天的市價已經拿不到），所以失敗就隔 15 分鐘再試一次。
+  // ⚠️ 只重試一次，理由同早報：持續失敗時每 15 分鐘生一個 trigger 會塞爆 20 個的額度。
+  if (!_isSnapshotRetry && _scheduleReportRetry('setDataRetry')) return;
+
+  // 重試也失敗（或排不了重試）才講：快照沒寫成在任何畫面上都看不出來，只會是走勢圖少一天
+  try {
+    MessagingServiceFactory.pushToMasters('⚠ 今天的每日快照沒有寫成（' + why + '），' +
+      '走勢圖會缺這一天。詳情見 consolelog。');
+  } catch (ex) {
+    Logger.error('setData', '快照失敗的通知也送不出去', ex);
+  }
+}
+
+/** setData 的一次性重試（見 Cron.ONESHOT）。先刪自己的 trigger，被 GAS 砍掉也不佔額度 */
+function setDataRetry() {
+  _deleteTriggersFor('setDataRetry');
+  _isSnapshotRetry = true;
+  setData();
 }

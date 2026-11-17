@@ -49,7 +49,7 @@ var Cron = (() => {
   /**
    * 一次性重試的進入點（實作在 `DailyReport.gs`）。
    *
-   * 這些**不在 SCHEDULE 裡**，因為它們沒有固定時間 —— 是報告產生失敗的當下才被
+   * 這些**不在 SCHEDULE 裡**，因為它們沒有固定時間 —— 是報告產生失敗（或每日快照沒寫成）的當下才被
    * `_scheduleReportRetry()` 排出來、跑完就自己刪掉的臨時 trigger。登記在這裡只
    * 為了一件事：讓 `cron.list()` 認得它們。否則一個正在等待的重試會被報成
    * 「多出來的，可能是手動建的」，而假警報正是排程檔最不該製造的東西。
@@ -57,7 +57,7 @@ var Cron = (() => {
    * 看到它們短暫出現在 list() 裡是正常的；長期賴著不走才代表 `_deleteTriggersFor`
    * 沒跑到（例如那次重試又被 GAS 砍掉），可以手動刪。
    */
-  cron.ONESHOT = ['dailyReportRetry', 'weeklyReportRetry', 'monthlyReportRetry'];
+  cron.ONESHOT = ['dailyReportRetry', 'weeklyReportRetry', 'monthlyReportRetry', 'setDataRetry'];
 
   /**
    * 依 SCHEDULE 重建所有 Trigger。

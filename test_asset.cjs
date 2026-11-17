@@ -3783,6 +3783,89 @@ console.log('\nT65  股票分割');
   check('作廢後持股回到原本', num(posOf()['股數']) === sh0, num(posOf()['股數']));
 }
 
+// ─── T66  快照沒寫成要重試一次；log 寫不進去要留在執行紀錄 ───────
+// 2026-11-07、11-10 快照在重算完成後就沒了下文，consolelog 一個字都沒有。
+// 缺的那天補不回來，所以失敗要隔 15 分鐘再試；而失敗的原因不能再跟著 log 一起消失。
+console.log('\nT66  快照失敗重試、log 寫不進去的備援');
+{
+  const saved = { ScriptApp: global.ScriptApp, MSF: global.MessagingServiceFactory,
+    run: DataSync.run, rebuild: Position.rebuild };
+  let triggers = [], pushed = [];
+  const mkTrigger = (h, extra) => Object.assign({ getHandlerFunction: () => h, handler: h }, extra);
+  global.ScriptApp = {
+    getProjectTriggers: () => triggers.slice(),
+    deleteTrigger: (t) => { triggers = triggers.filter(x => x !== t); },
+    newTrigger: (h) => ({ timeBased: () => ({ after: (ms) => ({ create: () => { triggers.push(mkTrigger(h, { afterMs: ms })); } }) }) })
+  };
+  global.MessagingServiceFactory = { pushToMasters: (m) => { pushed.push(m); return 1; } };
+  Position.rebuild = () => ({ ok: true });
+  let outcome = () => ({ ok: true });
+  DataSync.run = () => outcome();
+  const retries = () => triggers.filter(t => t.handler === 'setDataRetry');
+  const fresh = () => { global._isSnapshotRetry = false; pushed = []; };
+  triggers = [mkTrigger('setData')];
+
+  fresh(); setData();
+  check('成功 → 不排重試、不通知', retries().length === 0 && pushed.length === 0);
+
+  outcome = () => { throw new Error('Service Spreadsheets failed'); };
+  fresh(); setData();
+  check('丟例外 → 排一個 15 分鐘後的 setDataRetry，先不通知',
+    retries().length === 1 && retries()[0].afterMs === 15 * 60 * 1000 && pushed.length === 0);
+
+  fresh(); global.setDataRetry();
+  check('重試又失敗 → 不再排、刪掉自己、通知主人並帶原因',
+    retries().length === 0 && pushed.length === 1 && /快照沒有寫成/.test(pushed[0]) && /Service Spreadsheets/.test(pushed[0]),
+    pushed[0]);
+  check('正規排程 setData 沒被刪', triggers.some(t => t.handler === 'setData'));
+
+  outcome = () => ({ ok: false, reason: '報價全數無效' });
+  fresh(); setData({ triggerUid: '1' });
+  check('回 ok:false 也算失敗；事件物件不被當成重試', retries().length === 1);
+  outcome = () => ({ ok: true });
+  fresh(); global.setDataRetry();
+  check('重試成功 → 沒有殘留、不通知', retries().length === 0 && pushed.length === 0);
+
+  let peak = 0;
+  outcome = () => { throw new Error('x'); };
+  for (let i = 0; i < 10; i++) {
+    fresh(); setData(); peak = Math.max(peak, triggers.length);
+    if (retries().length) { fresh(); global.setDataRetry(); }
+  }
+  check('連續 10 天失敗，trigger 最多只多一個', peak <= 2 && retries().length === 0, 'peak=' + peak);
+
+  Object.assign(global, { ScriptApp: saved.ScriptApp, MessagingServiceFactory: saved.MSF });
+  DataSync.run = saved.run; Position.rebuild = saved.rebuild; global._isSnapshotRetry = false;
+
+  // ── Logger：consolelog 寫不進去時改寫 console ──
+  const savedLogger = global.Logger, savedGS = global.GoogleSheet;
+  const realLog = console.log, realErr = console.error;
+  let out = [];
+  console.log = (s) => out.push(['log', String(s)]);
+  console.error = (s) => out.push(['error', String(s)]);
+  try {
+    let sheetOk = true;
+    global.GoogleSheet = { setLog: () => sheetOk };
+    load('Logger.gs');
+    Logger.info('X', '正常');
+    const quiet = out.length === 0;
+    sheetOk = false;
+    Logger.error('DataSync.run', '寫不進去', new Error('Service timed out'));
+    global.GoogleSheet = { setLog: () => { throw new Error('boom'); } };
+    let threw = false;
+    try { Logger.warning('Y', '例外'); } catch (e) { threw = true; }
+    console.log = realLog; console.error = realErr;
+    check('寫得進 consolelog 時 console 一個字都沒有', quiet, JSON.stringify(out));
+    check('寫不進去 → console.error 帶 tag、訊息與例外內容',
+      out[0] && out[0][0] === 'error' && /DataSync\.run/.test(out[0][1]) && /Service timed out/.test(out[0][1]), JSON.stringify(out[0]));
+    check('setLog 丟例外 → 不往外丟，也留在 console', !threw && out[1] && /boom/.test(out[1][1]) && /例外/.test(out[1][1]),
+      JSON.stringify(out[1]));
+  } finally {
+    console.log = realLog; console.error = realErr;
+    global.Logger = savedLogger; global.GoogleSheet = savedGS;
+  }
+}
+
 console.log('\n' + (fail === 0 ? '全部通過' : fail + ' 項失敗') + '（' + pass + '/' + (pass + fail) + '）');
 if (fail > 0 && process.env.SHOW_LOGS) console.log(JSON.stringify(LOGS, null, 1));
 process.exit(fail === 0 ? 0 : 1);

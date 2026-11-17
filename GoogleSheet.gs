@@ -22,13 +22,20 @@ var GoogleSheet = (() => {
 
   // ─── Logging ───────────────────────────────────────────────────
 
+  /**
+   * 寫一列 consolelog。回傳有沒有寫成：寫不進去時由 Logger 改寫到 GAS 的執行紀錄。
+   * ⚠️ 不可以往外丟 —— 日誌不能把主流程炸掉。
+   */
   gs.setLog = (level, tag, message, details) => {
     try {
       var sheet = getSheet().getSheetByName('consolelog');
-      if (!sheet) return;
+      if (!sheet) return false;
       var timestamp = Utilities.formatDate(new Date(), 'GMT+8', 'yyyy/MM/dd HH:mm:ss');
       sheet.appendRow([timestamp, level, tag, String(message), String(details || '')]);
-    } catch (e) { /* 靜默失敗 */ }
+      return true;
+    } catch (e) {
+      return false;
+    }
   };
 
   // ─── Chat History ──────────────────────────────────────────────
